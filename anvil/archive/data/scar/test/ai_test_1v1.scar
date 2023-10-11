@@ -1,0 +1,184 @@
+-- Copyright 2020 SEGA Corporation, Developed by Relic Entertainment
+
+import("test/test_framework.scar")
+
+function Test_AI_1v1(t_test_group, t_params)
+	
+	local test_name = t_params.test_name or "AI vs AI Test"
+	local test_description = t_params.test_description or "Watching AI Progress"
+
+	local camera_move_to_x = t_params.camera_move_to_x
+	local camera_move_to_y = t_params.camera_move_to_y
+	local camera_zoom_dist = t_params.camera_zoom_dist
+		
+	local player1 = World_GetPlayerAt(1)
+	local player2 = World_GetPlayerAt(2)
+	
+	local p1_start_munition = t_params.p1_start_munition or 100
+	local p1_start_fuel = t_params.p1_start_fuel or 25
+	local p1_start_manpower = t_params.p1_start_manpower or 200
+	
+	local p2_start_munition = t_params.p2_start_munition or 100
+	local p2_start_fuel = t_params.p2_start_fuel or 25
+	local p2_start_manpower = t_params.p2_start_manpower or 200
+	
+	-- Test will finish either by victory point or success time
+	local hide_victory_points = t_params.hide_victory_points or false
+	
+	-- If hide_victory_points is false, set victory point threshold 
+	local tickets_original = {}
+	local tickets_per_point_original = 0
+	local tickets_per_point_multiplier = t_params.tickets_per_point_multiplier or 1
+	local tickets_threshold = t_params.tickets_threshold or 100
+	
+	-- If hide_victory_points is true, set success time before timeout
+	local test_success_time_seconds = t_params.test_success_time_seconds or 99999999
+	local timeout_seconds = t_params.timeout_seconds or (60 * 15)
+	
+	local eg_resource_points = nil
+	local eg_victory_points = nil
+	
+	-- Cache data for repeating tests
+	TestAI1v1Cache =
+	{
+		resource_points = {},
+		victory_points = {}
+	}
+	
+	-- Test completion reasons
+	local time_threshold_reached = false
+	local tickets_threshold_reached = false
+	
+	function Test_AI_OnTimeThresholdReached()
+		time_threshold_reached = true
+	end
+	
+	local function CreateHQ(player, marker_name, hp_pbg_name)
+		local blueprint = BP_GetEntityBlueprint(hp_pbg_name)
+		local start_loc = Marker_FromName(marker_name, "")
+		Util_CreateEntities(player, nil, blueprint, start_loc, 1)
+	end
+	
+	local function RestoreTerritoryPoints(egroup_cache, egroup_name)
+		local egroup = EGroup_CreateIfNotFound(egroup_name)
+		if EGroup_Count(egroup) > 0 then
+			-- If we already have the egroup, cache it so we can respawn them in subsequent tests
+			local function AddEntity(groupID, itemIndex, entityID)
+				local entity =
+				{
+					blueprint = Entity_GetBlueprint(entityID),
+					position = Entity_GetPosition(entityID)
+				}
+				table.insert(egroup_cache, entity)
+				return false
+			end
+			EGroup_ForEach(egroup, AddEntity)
+		else
+			-- Otherwise, respawn the egroup using cached data
+			for index, entity in pairs(egroup_cache) do 
+				local blueprint = entity.blueprint
+				local location = Util_ScarPos(entity.position.x, entity.position.z) 
+				Util_CreateEntities(nil, egroup, blueprint, location, 1)
+			end
+		end
+		return egroup
+	end
+
+	local function Start()
+		if camera_move_to_x and camera_move_to_y then
+			Camera_MoveTo(Util_ScarPos(camera_move_to_x, camera_move_to_y))
+		end
+		if camera_zoom_dist then
+			Camera_SetZoomDist(camera_zoom_dist)
+		end
+		
+		-- Disable Fog of War and enable skirmish AI for both players
+		FOW_UIRevealAll()
+		Game_AIControlLocalPlayer()
+		AI_SetPersonality(player1, "default_ai_personality.xml")
+		CreateHQ(player1, "p1_start", "hq_us")
+
+		AI_Enable(player2, true)
+		AI_SetPersonality(player2, "default_ai_personality.xml")
+		CreateHQ(player2, "p2_start", "hq_ger")
+		
+		-- Set starting resources
+		Player_SetResource(player1, RT_Munition, p1_start_munition)
+		Player_SetResource(player1, RT_Fuel, p1_start_fuel)
+		Player_SetResource(player1, RT_Manpower, p1_start_manpower)
+		Player_SetResource(player2, RT_Munition, p2_start_munition)
+		Player_SetResource(player2, RT_Fuel, p2_start_fuel)
+		Player_SetResource(player2, RT_Manpower, p2_start_manpower)
+		
+		-- Schedule a callback just before timeout is reached
+		local time_threshold = math.min(test_success_time_seconds, timeout_seconds - 10)
+		Rule_AddOneShot(Test_AI_OnTimeThresholdReached, time_threshold)
+		
+		-- Record victory point values so we can restore later
+		for teamId, data in pairs(VPTickerData.team_data) do
+			tickets_original[teamId] = data.tickets
+		end
+		tickets_per_point_original = VPTickerData.tickets_per_point
+		
+		-- Speed up victory point rate so game ends faster
+		VPTickerData.tickets_per_point = tickets_per_point_original * tickets_per_point_multiplier
+		
+		eg_resource_points = RestoreTerritoryPoints(TestAI1v1Cache.resource_points, "eg_resource_points")
+		eg_victory_points = RestoreTerritoryPoints(TestAI1v1Cache.victory_points, "eg_victory_points")
+		
+		if hide_victory_points then
+			EGroup_DeSpawn(eg_victory_points)
+		end
+		
+		standard_test.print("Victory Point Hidden: "..tostring(hide_victory_points))
+		standard_test.print("Victory Point Multiplier: x"..tostring(tickets_per_point_multiplier))
+		standard_test.print("Victory Point Threshold: "..tostring(tickets_threshold))
+		standard_test.print("Time Threshold: "..tostring(time_threshold))
+	end
+
+	local function Update()
+		local continue_test = true
+
+		-- If the match lasted long enough, consider test successful		
+		if time_threshold_reached then
+			continue_test = false
+		end
+		
+		-- We cannot wait until the game ends (i.e. World_IsGameOver) as it will terminate the
+		-- test. Hence, we will monitor the victory points and finish when they are low enough.
+		for teamId, data in pairs(VPTickerData.team_data) do
+			if VPTickerData.team_data[teamId].tickets <= tickets_threshold then
+				tickets_threshold_reached = true
+				continue_test = false
+			end
+		end
+		
+		return continue_test
+	end
+
+	local function Finish()
+		local success = time_threshold_reached or tickets_threshold_reached 
+
+		standard_test.print("Time Threshold Reached: "..tostring(time_threshold_reached))
+		standard_test.print("Victory Point Threshold Reached: "..tostring(tickets_threshold_reached))
+
+		-- Cleanup
+		FOW_UnRevealAll();
+		AI_Enable(player1, false)
+		for teamId, data in pairs(VPTickerData.team_data) do
+			VPTickerData.team_data[teamId].tickets = tickets_original[teamId]
+		end
+		VPTickerData.tickets_per_point = tickets_per_point_original
+		
+		return success
+	end
+	
+	TestUtil_RegisterTest(
+		t_test_group,
+		test_name,
+		test_description,
+		Start,
+		Update,
+		Finish,
+		timeout_seconds)
+end

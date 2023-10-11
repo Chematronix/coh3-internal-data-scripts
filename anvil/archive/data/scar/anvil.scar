@@ -1,0 +1,377 @@
+-----------------------------------------------------------------------
+-- Project Anvil setup script
+-- (all of the project-specific elements of the core setup script)
+--
+-- Relic Entertainment 2018
+--
+--
+-- NOTE: This file is currently setup for singleplayer scenarios, don't import
+-- in other win conditions or multiplayer scenario scripts!
+
+--
+-- See: Core SCAR Initialization Framework
+--      http://relicwiki/display/EE/Core+SCAR+Initialization+Framework	(in the EE, you can Control-click on this link to go there)
+-----------------------------------------------------------------------
+
+
+
+import("Core.scar")
+import("GameScarUtil.scar")
+import("metamap/metamap_rtslibrary.scar")
+import("metamap/metamap_save_migration_base.scar")
+import("missionomatic/missionomatic.scar")
+import("missionomatic/missionomatic_affectors.scar")
+import("missionomatic/missionomatic_affectors_debug.scar")
+import("missionomatic/missionomatic_debug.scar")
+import("ai/campaign_map_ai_debug.scar")
+import("ai/ai_utils.scar")
+import("ai/ai_save.scar")
+import("narrative/narrative.scar")
+import("narrative/dynamic_narrative.scar")
+import("narrative/soldier_stories.scar")
+import("audio/audio.scar")
+
+import("challenge/challenge_cm.scar")
+import("challenge/challenge_sp.scar")
+import("challenge/challenge_mp.scar")
+
+if not World_IsMultiplayerGame() then
+	import("difficulty_tuning.scar")
+end
+
+-- Objective Types
+
+ObjectiveType_Primary = {
+	-- this just gets everything from the default at the moment (see below)
+	objectiveIcon = "icons/objectives/objective_primary",
+}
+
+ObjectiveType_Secondary = {
+	underlyingObjectiveType = OT_Secondary,
+	objectiveListTemplate = "SecondaryObjectiveDataTemplate",
+	objectiveIcon = "icons/objectives/objective_secondary",
+	hintpointTemplate = "ObjectiveTemplate",
+}
+
+ObjectiveType_Bonus = {
+	objectiveListTemplate = "BonusObjectiveDataTemplate",
+}
+
+ObjectiveType_Information = {
+	objectiveListTemplate = "InfoObjectiveDataTemplate",
+	objectiveIcon = "icons/objectives/objective_info",
+}
+
+
+_DefaultObjectiveStyleSettings = {		-- Default Style
+	
+	-- this style shouldn't be used directly, but it used to fill in any missing details from the supplied objective type.
+	-- this means any new parameters can be added here, and any custom types included in missions will at least get these details.
+	
+	underlyingObjectiveType = OT_Primary,
+	
+	objectiveListTemplate = "PrimaryObjectiveDataTemplate",
+	objectiveIcon = "icons/objectives/objective_primary",
+	
+	hintpointTemplate = "ObjectiveTemplate",
+	hintpointActionType = HPAT_Objective,
+	
+	minimapBlipTemplate = "objective_primary",
+	
+	audioStingers = {
+		objectiveStart = "sfx_ui_event_queue_campaign_objective_start",
+		objectiveComplete = "sfx_ui_event_queue_campaign_objective_complete",
+		objectiveFail = "sfx_ui_event_queue_campaign_objective_fail",
+	},
+	
+}
+	
+-- ICON TYPES
+IT_P_Default 		= "icons/objectives/objective_primary"
+IT_S_Default 		= "icons/objectives/objective_secondary"
+IT_B_Default 		= "icons/objectives/objective_bonus"
+IT_I_Default 		= "icons/objectives/objective_info"
+IT_TG_Default 		= "icons/objectives/threat_group"
+
+-- HINTPOINT RETICULE BLUEPRINTS
+RETICULE_P_DEFAULT 	= "capture_point_reticule_neutral"
+RETICULE_S_DEFAULT 	= "capture_point_reticule_neutral"
+RETICULE_B_DEFAULT 	= "capture_point_reticule_neutral"
+RETICULE_I_DEFAULT 	= "capture_point_reticule_neutral"
+RETICULE_TG_DEFAULT = "capture_point_reticule_enemy"
+
+-- DATA TEMPLATE TYPES
+DT_PRIMARY_DEFAULT 		= "PrimaryObjectiveDataTemplate"
+DT_PRIMARY_OR	 		= "PrimaryOrObjectiveDataTemplate"
+DT_SECONDARY_DEFAULT 	= "SecondaryObjectiveDataTemplate"
+DT_BONUS_DEFAULT 		= "BonusObjectiveDataTemplate"
+DT_INFO_DEFAULT 		= "InfoObjectiveDataTemplate"
+DT_TUTORIAL_DEFAULT 	= "TutorialDataTemplate"
+DT_SUB_OBJECTIVE 		= "SubObjectiveDataTemplate"
+DT_THREAT_GROUP_DEFAULT	= "ThreatGroupDataTemplate"
+DT_OBJECTIVE_MARKER		= "ObjectiveMarkerDataTemplate"
+
+-- POPULATION PRESETS FOR MISSIONS
+POPCAP_LOW = 35
+POPCAP_STANDARD = 70
+POPCAP_HIGH = 100
+
+-- RESOURCE PRESETS FOR MISSIONS
+INCOME_MANPOWER = 270
+INCOME_MUNITIONS = 15
+INCOME_FUEL = 10
+
+RESOURCE_CAP_MANPOWER = 1000
+RESOURCE_CAP_MUNITIONS = 400
+RESOURCE_CAP_FUEL = 300
+
+
+function Objective_MapOldStyleToNewStyle(oldStyle)		-- if this function exists, it's used to map old-style OT_Primary objective enums to the new table style
+
+	if oldStyle == OT_Primary then 
+		return ObjectiveType_Primary
+	elseif oldStyle == OT_Secondary then 
+		return ObjectiveType_Secondary 
+	elseif oldStyle == OT_Bonus then 
+		return ObjectiveType_Bonus
+	elseif oldStyle == OT_Information or oldStyle == OT_Warning then 
+		return ObjectiveType_Information
+	else
+		fatal("Couldn't find appropriate objective style mapping")
+	end
+	
+end
+
+
+-- TEMP: Hook the Warning objective type up to a better name!
+if OT_Warning == nil then
+	OT_Warning = OT_Information
+end
+
+-----------------------------------------------------------------------
+-- Core callbacks
+-----------------------------------------------------------------------
+
+
+function Project_OnGameSetup()
+	if Misc_IsDevMode() then
+		local player = Game_GetLocalPlayer()
+		if Misc_IsCommandLineOptionSet("entry_race") and Player_GetRace(player) == nil then
+			local entry_race = Misc_GetCommandLineString("entry_race")
+			entry_race = World_GetRaceBlueprint(entry_race)
+			Setup_SetPlayerRace(player, entry_race)
+		end
+		if Misc_IsCommandLineOptionSet("entry_race3") and not World_IsMultiplayerGame() then
+			local race = Misc_GetCommandLineString("entry_race3")
+			race = World_GetRaceBlueprint(race)
+			Setup_SetPlayerRace(World_GetPlayerAt(3), race)
+		end
+	end
+end
+
+function Project_Preset()
+	
+	if Misc_IsDevMode() and not World_IsCampaignMetamapGame() then
+		
+		for i = 1, World_GetPlayerCount() do
+			-- Apply mission start upgrades to the players that have a command line specified
+			ApplyDebugMissionStartUpgrades(i)
+			-- Add mission start abilities to the players that have a command line specified
+			AddDebugMissionStartAbility(i)
+		end
+	end
+end
+
+function Project_OnInit()
+
+	Game_FadeToBlack(FADE_OUT, 0)
+
+	-- Initialise the dynamic narrative system
+	Narrative_Init()
+	
+	if not (World_IsMultiplayerGame() or World_IsCampaignMetamapGame()) then
+		-- Initialize campaign skirmish/mission
+		local campaign = Game_RetrieveTableData("campaign", false)
+		if campaign ~= nil then
+			PartialSave_PerformDataStoreMigrations()
+			Affectors_Debug_Set()
+			Affectors_OnInit()
+			if campaign.mission_data ~= nil then
+				MetaMap_SetupRTS()
+			end
+		end
+	end
+end
+
+function Project_InitComplete()
+	
+	--
+	-- Initialize the mission objectives found in g_missionData.objectives
+	--
+	
+	if scartype(g_missionData.objectives) == ST_TABLE then
+		
+		for index, objective in pairs(g_missionData.objectives) do 
+		
+			Objective_Register(objective, objective.OwnerOverride)
+			
+			-- if this is a subobjective (i.e. has a Parent objective set), add it to the parent's sub-objective list
+			if objective.Parent ~= nil then
+				
+				if objective.Parent.subObjectives == nil then
+					objective.Parent.subObjectives = {}
+				end
+				table.insert(objective.Parent.subObjectives, objective)
+				
+			end
+			
+			-- if this objective has a cheat key function, add it to the menu
+			if scartype(objective.Cheat) == ST_FUNCTION then
+				
+				local cheatObjectiveTitle = "Skip to objective \""..Loc_ToAnsi(objective.Title).."\""
+				local cheatObjectiveID = tostring(objective.ID)
+				
+				if objective.CheatTitle ~= nil then
+					cheatObjectiveTitle = objective.CheatTitle
+				end
+				
+				CheatMenu_AddMenuItem(cheatObjectiveTitle, true, "objective", cheatObjectiveID)
+
+			end
+			
+		end
+		
+	end
+	
+end
+
+function Project_PreStart()
+	-- Kickoff any affectors
+	Affectors_UseAffectors()
+	
+	Game_FadeToBlack(FADE_IN, 4)
+end
+
+function Project_SetupVariables()
+	local linear_campaign_temp = Game_RetrieveTableData("linear_campaign_temp", false)
+	if linear_campaign_temp ~= nil and linear_campaign_temp.feFlow_is_playing_campaign == true then
+		local linear_campaign = Game_RetrieveTableData("linear_campaign", false)
+		local linear_campaign_progress = Game_RetrieveTableData("linear_campaign_progress", false)
+		g_missionData.introMovies = World_GetLinearCampaignMissionVideos(linear_campaign.selected_campaign,
+			linear_campaign_temp.playing_mission_index, true)
+		g_missionData.currentIntroMovie = 1
+		g_missionData.outroMovies = World_GetLinearCampaignMissionVideos(linear_campaign.selected_campaign,
+			linear_campaign_temp.playing_mission_index, false)
+		g_missionData.currentOutroMovie = 1
+		g_missionData.titleCard = World_GetLinearCampaignTitleCard(linear_campaign.selected_campaign,
+			linear_campaign_temp.playing_mission_index)
+	end
+	
+	if not World_IsMultiplayerGame() then
+		
+		CheatMenu_RegisterCheatFunction(AnvilMissionWin, "Win mission", false)
+		
+		CheatMenu_RegisterCheatFunction(AnvilMissionLose, "Lose mission", false)
+	end
+end
+
+function AnvilMissionWin()
+	-- call Core_OnVictory() to play win outro movies and then show AfterActionReport after
+	Core_OnVictory()
+end
+
+function AnvilMissionLose()
+	MetaMap_ShowAfterActionReport(false, "Project_Lose")
+end
+
+function Project_Win()
+	MissionPrint("Mission Win")
+	local winning_player_rts = Game_GetLocalPlayer()
+	local linear_campaign_temp = Game_RetrieveTableData("linear_campaign_temp", false)
+	if (linear_campaign_temp == nil) or (not linear_campaign_temp.feFlow_is_playing_campaign) then
+		local report = {
+		 	winning_player = World_GetPlayerAt(1),
+			is_local_player_winner = true,
+			gameLength = World_GetGameTime(),
+			auto_resolved = false,
+		}
+		MetaMap_FinishRTS(report)
+	end
+	World_SetPlayerAndAlliesWin(winning_player_rts, -1)
+	Sound_Play2D("mus_set_state_victory")
+	if World_IsCampaignMetamapGame() then
+		CMChallenge_OnCampaignEnd(true)
+	else
+		SPChallenge_OnMissionEnd(true)
+	end
+end
+
+function Project_Lose()
+	MissionPrint("Mission Lost")
+	local winning_player_rts = Player_FindFirstEnemyPlayer(Game_GetLocalPlayer())
+	local report = {
+	 	winning_player = World_GetPlayerAt(2),
+		is_local_player_winner = false,
+		gameLength = World_GetGameTime(),
+		auto_resolved = false,
+	}
+	if not World_IsCampaignMetamapGame() then
+		MetaMap_FinishRTS(report)
+	end
+	World_SetPlayerAndAlliesWin(winning_player_rts, -1)
+	Sound_Play2D("mus_set_state_defeat")
+	SPChallenge_OnMissionEnd(false)
+end
+
+
+function Project_Start()
+end
+
+
+
+
+-- called when a mission cheat menu is activated
+function Project_ActivateMenuItem(mode, value)
+
+	if mode == "objective" then
+		
+		-- obj-mode requires the cheat system to go through the mission restart process
+		
+		CheatMenu_SetValues(mode, value)		-- set the persistent values to catch on the other side...
+		CheatMenu_RestartGame()					-- ...and restart the mission
+	elseif mode == "objective_start" then
+		local id = tonumber(value)
+		MissionDebug_StartNode(id)
+	elseif mode == "objective_complete" then
+		local id = tonumber(value)
+		MissionDebug_CompleteObjectiveNode(id)
+	end
+
+end
+
+
+-- called when a game is run/restarted with some cheat codes
+function Project_StartWithCheat(mode, value)
+
+	if mode == "objective" then
+		
+		local id = tonumber(value)
+		local objective = __FindObjectiveTable(id)						-- find the actual objective from the id passed in
+		
+		if scartype(objective.Cheat) == ST_FUNCTION then
+			objective.Cheat()											-- call the cheat setup script
+		end
+		
+		if objective.Parent ~= nil then									-- if this objective has a parent objective, cheat that one first!
+			Objective_Start(objective.Parent, false, false)
+		end
+		
+		Objective_Start(objective)										-- start the objective
+		
+	end
+
+end
+
+function Project_OnOutroMovieDone()
+	MetaMap_ShowAfterActionReport(true, "Project_Win")
+end

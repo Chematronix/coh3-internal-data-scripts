@@ -1,0 +1,208 @@
+--
+-- "Destroy Mission Type"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("missionomatic/missionomatic.scar")
+
+--? @group scardoc;Prefabs
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function playbill_Init(data)
+	local instance = Prefab_GetInstance(data)
+	if instance.context_selection_enabled then
+		-- Setup context_selection_info.checked_tags by adding each selected tag as an entry in
+		-- this table so that the playbill context selection phase can use it easily later on.
+		local checked_tags = {}
+		local add_checked_tag = function(tag)
+			checked_tags[#checked_tags + 1] = tag
+		end
+		locationgroup_ForEachCheckedTag(instance.context_selection_info, add_checked_tag)
+		instance.context_selection_info.checked_tags = checked_tags
+	end
+	
+	playbill_Parse(instance)
+	
+end
+
+-- Parse the playbill for each actionlist schema instance & objective schema instance
+-- to create a reference to each in a flattened global table associating it with an
+-- identifier.
+function playbill_Parse(instance)
+
+	local playbills = instance.playbills
+	
+	local current_path = {
+		instance.instanceName,
+		"playbills",
+	}
+	
+	local count = #playbills
+	for i=1, count do
+		local playbill = playbills[i]
+		local conditions = playbill.conditions
+		
+		local conditionCount = #conditions
+		for j=1, conditionCount do
+			local condition = conditions[j]
+			if condition.optional_dedicated_actions ~= nil then
+				ParseActionlist(
+					condition.optional_dedicated_actions,
+					Table_Concatenate(current_path, {i, "conditions", j, "optional_dedicated_actions"}))
+			end
+		end
+		
+		local actions = playbill.actions
+		ParseActionlist(actions, Table_Concatenate(current_path, {i,  "actions" }))
+	end
+end
+
+function ResolvePrefabDataPath(prefabDataPath)
+	local cur = Prefab_GetInstance(prefabDataPath[1])
+	if cur == nil then
+		return nil
+	end
+	local pathLength = #prefabDataPath
+	for i=2, pathLength do
+		local key = prefabDataPath[i]
+		cur = cur[key]
+		if cur == nil then
+			break
+		end
+	end
+	
+	return cur
+end
+
+function ParseActionlist(actionlistData, current_path)
+	local actionCount = #actionlistData
+	
+	if actionCount == 0 then
+		-- Don't include any empty actionlists
+		return
+	end
+	
+	actionlistData.prefabDataPath = current_path
+	for i=1, actionCount do
+		local action = actionlistData[i]
+		
+		local weightedActions = action.random_weighted_actions
+		if weightedActions ~= nil and action.action == "RandomWeightedActions" then
+			local weightedEntryCount = #action.random_weighted_actions
+			for j=1, weightedEntryCount do
+				local entry = weightedActions[j]
+				ParseActionlist(entry.actions, Table_Concatenate(current_path, {i, "random_weighted_actions", j, "actions"}))
+			end
+		end
+		
+		if action.on_complete_actions ~= nil and action.action == "TrainingGoalSequence" then
+			ParseActionlist(action.on_complete_actions, Table_Concatenate(current_path, {i, "on_complete_actions"}))
+		end
+		
+		if action.objectiveVariants ~= nil and action.action == "CreateDynamicObjective"  then
+			
+			local variants = action.objectiveVariants
+			local variantCount = #variants
+			for j=1, variantCount do
+				local objective = variants[j]
+				ParseObjective(objective, Table_Concatenate(current_path, {i, "objectiveVariants", j}))
+			end
+		end
+	end
+end
+
+function ParseObjective(objectiveData, current_path)
+
+	objectiveData.prefabDataPath = current_path
+	
+	-- Parse actionlists for this objective:
+	local ParseObjectiveCallbackSection = function(sectionName)
+		
+		local callbackEntries = objectiveData[sectionName]
+		if callbackEntries ~= nil then
+			local callbackEntryCount = #callbackEntries
+			for i=1, callbackEntryCount do
+				local entry = callbackEntries[i]
+				ParseActionlist(entry.actions, Table_Concatenate(current_path, {sectionName, i, "actions"}))
+			end
+		end
+	end
+	
+	ParseObjectiveCallbackSection("on_prestart")
+	ParseObjectiveCallbackSection("on_start")
+	ParseObjectiveCallbackSection("on_precomplete")
+	ParseObjectiveCallbackSection("on_complete")
+	ParseObjectiveCallbackSection("on_prefail")
+	ParseObjectiveCallbackSection("on_fail")
+	ParseObjectiveCallbackSection("on_preexpire")
+	ParseObjectiveCallbackSection("on_turn_expire")
+	ParseObjectiveCallbackSection("on_player_turn_start")
+	ParseObjectiveCallbackSection("on_player_turn_end")
+	ParseObjectiveCallbackSection("on_objective_end")
+	
+	-- Recurse on the sub objectives
+	local subObjectives = objectiveData.sub_objectives
+	local subObjectiveCount = subObjectives and #subObjectives or 0
+	for i=1, subObjectiveCount do
+		local subObjective = subObjectives[i]
+		ParseObjective(subObjective, Table_Concatenate(current_path, {"sub_objectives", i}))
+	end
+end
+
+function playbill_PostInit(data)
+end
+
+function playbill_Start(data)
+end
+
+--? @args Table/String data
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function playbill_Trigger(data, opt_additionalCallback, opt_context)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	if instance == nil then
+		return
+	end
+	
+	if instance.enabled == false then
+		return
+	end
+	local delayTurn = nil
+	local turnFrequency = nil
+	
+	if (instance.repeats_after_turns) then
+		turnFrequency = instance.turn_frequency
+		delayTurn = instance.delay_until_turn
+	end
+	-- Should trigger the playbill
+	instance.playbills.instanceName = instance.instanceName
+	
+	
+	return Playbill_Start(
+		instance,
+		opt_context,
+		turnFrequency,
+		delayTurn,
+		opt_additionalCallback,
+		instance.context_selection_enabled and instance.context_selection_info or nil)
+end
+
+--? @args Table data, Number id
+--? @result Boolean
+--? @shortdesc Returns true if the id is valid and the playbill is running
+function playbill_IsActive(data, id)
+	return Playbill_IsActive(data, id)
+end
+
+--? @args Table data, Number id
+--? @shortdesc Stop the playbill associated with this instance
+function playbill_Stop(data, id)
+	MissionPrint("Playbill Prefab is Stopping")
+	Playbill_Stop(data, id)
+end

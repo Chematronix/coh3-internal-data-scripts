@@ -1,0 +1,107 @@
+-- Copyright 2019 SEGA Corporation, Developed by Relic Entertainment
+
+function Test_SquadCover(t_test_group, t_params)
+
+	test_status_SquadCover = "off"
+
+	local timeout_seconds = t_params.timeout_seconds or 60
+	local errors = 0
+	local test_success = false
+
+	local cover_test_name = ""
+
+	---------------------------------------------------------------------------------------------------------
+	-- Test system logic below...
+	---------------------------------------------------------------------------------------------------------
+
+	function Start()
+
+		cover_test_name = Prefab_GetInstance(t_params.cover_test_name) or nil
+		errors = 0
+		test_success = false
+
+		if (cover_test_name == nil) then
+			standard_test.printFail("The specified Prefab does not exist!")
+			errors = errors + 1
+		end
+
+		if (cover_test_name ~= nil) then
+			-- This is the call which will spawn Squads and initiate combat.
+			playbill_Trigger(cover_test_name)
+		end
+
+		local camera_pos = Util_ScarPos(cover_test_name.posx, cover_test_name.posz)
+
+		Camera_MoveTo(camera_pos)
+
+	end
+
+	function Update()
+		
+		if (errors > 0) then
+			standard_test.printFail(errors .. " Errors in test set-up!")
+			return false
+		end
+
+		if (test_status_SquadCover == "pass") then
+			test_success = true
+			return false
+
+		elseif (test_status_SquadCover == "fail") then
+			standard_test.printFail("Team A was expected to win, but was defeated.")
+			test_success = false
+			return false
+
+		end
+		return true
+	end
+
+	function Finish()
+
+		-- Show the end-of-test states of the Squads
+		local sg_team_a = SGroup_CreateIfNotFound("sg_team_a")
+		local sg_team_b = SGroup_CreateIfNotFound("sg_team_b")
+		local float_team_a_health_clamped = math.floor(SGroup_GetTotalHealth(sg_team_a))
+		local float_team_b_health_clamped = math.floor(SGroup_GetTotalHealth(sg_team_b))
+		standard_test.print("Team A health: " .. float_team_a_health_clamped)
+		standard_test.print("Team B health: " .. float_team_b_health_clamped)
+		
+		TestUtil_DestroyAllSquadsAndEntities()
+		return test_success
+	end
+
+	TestUtil_RegisterTest(
+		t_test_group, 
+		t_params.test_name,
+		t_params.test_description, 
+		Start,
+		Update,
+		Finish,
+		timeout_seconds)
+
+	-- This is called by the Scenario Prefabs. Playbills should not run until this step.
+	function Test_SquadCover_pfStartTest()
+		test_status_SquadCover = "active"
+		return true
+	end
+
+	-- These conditions are checked every sim-tick.
+	-- This is called after Squads are spawned, so that the test doesn't exit early.
+	function Test_SquadCover_pfCheckState()
+		playbill_Trigger("pbCallTestFailed")
+		playbill_Trigger("pbCallTestPassed")
+	end
+
+	-- This is called by Playbills once all Squads in Team B are defeated.
+	function Test_SquadCover_pfTestPassed()
+		test_status_SquadCover = "pass"
+		return true
+	end
+
+	-- This is called by Playbills if all Squads in Team A are defeated.
+	function Test_SquadCover_pfTestFailed()
+		test_status_SquadCover = "fail"
+		return true
+	end
+
+end

@@ -1,0 +1,352 @@
+import("prefabs/templates/actions_base_template.scar")
+
+local hint_fields = {
+	-- Hint Content
+	---------------
+	{
+		type = ST_STRING,
+		name = "datatemplate",
+		displayName = "Datatemplate",
+		options = {"GenericTrainingDataTemplate", "TrainingHighlightDataTemplate", "ImageTrainingDataTemplate", "VideoTrainingDataTemplate"},
+		description = "The Datatemplate to use for the hint",
+		default = "GenericTrainingDataTemplate",
+		category = "Training Hint Content",
+	},
+	{
+		type = ST_STRING,
+		name = "goal_message",
+		displayName = "Goal Message",
+		description = "The message for the training hint",
+		category = "Training Hint Content",
+		editor = 
+		{
+			name = "Essence.Editor.ScenarioEditor.Controls.LocStringEditor, EssenceEditor"
+		},
+	},
+	
+	{
+		type = ST_STRING,
+		name = "header_text",
+		displayName = "Header Text",
+		description = "The title text of the tutorial window",
+		category = "Training Hint Content",
+		editor = 
+		{
+			name = "Essence.Editor.ScenarioEditor.Controls.LocStringEditor, EssenceEditor"
+		},
+		default = "$11216813"
+	},
+	{
+		type = ST_STRING,
+		name = "hint_image",
+		displayName = "Hint Image",
+		description = "The path of the image to display in the training hint.",
+		default = "",
+		category = "Training Hint Content",
+	},
+	{
+		type = ST_STRING,
+		name = "hint_video",
+		displayName = "Hint Video",
+		description = "The path of the video to display in the training hint.",
+		default = "",
+		category = "Training Hint Content",
+	},
+	
+	-- Key Selection
+	----------------
+	{
+		type = ST_STRING,
+		name = "key_type",
+		displayName = "UI Target Type",
+		description = "Type of object we are attaching the training UI to. \"Auto\" means figure out the target from the completion type if possible",
+		options = {
+			"Auto",
+			"MenuPBG", 
+			"UIElement",
+			"SGroup",
+			"EGroup",
+			"AbilityPBG",
+			"SquadPBG",
+			"Position",
+			"OrderEnum",
+			"UpgradePBG",
+			"EntityPBG"
+		},
+		default = "Auto",
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_STRING,
+		name = "ui_element_key",
+		displayName = "UI Element Key",
+		description = "Name of an adornable UI element to attach the training hint to",
+		default = "EndTurnButton",
+		requirement = {"key_type", "UIElement"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_SGROUP,
+		name = "sgroup_key",
+		description = "SGroup containing the squad to attach the training hint to",
+		requirement = {"key_type", "SGroup"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_EGROUP,
+		name = "egroup_key",
+		description = "EGroup containing the entity to attach the training hint to",
+		requirement = {"key_type", "EGroup"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_STRING,
+		name = "menu_pbg_key",
+		displayName = "Menu Blueprint",
+		description = "The menu to attach the training hint to",
+		requirement = {"key_type", "MenuPBG"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_PBG,
+		name = "ability_pbg_key",
+		blueprintType = "ability",
+		description = "Ability PBG to attach a tag to",
+		requirement = {"key_type", "AbilityPBG"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_PBG,
+		name = "squad_pbg_key",
+		blueprintType = "squad",
+		description = "Squad PBG to attach a tag to",
+		requirement = {"key_type", "SquadPBG"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_MARKER,
+		name = "position_key",
+		displayName = "Target Position",
+		description = "Position target to attach the training hint to.",
+		requirement = {"key_type", "Position"},
+		hasDirection = true,
+		hasRange = true,
+	},
+	{
+		type = ST_NUMBER,
+		name = "order_number_key",
+		description = "The index of the given Squad / Entity order. Check tuning_simulation/entity_order or squad_orders for index of the order in that list.",
+		requirement = {"key_type", "OrderEnum"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_PBG,
+		name = "upgrade_pbg_key",
+		blueprintType = "upgrade",
+		description = "Upgrade PBG to attach a tag to",
+		requirement = {"key_type", "UpgradePBG"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_PBG,
+		name = "entity_pbg_key",
+		blueprintType = "entity",
+		description = "Entity PBG to attach a tag to",
+		requirement = {"key_type", "EntityPBG"},
+		category = "Training Hint Key",
+	},
+	{
+		type = ST_STRING,
+		name = "subkey",
+		displayName = "Optional Subkey",
+		description = "Adds a string subkey to any key type for further key specification. Depends on subkeys setup in XAML",
+		category = "Training Hint Key",
+	},
+}
+
+local goal_fields = {
+	-- Completion
+	-------------
+	{
+		type = ST_STRING,
+		name = "completion_type",
+		displayName = "Completion Type",
+		options = {
+			"AbilityCast",
+			"SelectSquad",
+			"SelectEntity",
+			"MoveUnit",
+			"AttackSquad",
+			"AttackEntity",
+			"TutorialWindow",
+			"OpenScreen",
+			"CloseScreen",
+			"Timer",
+			"ProducedSquad",
+			"CustomScript",
+		},
+		category = "Completion",
+	},
+	
+	-- Completion Type Specific Elements
+	------------------------------------
+	-- Multiple Completion Types
+	{
+		type = ST_EGROUP,
+		name = "egroup",
+		displayName = "EGroup",
+		description = "Target EGroup for the goal",
+		requirement = {"completion_type", "AttackEntity", "SelectEntity", "CustomScript"},
+		category = "Completion"
+	},
+	{
+		type = ST_SGROUP,
+		name = "sgroup",
+		displayName = "SGroup",
+		description = "Target SGroup for the goal",
+		requirement = {"completion_type", "AttackSquad", "SelectSquad", "MoveUnit", "CustomScript"},
+		category = "Completion"
+	},
+	
+	-- MoveUnit Completion Type
+	{
+		type = ST_MARKER,
+		name = "target_pos",
+		displayName = "Target Position",
+		description = "Movement target for the unit, with proximity used for checking completion.",
+		requirement = {"completion_type", "MoveUnit"},
+		hasDirection = true,
+		hasRange = true,
+	},
+	
+	-- Custom Completion Type
+	{
+		type = ST_STRING,
+		name = "custom_completion_func",
+		displayName = "Custom Completion Function Name",
+		description = "The name of the custom function that returns true when the goal is complete.",
+		requirement = {"completion_type", "CustomScript"},
+		category = "Completion"
+	},
+	{
+		type = ST_STRING,
+		name = "custom_setup_func",
+		displayName = "Custom Setup Function Name",
+		description = "The name of the custom function that sets up the goal from prefab data.",
+		requirement = {"completion_type", "CustomScript"},
+		category = "Completion"
+	},
+	
+	-- AbilityCast Completion Type
+	{
+		type = ST_PBG,
+		name = "ability_pbg",
+		blueprintType = "ability",
+		description = "Complete the goal when this ability is cast",
+		requirement = {"completion_type", "AbilityCast"},
+		category = "Completion",
+	},
+	
+	-- SquadProduced Completion Type
+	{
+		type = ST_TABLE,
+		name = "squads_to_produce",
+		category = "Completion",
+		requirement = {"completion_type", "ProducedSquad"},
+		multiplicity = "multiple",
+		description = "List of squads to produce for the goal to be considered complete.",
+		itemSchema = {
+			{
+				type = ST_PBG,
+				name = "sbp",
+				displayName = "Squad Blueprint",
+				blueprintType  = "squad",
+				description = "squad to produce",
+			}
+		}
+	},
+	
+	
+	-- FTUEWindow Completion Types (OpenScreen, CloseScreen)
+	{
+		type = ST_STRING,
+		name = "goal_screen",
+		displayName = "Screen",
+		description = "Check if the screen/page that has this name is active. Blank indicates no screen (for close)",
+		requirement = {"completion_type", "OpenScreen", "CloseScreen"},
+		category = "Completion",
+	},
+	{
+		type = ST_STRING,
+		name = "goal_modal",
+		dispalyName = "Optional Modal",
+		description = "Also check for a given modal on the given page",
+		requirement = {"completion_type", "OpenScreen"},
+		category = "Completion",
+	},
+	{
+		type = ST_STRING,
+		name = "tutorial_item",
+		description = "Sets the default tutorial item for the FTUE page in the front end flow",
+		requirement = {"completion_type", "CloseScreen"},
+		category = "Completion",
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "also_check_for_close",
+		description = "When set to true, also considers the goal complete if the screen has been closed",
+		requirement = {"completion_type", "OpenScreen"},
+		category = "Completion",
+		default = false,
+	},
+	
+	-- Timer Completion Type
+	{
+		type = ST_NUMBER,
+		name = "timer_duration",
+		description = "Check that the goal has been active for this amount of time before being completed",
+		requirement = {"completion_type", "Timer"},
+		category = "Completion",
+		default = 6,
+	},
+	-- Extra hints per goal
+	-- ====================
+	{
+		type = ST_TABLE,
+		name = "extra_tags",
+		displayName = "Extra Training Hints",
+		itemSchema = hint_fields,
+		multiplicity = "multiple",
+	},
+	
+}
+
+g_goal_sequence_schema = {
+	{
+		type = ST_TABLE,
+		name = "goals",
+		description = "Sequence of training goals (with a UI hint) to present in order",
+		multiplicity = "multiple",
+		itemSchema = Table_Concatenate(goal_fields, hint_fields)
+	},
+	{
+		type = ST_STRING,
+		name = "sequence_id",
+		description = "ID to give this goal sequence for logging purposes",
+	},
+	{
+		type = ST_STRING,
+		name = "opt_bypass_function",
+		description = "Optional function to use as a bypass to skip this training sequence",
+	},
+	-- Goal Complete Callback
+	-- ======================
+	{
+		type = ST_TABLE,
+		name = "on_complete_actions",
+		displayName = "Completion Actions",
+		description = "An ActionList to be fired when the goal sequence is complete",
+		multiplicity = "multiple",
+		itemSchema = g_playbills_actions_base_template,
+	},
+}

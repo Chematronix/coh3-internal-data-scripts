@@ -1,0 +1,8 @@
+-- import all campaign map ai personality files here
+import("ai/campaign_personalities/prioritize_fuel.scar")
+import("ai/campaign_personalities/air_superiority.scar")
+import("ai/campaign_personalities/defend_only.scar")
+import("ai/campaign_personalities/capture_lots.scar")
+import("ai/campaign_personalities/attack_lots.scar")
+import("ai/campaign_personalities/balanced.scar")
+import("ai/campaign_personalities/abandon_frontline.scar")

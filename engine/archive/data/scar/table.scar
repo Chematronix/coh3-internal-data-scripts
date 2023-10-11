@@ -1,0 +1,336 @@
+--
+-- Table helper functions
+-- (in addition to the Lua table library)
+--
+
+
+--? @shortdesc Returns a random item from a table. You can return multiple items (without duplicates) by passing in an optional number parameter.
+--? @args Table table[, Integer numberofitems]
+--? @result Item/Table
+function Table_GetRandomItem(thistable, num)
+	
+	if scartype(thistable) ~= ST_TABLE then
+		fatal("Table_GetRandomItem: Table is invalid, is of type: "..scartype_tostring(thistable))
+	end
+
+	local size = (#thistable)
+	
+	if num == nil or num == 1 then
+		
+		return thistable[World_GetRand(1, size)]
+		
+	else
+		
+		if num > size then
+			num = size
+		end
+		
+		local indexes = {}
+		local result = {}
+		
+		for n = 1, size do
+			indexes[n] = n
+		end
+		
+		for n = 1, num do
+			
+			local rand = World_GetRand(1, (#indexes))
+			local value = indexes[rand]
+			table.remove(indexes, rand)
+			
+			table.insert(result, thistable[value])
+			
+		end
+		
+		return result
+		
+	end
+	
+end
+
+
+--? @shortdesc Randomizes the order of items in a table.
+--? @args Table table
+--? @result Table
+function Table_Shuffle(tab)
+
+	if #tab <= 1 then
+		return tab
+	else
+		return Table_GetRandomItem(tab, #tab)	-- this uses the above function to say "give me 10 random items from this table of 10 items", so you get everything but in a random order!
+	end
+end
+
+
+--? @shortdesc Reverse the order of items in a table.
+--? @args Table table
+--? @result Table
+function Table_Reverse(tab)
+	
+    local a, b = 1, #tab					-- start with two indexes, a and b, at either end of the list
+    
+    while a < b do
+        tab[a], tab[b] = tab[b], tab[a]		-- swap the two entries under consideration
+        a = a + 1							-- move the two indexes one step towards the middle of the list
+        b = b - 1
+    end
+	
+end
+
+
+--? @shortdesc Checks if a table contains the specified item 
+--? @args LuaTable OriginalTable, Item item
+--? @result Boolean
+function Table_Contains(table_id, item)
+	
+	if table_id == nil then
+		fatal("Table: "..tostring(table_id).." does not exist!")
+		return
+	end
+	
+	if (#table_id) == 0 then
+		return false
+	else
+		for i = 1, (#table_id) do
+			if table_id[i] == item then
+				return true
+			end
+		end
+		return false
+	end
+
+end
+
+--? @shortdesc Creates a third table that points to every enumerable element in table1 and table2, in that order
+--? @args LuaTable table1, LuaTable table2
+--? @result LuaTable
+function Table_Concatenate(...)
+	
+	local arg = {...}
+    local copy = {}
+	local copy_index = 1
+	
+	local arg_count = #arg
+	for arg_index=1, arg_count do
+		
+		local table = arg[arg_index]
+		local table_count = #table
+		for i=1, table_count do
+			local value = table[i]
+			copy[copy_index] = value
+			copy_index = copy_index + 1
+		end
+		
+	end
+	
+	return copy
+end
+
+--? @shortdesc Creates a third associated table that contains all key-value pair of all tables passed as parameter.
+--? @args LuaTable table1, LuaTable table2
+--? @result LuaTable
+function Table_Concatenate_Associative(...)
+	
+	local arg = {...}
+    local copy = {}
+	
+	local arg_count = #arg
+	for arg_index=1, arg_count do
+		
+		local table = arg[arg_index]
+		
+		for key, value in pairs(table) do
+			copy[key] = value
+		end
+	end
+	
+	return copy
+end
+
+--? @shortdesc Copies the contents of the original table returns a new table with the contents of that table 
+--? @args LuaTable OriginalTable
+--? @result LuaTable
+function Table_Copy(temp)
+
+	local new_table = {}
+
+	for k,v in pairs(temp) do
+		if scartype(temp[k]) == ST_TABLE then
+			new_table[k] = Table_Copy(temp[k])
+		else
+			new_table[k] = temp[k]
+		end
+	end
+	
+	return new_table
+
+end
+
+
+--? @shortdesc Makes a table read-only. This can be done recursively to also apply to any subtables.
+--? @extdesc Any attempts to write to this table after this has been called will trigger a Fatal SCAR Error. You can customize the error message that will be given with the "error" parameter. 
+--? @args Table table[, Boolean recursive, String errorMessage]
+function Table_MakeReadOnly(table, recursive, errorMessage)
+
+	if errorMessage == nil then 
+		errorMessage = "Attempt to write to a read-only table"
+	end
+	
+	local metatable = getmetatable(table)
+	if metatable == nil then 
+		metatable = {}
+	end
+	metatable.__newindex = function() fatal(errorMessage) end 
+	setmetatable(table, metatable)
+		
+	if recursive == true then 
+		for index, value in pairs(table) do 
+			if scartype(value) == ST_TABLE then 
+				Table_MakeReadOnly(value, recursive, errorMessage)
+			end 
+		end
+	end	
+	
+end
+
+--? @shortdesc Finds the first instance of a given item in the given table and removes it
+--? @args TABLE table, OBJECT toRemove
+--? @result Void
+function Table_RemoveFirstItem(tableObject, toRemove)
+
+	if scartype(tableObject) ~= ST_TABLE then
+		--return
+	end
+	
+    for index, item in pairs(tableObject) do
+        if item == toRemove then
+			table.remove(tableObject, index)
+            return
+		end
+	end
+	
+end
+
+if REQUIRED_DATA == nil then 		-- this prevents the pointer to REQUIRED_DATA changing on a script reload, or when loading a savegame
+	REQUIRED_DATA = {}		
+end
+
+
+--? @shortdesc Updates myTable by applying default values from the myDefaults table for any items that are not explicitly declared already 
+--? @extdesc If the myDefaults table has any item with the value REQUIRED_DATA, then you are declaring that there is no default for this item and that you REQUIRE the user provides a value. You will get a Fatal Scar Error if these are left out, listing exactly which required keys are missing.
+--? @args Table myTable, Table myDefaults[, String errorMessage]
+function Table_FillWithDefaultValues(myTable, myDefaults, errorMessage)
+
+	errorMessage = errorMessage or ""
+	local errorList = {}	
+	
+	Table_FillWithDefaultValues_MergeSubTable(myTable, myDefaults, errorList)
+	
+	if #errorList >= 1 then 
+		
+		local errorString = errorMessage.."\nMissing the following required items:\n"
+		
+		for i, missingItem in pairs(errorList) do 
+			errorString = errorString.."- "..missingItem.."\n"
+		end
+		
+		fatal(errorString)
+		
+	end
+	
+end
+function Table_FillWithDefaultValues_MergeSubTable(subTable, subDefaults, errorList, prefix)
+	
+	prefix = prefix or ""
+	
+	for key, value in pairs(subDefaults) do
+		if subTable[key] == nil then 
+			if value == REQUIRED_DATA then 
+				table.insert(errorList, prefix..key)				
+			elseif scartype(value) == ST_TABLE then 
+				subTable[key] = {}
+				Table_FillWithDefaultValues_MergeSubTable(subTable[key], subDefaults[key], errorList, prefix..key..".")
+			else
+				subTable[key] = value				
+			end
+		end
+	end
+	
+end
+
+--? @shortdesc Splits the string based on the delimiter passed in
+--? @args String StringToSplit, String Delimiter
+--? @result LuaTable
+function Table_StringSplit(t, delimiter)
+	local result = {}
+	for match in (t..delimiter):gmatch("(.-)"..delimiter) do
+		table.insert(result, match)
+	end
+	return result
+end
+
+--? @shortdesc Iterate over a table's entries in the order of their keys sorted alphabetically
+--? @extdesc Necessary if you require deterministic iteration of a table
+--? @args LuaTable
+--? @result An iterator of table pairs in the order of their keys in alphabetical order  
+function Table_DeterministicOrderedPairs(t)
+	-- Copied from the lua wiki article on Sorted Iteration
+	
+	local function __genOrderedIndex( t )
+	    local orderedIndex = {}
+	    for key in pairs(t) do
+	        table.insert( orderedIndex, key )
+	    end
+	    table.sort( orderedIndex )
+	    return orderedIndex
+	end
+	
+	local function __orderedNext(t, state)
+	    -- Equivalent of the next function, but returns the keys in the alphabetic
+	    -- order. We use a temporary ordered key table that is stored in the
+	    -- table being iterated.
+	
+	    local key = nil
+	    if state == nil then
+	        -- the first time, generate the index
+	        t.__orderedIndex = __genOrderedIndex( t )
+	        key = t.__orderedIndex[1]
+	    else
+	        -- fetch the next value
+	        for i = 1,#t.__orderedIndex do
+	            if t.__orderedIndex[i] == state then
+	                key = t.__orderedIndex[i+1]
+	            end
+	        end
+	    end
+	
+	    if key then
+	        return key, t[key]
+	    end
+	
+	    -- no more value to return, cleanup
+	    t.__orderedIndex = nil
+	    return
+	end
+	
+	return __orderedNext, t, nil
+end
+
+-- Removes all elements from a table-array that match the predicate function passed in.
+-- For each element removed, all the subsequent elements are moved down to fill the empty numeric index.
+function Table_RemoveIf(table, num, func)
+	local oldTail = 1 + num
+	local newTail = 1
+	for i=1,num do
+		if not func(table[i]) then
+			if i ~= newTail then
+				table[newTail] = table[i]
+			end
+			newTail = newTail + 1
+		end
+	end
+	for i=newTail, num do
+		table[i] = nil;
+	end
+	return newTail ~= oldTail
+end

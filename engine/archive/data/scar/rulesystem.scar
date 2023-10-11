@@ -1,0 +1,404 @@
+----------------------------------------------------------------------------------------------------------------
+-- Rule System helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+--? @group scardoc;RuleSystem
+
+----------------------------------------------------------------------------------------------------------------
+-- Scar rule system functions
+
+-- Rule Groups. 
+-- Do not overwrite any of these values.
+-- If you want to add a new group, add it at the end and give it the next number in the sequence.
+
+RuleGroup = {
+	General = 0,
+	Unpausable = 1,
+	SmokeTest = 2,
+	AI = 3
+}
+
+--? @shortdesc Add a rule to be executed every frame. 
+--? @extdesc Returns the ID of the rule just added.
+--? @result Integer
+--? @args LuaFunction f [, Table data, RuleGroup group]
+function Rule_Add(f, data, group)
+
+	if not group then
+		group = RuleGroup.General
+	end
+
+	if not data then
+		return TimeRule_Add(f, group)
+	else
+		return TimeRule_AddData(f, data, group)
+	end
+end
+
+--? @shortdesc Add a rule to be executed. Can include a start delay, an interval between rule calls and a count of how many times the rule is called.
+--? @extdesc interval can be a number (the interval between subsequent rule calls) or a table with the keys: "delay", "interval" and "count". Returns the ID of the rule just added.
+--? @result Integer
+--? @args LuaFunction f, Real/Table interval [, Table data, RuleGroup group]
+function Rule_AddInterval( f, interval, data, group)
+	local lInterval = {}
+	
+	if not group then
+		group = RuleGroup.General
+	end
+	
+	if (scartype(interval) == ST_TABLE) then
+		-- These statements set defaults if the values don't exist (are nil)
+		-- They mimic ternary operators from C++ ( a = condition ? true : false)
+		lInterval.delay = interval.delay ~= nil and interval.delay or 0
+		lInterval.interval = interval.interval ~= nil and interval.interval or 0
+		lInterval.count = interval.count ~= nil and interval.count or 0
+	else 
+		-- We assume interval is a number 
+		lInterval.interval = interval ~= nil and interval or 0
+		
+		lInterval.delay = 0
+		lInterval.count = -1
+	end
+	
+	if not data then
+		return TimeRule_AddIntervalEx(f, lInterval.delay, lInterval.interval, lInterval.count, group)
+	else
+		return TimeRule_AddIntervalExData(f, data, lInterval.delay, lInterval.interval, lInterval.count, group)
+	end
+end
+
+--? @shortdesc Add a rule to be executed once, after 'delay' seconds.
+--? @extdesc Returns the ID of the rule just added.
+--? @result Integer
+--? @args LuaFunction rule[, Real delay, Table data, Rulegroup group]
+function Rule_AddOneShot( f, delay, data, group)
+
+	if not delay then
+		delay = 0
+	end
+	
+	if not group then
+		group = RuleGroup.General
+	end
+
+	if not data then
+		return TimeRule_AddOneShot(f, delay, group)
+	else
+		return TimeRule_AddOneShotData(f, data, delay, group)
+	end
+end
+
+--? @shortdesc Change 'interval' seconds of all rules with LuaFunction f
+--? @result Void
+--? @args LuaFunction rule, Real interval
+function Rule_ChangeInterval( f, interval )
+	TimeRule_ChangeInterval( f, interval )
+end
+
+--? @shortdesc Change 'interval' seconds of an existing rule with id
+--? @result Void
+--? @args Integer id, Real interval
+function Rule_ChangeIntervalWithID( id, interval )
+	TimeRule_ChangeIntervalWithID( id, interval )
+end
+
+--? @shortdesc Add a rule to be executed when the event of 'eventType' has happened on the 'squad'
+--? @extdesc Event types are: GE_SquadKilled, GE_SquadPinned, GE_SquadParadropComplete, GE_SquadCommandIssued, GE_AbilityExecuted, GE_SpawnActionComplete
+--? @result Void
+--? @args LuaFunction rule, SquadID squad, Integer eventtype
+function Rule_AddSquadEvent( f, squad, eventType, userDataTable )
+	if (userDataTable ~= nil) then
+		EventRule_AddSquadEventData( f, squad, eventType, userDataTable )
+	else
+		EventRule_AddSquadEvent( f, squad, eventType )
+	end
+end
+
+--? @shortdesc Add a rule to be executed when the event of 'eventType' has happened on squads in the 'sgroup'
+--? @extdesc Event types are: GE_SquadKilled, GE_SquadPinned, GE_SquadParadropComplete, GE_SquadCommandIssued, GE_AbilityExecuted, GE_SpawnActionComplete
+--? @result Void
+--? @args LuaFunction rule, SGroupID sgroup, Integer eventtype
+function Rule_AddSGroupEvent( f, sgroup, eventType, userDataTable )
+	local _AddToSquad = function ( gid, idx, sid )
+		Rule_AddSquadEvent( f, sid, eventType, userDataTable )
+	end
+	SGroup_ForEach( sgroup, _AddToSquad )
+end
+
+--? @shortdesc Add a rule to be executed when the event of 'eventType' has happened on the 'entity'
+--? @extdesc Event types are: GE_EntityKilled, GE_EntityParadropComplete, GE_EntityCommandIssued, GE_ProjectileFired, GE_AbilityExecuted, GE_SpawnActionComplete
+--? @result Void
+--? @args LuaFunction rule, EntityID entity, Integer eventtype
+function Rule_AddEntityEvent( f, entity, eventType, userDataTable )
+	if (userDataTable ~= nil) then
+		EventRule_AddEntityEventData( f, entity, eventType, userDataTable )
+	else
+		EventRule_AddEntityEvent( f, entity, eventType )
+	end
+end
+
+--? @shortdesc Add a rule to be executed when the event of 'eventType' has happened on entities in the 'egroup'
+--? @extdesc Event types are: GE_EntityKilled, GE_EntityParadropComplete, GE_EntityCommandIssued, GE_ProjectileFired, GE_AbilityExecuted, GE_SpawnActionComplete
+--? @result Void
+--? @args LuaFunction rule, EGroupID egroup, Integer eventtype
+function Rule_AddEGroupEvent( f, egroup, eventType, userDataTable )
+
+	local _AddToEntity = function ( gid, idx, eid )
+		Rule_AddEntityEvent( f, eid, eventType, userDataTable )
+	end
+	EGroup_ForEach( egroup, _AddToEntity )
+end
+
+--? @shortdesc Add a rule to be executed when the event of 'eventType' has happened on the 'player'
+--? @extdesc Event types are: GE_PlayerBeingAttacked, GE_PlayerCommandIssued, GE_AbilityExecuted, GE_UpgradeComplete, GE_ConstructionComplete, GE_BuildItemComplete, GE_PlayerKilled, GE_SpawnActionComplete, GE_AIPlayer_EncounterNotification, GE_TerritoryControllerChangedOwner
+--? @result Void
+--? @args LuaFunction rule, PlayerID player, Integer eventtype
+function Rule_AddPlayerEvent( f, player, eventType, userDataTable )
+	if (userDataTable ~= nil) then
+		EventRule_AddPlayerEventData( f, player, eventType, userDataTable )
+	else
+		EventRule_AddPlayerEvent( f, player, eventType )
+	end
+end
+
+--? @shortdesc Add a rule to be executed when the event of 'eventType' has happened, regardless of source
+--? @extdesc Event types are: GE_PlayerBeingAttacked
+--? @result Void
+--? @args LuaFunction rule, Integer eventtype
+function Rule_AddGlobalEvent( f, eventType, userDataTable)
+	if (userDataTable ~= nil) then
+		EventRule_AddEventData( f, eventType, userDataTable )
+	else
+		EventRule_AddEvent( f, eventType )
+	end
+end
+
+--? @shortdesc Remove an active event rule for the 'squad'
+--? @result Void
+--? @args LuaFunction rule, SquadID squad
+function Rule_RemoveSquadEvent( f, squad )
+	EventRule_RemoveSquadEvent( f, squad )
+end
+
+--? @shortdesc Remove an active event rule for squads in the 'sgroup'
+--? @result Void
+--? @args LuaFunction rule, SGroupID sgroup
+function Rule_RemoveSGroupEvent( f, sgroup )
+	local _RemoveFromSquad = function ( gid, idx, sid )
+		Rule_RemoveSquadEvent( f, sid )
+	end
+	SGroup_ForEach( sgroup, _RemoveFromSquad )
+end
+
+--? @shortdesc Remove an active event rule for the 'entity'
+--? @result Void
+--? @args LuaFunction rule, EntityID entity
+function Rule_RemoveEntityEvent( f, entity )
+	EventRule_RemoveEntityEvent( f, entity )
+end
+
+--? @shortdesc Remove an active event rule for entities in the 'egroup'
+--? @result Void
+--? @args LuaFunction rule, EGroupID egroup
+function Rule_RemoveEGroupEvent( f, egroup )
+	local _RemoveFromEntity = function ( gid, idx, eid )
+		Rule_RemoveEntityEvent( f, eid )
+	end
+	EGroup_ForEach( egroup, _RemoveFromEntity )
+end
+
+--? @shortdesc Remove an active event rule for the 'player'
+--? @result Void
+--? @args LuaFunction rule, PlayerID player
+function Rule_RemovePlayerEvent( f, player )
+	EventRule_RemovePlayerEvent( f, player )
+end
+
+--? @shortdesc Remove an active event rule that's been applied 'globally'
+--? @result Void
+--? @args LuaFunction rule
+function Rule_RemoveGlobalEvent( f )
+	EventRule_RemoveEvent( f )
+end
+
+--? @shortdesc Remove a currently executing rule (only works inside a rule function)
+--? @result Void
+--? @args Void
+function Rule_RemoveMe()
+	-- Try RemoveMe in both time rule system and event rule system.
+	-- There should only be one rule executing at any given time.
+	TimeRule_RemoveMe()
+	EventRule_RemoveMe()
+end
+
+--? @shortdesc Remove all currently active rules with LuaFunction f (this does not remove any event rules)
+--? @result Void
+--? @args LuaFunction rule
+function Rule_Remove( f )
+	-- Event rule removal would require additional input.
+	-- Therefore, this is only for time rules
+	TimeRule_Remove( f )
+end
+
+--? @shortdesc Remove a currently active rule with id (this does not remove any event rules)
+--? @result Void
+--? @args Integer id
+function Rule_RemoveWithID( id )
+	-- Event rule removal would require additional input.
+	-- Therefore, this is only for time rules
+	TimeRule_RemoveWithID( id )
+	ConditionalRule_RemoveWithID( id )
+end
+
+--? @shortdesc Kills ALL rules.
+--? @result Void
+--? @args Void
+function Rule_RemoveAll()
+	TimeRule_RemoveAll()
+	EventRule_RemoveAll()
+	ConditionalRule_RemoveAll()
+end
+
+--? @shortdesc Replaces the function callback for all currently active rules with LuaFunction f (This only applies to TimeRules)
+--? @result Void
+--? @args LuaFunction oldf, LuaFunction newf
+function Rule_Replace( oldf, newf )
+	-- Event rule removal would require additional input.
+	-- Therefore, this is only for time rules
+	TimeRule_Replace( oldf, newf )
+end
+
+--? @shortdesc Replaces the function callback for all currently active rules with an id (This only applies to TimeRules)
+--? @result Void
+--? @args Integer id, LuaFunction newf
+function Rule_ReplaceWithID( id, newf )
+	-- Event rule removal would require additional input.
+	-- Therefore, this is only for time rules
+	TimeRule_ReplaceWithID( id, newf )
+end
+
+--? @shortdesc Refreshes all Time and Event rules
+--? @result Void
+--? @args Void
+function Rule_Refresh()
+	TimeRule_Refresh()
+	EventRule_Refresh()
+end
+
+--? @shortdesc Test if a rule with LuaFunction f is currently active
+--? @result Boolean
+--? @args LuaFunction rule
+function Rule_Exists( f )
+	-- Check if the rules exists as time rules; if not check for event rules
+	if ( TimeRule_Exists( f ) == true ) then
+		return true;
+	end
+	
+	return EventRule_Exists( f )
+
+end
+
+--? @shortdesc Test if a rule with id is currently active. Only for TimeRules
+--? @result Boolean
+--? @args Integer id
+function Rule_ExistsWithID( id )
+	-- Check if the rules exists as time rules; if not check for event rules
+	if ( TimeRule_ExistsWithID( id ) == true ) then
+		return true;
+	end
+	
+	return ConditionalRule_ExistsWithID( id )
+end
+
+--? @shortdesc Pause all currently active rules. Ignores Unpauseable rules.
+--? @result Void
+--? @args Number / Table groupsToIgnore
+function Rule_PauseAll(groupsToIgnore)
+	
+	TimeRule_PauseAll()
+	EventRule_PauseAll()
+
+	if not groupsToIgnore then
+		groupsToIgnore = {RuleGroup.Unpausable}
+	else
+		if (scartype(groupsToIgnore) == ST_NUMBER) then
+			groupsToIgnore = {groupsToIgnore, RuleGroup.Unpausable}
+		else
+			table.insert(groupsToIgnore, RuleGroup.Unpausable)
+		end
+	end
+	
+	-- unpause the ignore groups' rules
+	local len = (#groupsToIgnore)
+	
+	for i = 1, len, 1 do
+		TimeRule_UnpauseWithGroup(groupsToIgnore[i])
+	end
+end
+
+--? @shortdesc Unpause all rules
+--? @result Void
+--? @args Void
+function Rule_UnpauseAll()
+	TimeRule_UnpauseAll()
+	EventRule_UnpauseAll()
+end
+
+--? @shortdesc Pause all rules with LuaFunction for
+--? @result Void
+--? @args LuaFunction f
+function Rule_Pause( f )
+	EventRule_Pause(f)
+	TimeRule_Pause(f)
+end
+
+--? @shortdesc Unpause all rules with LuaFunction for
+--? @result Void
+--? @args LuaFunction f
+function Rule_Unpause( f )
+	EventRule_Unpause(f)
+	TimeRule_Unpause(f)
+end
+
+--? @shortdesc Pause all rules with with id. Only for TimeRules
+--? @result Void
+--? @args Integer id
+function Rule_PauseWithID( id )
+	TimeRule_PauseWithID(id)
+end
+
+--? @shortdesc Unpause all rules with with id. Only for TimeRules
+--? @result Void
+--? @args Integer id
+function Rule_UnpauseWithID( id )
+	TimeRule_UnpauseWithID(id)
+end
+
+
+--? @shortdesc Triggers when a group (SGroup/EGroup) gets close enough to a location
+--? @result Void
+--? @args Function f, Bool all, SGroup/EGroup who, Marker where, [Integer range], Bool recur, Table data
+function Rule_EnterProximity( f, all, group, where, range, recur, data )
+	return Event_EnterProximity(f, group, all, where, range or 5, recur, data)
+end
+
+--? @shortdesc Triggers when a group (SGroup/EGroup) gets far enough from a location (the group must enter the range before this can trigger)
+--? @result Void
+--? @args Function f, Bool all, SGroup/EGroup who, Marker where, [Integer range], Bool recur, Table data
+function Rule_ExitProximity( f, all, group, where, range, recur, data )
+	Event_ExitProximity(f, group, all, where, range or 5, recur, data)
+end
+
+--? @shortdesc Triggers every interval seconds that the group is within range of the location
+--? @result Void
+--? @args Function f, Bool all, SGroup/EGroup who, Marker where, [Integer range], Float interval, Bool recur, Table data
+function Rule_WhileInProximity( f, all, group, where, range, interval, recur, data )
+	Event_WhileInProximity( f, group, all, interval, where, range or 5, recur, data)
+end
+
+--? @shortdesc Comparison is one of IS_LESS_THAN; IS_LESS_THAN_OR_EQUAL; IS_EQUAL; IS_NOT_EQUAL; IS_GREATER_THAN; IS_GREATER_THAN_OR_EQUAL. Triggers when the number of objects in the group, when compared to value by comparison, is true
+--? @result Void
+--? @args Function f, SGroup/EGroup group, Comparison comparison, Integer value, Bool recur, Table data
+function Rule_GroupCount( f, group, comparison, value, recur, data )
+	Event_GroupCount( f, group, comparison, value, recur, data )
+end

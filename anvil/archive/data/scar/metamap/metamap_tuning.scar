@@ -1,0 +1,115 @@
+-----------------------------------------------------------------------
+--
+--  Meta Map Tuning 
+--
+-- (c) Relic Entertainment 2019
+--
+-----------------------------------------------------------------------
+-- tuning values for the metamap
+-- why do these tuning values live in scar and not AE?
+-- The metamap system lives in scar, so these tuning values are used only in scar.
+-- AE exists to create data for use by the engine.
+
+-- enum
+DAMAGE_UNITS = 
+{ 
+	percent_of_max = 1,
+	percent_of_current = 2,
+	hit_points = 3
+}
+
+-- enum - programmer support needed to add new metrics
+PERFORMANCE_METRIC =
+{
+	entities_lost_per_minute = 1
+}
+
+-- Modify this table to tune mission result damage
+t_mission_result_tuning =
+{
+	-- Damage unit type for when the player loses a mission
+	failure_damage_units = DAMAGE_UNITS.hit_points,
+	-- Damage value for when the player loses a mission
+	failure_damage_value = 250,
+	-- The metric we use for judging performance
+	performance_metric = PERFORMANCE_METRIC.entities_lost_per_minute,
+	-- A value representing the worst performance for the chosen metric - max damage is dealt if met or exceeded.
+	-- Otherwise, damage will scale linearly from flawless performance to the worst case.
+	performance_worst_case = 20, 
+	-- Damage unit type for HP loss based on performance
+	performance_damage_units = DAMAGE_UNITS.hit_points,
+	-- The max damage value for HP loss based on performance. Better performance will map to a smaller percentage of this value.
+	performance_max_damage_value = 250,
+	-- Damage unit type for when the ai loses a mission
+	ai_failure_damage_units = DAMAGE_UNITS.hit_points,
+	-- Damage value for when the ai loses a mission
+	ai_failure_damage_value = Util_DifVar({750,750,500,500}),
+	-- Chance to outright kill an enemy company when it is defeated
+	ai_failure_chance_to_kill = Util_DifVar({60,40,20,0}),
+	-- Damage unit type for when the ai wins a mission
+	ai_success_damage_units = DAMAGE_UNITS.hit_points,
+	-- Damage value for when the ai wins a mission
+	ai_success_damage_value = 250,
+}
+
+-- Modify this table to tune the % chance of losing a detachment when failing a skirmish/mission
+t_detachment_loss_tuning = 
+{
+	-- % chance for a player to lose a detachment per difficulty
+	t_player_chance_of_detachment_loss = 
+	{		
+		-- Easy difficulty
+		25,
+		
+		-- Normal difficulty
+		50,
+		
+		-- Hard difficulty
+		75,
+		
+		-- Expert difficulty
+		100
+	},
+	
+	-- % chance for an AI to lose a detachment per difficulty
+	t_ai_chance_of_detachment_loss = 
+	{		
+		-- Easy difficulty
+		100,
+		
+		-- Normal difficulty
+		75,
+		
+		-- Hard difficulty
+		50,
+		
+		-- Expert difficulty
+		25
+	}
+}
+
+-- Add/Modify this table for any mission affector tunables
+t_affectors_tuning =
+{
+	t_enemy_adjacency_distance_tuning = 30,
+}
+
+-- Modify this table to tune company veterancy
+-- Veterancy rank values are defined in campaign company sbps
+t_veterancy_tuning =
+{
+	-- Efficiency Rating (ER): A ratio of kills/deaths 
+	-- Ideal ER: the rating that rewards the maximum amount of bonus veterancy
+	ideal_efficiency_rating = 3.0,
+	-- Amount of veterancy earned for killing an enemy on the campaign map
+	cmap_kill_veterancy_value = 25,
+	-- Amount of veterancy AI companies earn on a kill
+	cmap_ai_kill_value = 50
+}
+
+-- Tunables for combat preview UI 
+t_combat_preview_tuning =
+{
+	-- Post cmap combat, keep the CombatPreview UI alive for a few seconds
+	post_combat_keep_alive_duration = 2,
+}

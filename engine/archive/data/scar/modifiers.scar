@@ -1,0 +1,2333 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- MODIFIER FUNCTIONS
+-- Provides a simple interface to add and remove specific modifiers from groups and players.
+--
+-- Copyright 2018 SEGA Corporation, Developed by Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+-- create the blank modifier storage table at the start of a mission
+function Modifier_Init()
+	_ModifiersSquadTable = {}
+	_ModifiersEntityTable = {}
+	_ModifiersReverseTable = {}
+end
+Scar_AddInit(Modifier_Init)
+
+
+
+
+-- ALL Modify_* functions should call these function so that all SCAR-applied modifiers get indexed  <---- IMPORTANT!
+
+-- this function adds a modifier id to the global modifier storage table
+function Modifier_AddToSquadTable(squad, modids)
+
+	-- each squad has it's own list in the table, indexed by it's unique game id
+	local sid = Squad_GetID(squad)
+	if _ModifiersSquadTable[sid] == nil then
+		_ModifiersSquadTable[sid] = {}
+	end
+
+	for i = 1, #modids do
+		local modid = modids[i]
+		table.insert(_ModifiersSquadTable[sid], modid)
+		
+		-- each modifier has a reverse lookup table, showing which squad/entity it was applied to
+		_ModifiersReverseTable[modid] = {squad = sid}
+	end
+end
+
+-- this function adds a modifier id to the global modifier storage table
+function Modifier_AddToEntityTable(entity, modids)
+
+	-- each entity has it's own list in the table, indexed by it's unique game id
+	local eid = Entity_GetID(entity)
+	if _ModifiersEntityTable[eid] == nil then
+		_ModifiersEntityTable[eid] = {}
+	end
+
+	for i = 1, #modids do
+		local modid = modids[i]
+		table.insert(_ModifiersEntityTable[eid], modid)
+
+		-- each modifier has a reverse lookup table, showing which squad/entity it was applied to
+		_ModifiersReverseTable[modid] = {entity = eid}
+	end
+end
+
+
+-- this function adds a modifier id to the global modifier storage table
+function Modifier_AddToMiscTable(modid)
+
+	-- each modifier has a reverse lookup table, showing which squad/entity it was applied to
+	_ModifiersReverseTable[modid] = {misc = true}
+	
+end
+
+-- Weapon Modifier consts
+WM_RANGE = "range_weapon_modifier"
+WM_PENETRATION = "weapon_penetration_modifier"
+WM_ACCURACY = "accuracy_weapon_modifier"
+WM_COOLDOWN = "cooldown_weapon_modifier"
+WM_RELOAD = "reload_weapon_modifier"
+WM_BURST = "burst_weapon_modifier"
+WM_DAMAGE = "damage_weapon_modifier"
+WM_ENABLE = "enable_weapon_modifier"
+
+local _upgradeResourceCostModifiers = {}
+local _playerResourceIncomeModifiers =  {}
+local _playerResourceCapModifiers = {}
+local _entityResourceCostModifiers = {}
+local _playerResourceUpkeepModifiers =  {}
+
+--? @shortdesc Set up tables to track modifiers that are applied per resource
+--? @extdesc The game specific <game_title>/modifiers.scar file should define tables with an entry per resource and pass them as arguments
+--? @result 
+function Modifier_InitResourceBasedModifierTables(
+	upgradeResourceCostModifiers, 
+	playerResourceIncomeModifiers,
+	playerResourceCapModifiers,
+	entityResourceCostModifiers,
+	playerResourceUpkeepModifiers) 
+	
+	_upgradeResourceCostModifiers = upgradeResourceCostModifiers
+	_playerResourceIncomeModifiers = playerResourceIncomeModifiers
+	_playerResourceCapModifiers = playerResourceCapModifiers
+	_entityResourceCostModifiers = entityResourceCostModifiers
+	_playerResourceUpkeepModifiers = playerResourceUpkeepModifiers
+end
+
+--? @group scardoc;Modifiers
+
+--? @shortdesc Remove an applied modifier. 
+--? @result Void
+--? @args modids modifier
+function Modifier_Remove(modifier)
+
+	-- if it's just one modid, put it in a table
+	if (type(modifier) ~= "table") then
+		modifier = {modifier}
+	end
+	
+	-- remove each modid in turn
+	for n = (#modifier), 1, -1 do
+		
+		-- find what it was applied to and remove reference to it
+		local modid = modifier[n]
+		
+		if (type(modid) == "table") then
+			Modifier_Remove(modid)
+		else
+
+			local entry = _ModifiersReverseTable[modid]
+			
+			if entry ~= nil then
+				
+				-- if it was applied to a squad, find out which one and amend that squad's records
+				if entry.squad ~= nil then
+					
+					local squadlist = _ModifiersSquadTable[entry.squad]
+					if squadlist ~= nil then
+						for i = (#squadlist), 1, -1 do
+							if squadlist[i] == modid then
+								table.remove(squadlist, i)
+							end
+						end
+						if (#squadlist) == 0 then
+							_ModifiersSquadTable[entry.squad] = nil
+						end
+					end
+				end
+				
+				-- if it was applied to an entity, find out which one and amend that entitiy's records
+				if entry.entity ~= nil then
+					local entitylist = _ModifiersEntityTable[entry.entity]
+					if entitylist ~= nil then
+						for i = (#entitylist), 1, -1 do
+							if entitylist[i] == modid then
+								table.remove(entitylist, i)
+							end
+							if (#entitylist) == 0 then
+								_ModifiersEntityTable[entry.entity] = nil
+							end
+						end
+					end
+				end
+				
+				_ModifiersReverseTable[modid] = nil
+				
+			end
+			
+			Modifier_RemoveInternal(modid)
+			
+		end
+	end
+	
+	for n = (#modifier), 1, -1 do
+		table.remove(modifier, n)
+	end
+	
+end
+
+
+--? @shortdesc Removes all SCAR-applied modifiers for a specific SGroup. 
+--? @result Void
+--? @args SGroupID sgroup
+function Modifier_RemoveAllFromSGroup(sgroup)
+	
+	local _RemoveFromSquad = function(gid, idx, sid)
+		local id = Squad_GetID(sid)
+		if _ModifiersSquadTable[id] ~= nil then
+			Modifier_Remove(_ModifiersSquadTable[id])
+			_ModifiersSquadTable[id] = nil
+		end
+	end
+	
+	SGroup_ForEach(sgroup, _RemoveFromSquad)
+
+end
+
+
+
+
+--? @shortdesc Removes all SCAR-applied modifiers for a specific EGroup. 
+--? @result Void
+--? @args EGroupID egroup
+function Modifier_RemoveAllFromEGroup(egroup)
+	
+	local _RemoveFromEntity = function(gid, idx, eid)
+		local id = Entity_GetID(eid)
+		if _ModifiersEntityTable[id] ~= nil then
+			Modifier_Remove(_ModifiersEntityTable[id])
+			_ModifiersEntityTable[id] = nil
+		end
+	end
+	
+	EGroup_ForEach(egroup, _RemoveFromEntity)
+
+end
+
+--? @shortdesc Checks if a modifier is enabled on all or any entities in an egroup
+--? @result Void
+--? @args EGroupID egroup, String modifier, String modtype, Boolean all, Boolean bEnabledByDefault
+function Modifier_IsEnabledOnEGroup(egroup, modtype, all, bEnabledByDefault)
+
+	return EGroup_CallEntityFunctionAllOrAny(egroup, all, Modifier_IsEnabled, modtype, bEnabledByDefault)
+
+end
+
+
+
+--? @shortdesc Modifies the time taken to build a particular EBP. This only affects the given player. 
+--? @result modids
+--? @args PlayerID playerId, String ebp, Real scalefactor
+function Modify_EntityBuildTime(playerid, ebp, scalefactor)
+
+	local modifier = Modifier_Create(MAT_EntityType, "cost_ticks_modifier", MUT_Multiplication, false, scalefactor, ebp)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Modifies the build time for a particular upgrade. This only affects the given player. 
+--? @result modids
+--? @args PlayerID playerId, UpgradeID upgrade, Real scalefactor
+function Modify_UpgradeBuildTime(playerid, upgrade, scalefactor)
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Upgrade, "upgrade_production_speed_modifier", MUT_Multiplication, false, scalefactor, upgrade)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Modifies the build time for a particular upgrade. This only affects the given player. 
+--? @result modids
+--? @args Entity entity, Real scalefactor
+function Modify_ProductionSpeed(target, scalefactor)
+
+	-- create the appropriate modifier
+	local modifier = 0
+	local result = {}
+	
+	if (scartype(target) == ST_ENTITY) then
+		modifier = Modifier_Create(MAT_Entity, "production_speed_modifier", MUT_Multiplication, false, scalefactor, "")
+	end
+	
+	local modids = Modifier_ApplyToEntity(modifier, target, 0)
+	table.insert(result, modids)
+	Modifier_AddToEntityTable(target, modids)
+	
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies the upkeep for a player's resource.  Possible math types are MUT_Multiplication, MUT_Addition.
+--? @result modids or nil if the modifier could not be applied
+--? @args PlayerID playerId, Integer resourceType, Real scalefactor[, Integer mathtype]
+function Modify_PlayerUpkeep(playerid, resource, scalefactor, mathtype)
+	
+	if mathtype == nil then
+		mathtype = MUT_Multiplication
+	end
+	
+	local modifierType = _playerResourceUpkeepModifiers[resource]
+	if modifierType == nil then
+		return nil
+	end
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Player, modifierType, mathtype, false, scalefactor, "")
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+
+--? @shortdesc Sets the cost of an upgrade. This only affects the given player
+--? @result modids or nil if the modifier could not be applied
+--? @args PlayerID playerId, UpgradeID upgrade, Integer resourceType, Real newCost
+function Modify_SetUpgradeCost(playerid, upgrade, resourceType, newCost)
+
+	local modifierType = _upgradeResourceCostModifiers[resourceType]
+	if modifierType == nil then
+		return nil
+	end
+	
+	local currentCost = Player_GetUpgradeBPCostByResource(playerid, upgrade, resourceType)
+	local modifier = Modifier_Create(MAT_Upgrade, modifierType, MUT_Addition, true, newCost - currentCost, upgrade)
+	
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Modifies a player's incoming resource rate. Possible math types are MUT_Multiplication, MUT_Addition.
+--? @result modids or nil if the modifier could not be applied
+--? @args PlayerID playerId, Integer resourceType, Real scalefactor[, Integer mathtype] 
+function Modify_PlayerResourceRate(playerid, resource, scalefactor, mathtype)
+
+	if mathtype == nil then
+		mathtype = MUT_Multiplication
+	end
+	
+	local modifierType = _playerResourceIncomeModifiers[resource]
+	if modifierType == nil then
+		return nil
+	end
+	
+	local modifier = Modifier_Create(MAT_Player, modifierType, mathtype, false, scalefactor, "")
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Modifies a player's resource cap. Possible math types are MUT_Multiplication, MUT_Addition.
+--? @result modids or nil if the modifier could not be applied
+--? @args PlayerID playerId, Integer resourceType, Real scalefactor[, Integer mathtype] 
+function Modify_PlayerResourceCap(playerid, resource, scalefactor, mathtype)
+
+	if mathtype == nil then
+		mathtype = MUT_Multiplication
+	end
+	
+	local modifierType = _playerResourceCapModifiers[resource]
+	if modifierType == nil then
+		return nil
+	end
+	
+	local modifier = Modifier_Create(MAT_Player, modifierType, mathtype, false, scalefactor, "")
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Modifies a sync weapon only. 
+--? @extdesc The hardpoint defaults to "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String modifier, Real scalefactor, [String hardpoint]
+function Modify_TeamWeapon(groupid, modifier, factor, hardpoint)
+	
+	if hardpoint == nil then hardpoint = "hardpoint_01" end
+	
+	-- Locate the Team Weapon Entity
+	local eid = nil
+	local _findTeamWeapon = function(gid, idx, sid)
+		local squadCount = Squad_Count(sid)
+		for i = 1, squadCount do
+			if Entity_IsSyncWeapon(Squad_EntityAt(sid, i-1)) then
+				eid = Squad_EntityAt(sid, i-1)
+				return
+			end
+		end
+	end
+	
+	SGroup_ForEach(groupid, _findTeamWeapon)
+	
+	-- Found the team weapon, apply the modifier
+	local modifier = Modifier_Create(MAT_Weapon, modifier, MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	if Entity_IsAlive(eid) then
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	return result
+	
+end
+
+--? @shortdesc Modifies an entity's max health
+--? @extdesc Should only be used on entities, NOT squads
+--? @result modids
+--? @args EGroupID/SGroupID group, int Factor, MUT Usage (MUT_Multiplication, MUT_Addition)
+function Modify_EntityMaxHealth(groupid, factor, usage)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Multiplication
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "health_maximum_modifier", usageType, false, factor, "")
+	local result = {}
+	
+	if scartype(groupid) == ST_EGROUP then -- Checks if the group is an EGroup
+		local _ApplyModifierToEntity = function(gid, idx, eid)
+			if Entity_IsAlive(eid) then
+				local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+				table.insert(result, modids)
+				Modifier_AddToEntityTable(eid, modids)
+			end
+		end
+		
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+
+	elseif scartype(groupid) == ST_SGROUP then --Checks if the group is an SGroup
+		local _ApplyModifierToSquad = function(gid, idx, sid)
+			if Squad_IsAlive(sid) then
+				local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+				table.insert(result, modids)
+				Modifier_AddToSquadTable(sid, modids)
+			end
+		end
+		
+		SGroup_ForEach(groupid, _ApplyModifierToSquad)
+	end
+		
+	return result
+	
+end
+
+
+--? @shortdesc Modifies an entity's selection name
+--? @extdesc Should only be used on entities, NOT squads
+--? @result modids
+--? @args EGroupID group, int value, MUT Usage (MUT_Set)
+function Modify_EntitySelectionName(groupid, factor, usage)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Set
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "selection_name_modifier", usageType, true, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	EGroup_ForEach(groupid, _ApplyModifierToEntity)
+
+	return result
+end
+
+
+--? @shortdesc Modifies an entity's construction rate
+--? @extdesc Should only be used on entities, NOT squads
+--? @result modids
+--? @args EGroupID group, int Factor, MUT Usage (MUT_Multiplication, MUT_Addition)
+function Modify_EntityConstructionRate(groupid, factor, usage)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Multiplication
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "cost_ticks_modifier", usageType, false, factor, "")
+	local result = {}
+	
+	if scartype(groupid) == ST_EGROUP then
+		local _ApplyModifierToEntity = function(gid, idx, eid)
+			if Entity_IsAlive(eid) then
+				local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+				table.insert(result, modids)
+				Modifier_AddToEntityTable(eid, modids)
+			end
+		end
+		
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	elseif scartype(groupid) == ST_ENTITY then
+		if Entity_IsAlive(groupid) then
+			local modids = Modifier_ApplyToEntity(modifier, groupid, 0)
+			table.insert(result, modids)
+			Modifier_ApplyToEntityTable(groupid, modids)
+		end
+	end
+
+	return result
+	
+end
+
+--? @shortdesc Modifies an entity's health regen
+--? @extdesc Should only be used on entities, NOT squads
+--? @result modids
+--? @args EGroupID group, int Factor, MUT Usage (MUT_Multiplication, MUT_Addition)
+function Modify_EntityHealthRegen(groupid, factor, usage)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Multiplication
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "health_regeneration_modifier", usageType, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	EGroup_ForEach(groupid, _ApplyModifierToEntity)
+
+	return result
+	
+end
+
+
+--? @shortdesc Enables or disables a weapon hardpoint
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Boolean enabled
+function Modify_WeaponEnabled(groupid, hardpoint, enabled)
+
+	-- Create the appropriate modifier
+	local factor = -1.0
+	if ( enabled == true ) then
+		factor = 1.0
+	end
+	
+	local modifier = Modifier_Create(MAT_Weapon, "enable_weapon_modifier", MUT_Enable, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies a squad's weapon range. Does not work on artillery (mortar, nebelwerfer, etc.)
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponRange(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "range_weapon_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint)then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+--? @shortdesc Modifies a squad's weapon penetration. Does not work on artillery (mortar, nebelwerfer, etc.)
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponPenetration(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "weapon_penetration_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint)then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then		
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+--? @shortdesc Modifies a squad's weapon suppression. Does not work on artillery (mortar, nebelwerfer, etc.)
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponSuppression(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "weapon_suppression_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies a squad's weapon accuracy.
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponAccuracy(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "accuracy_weapon_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies a squad's weapon cooldown time.
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponCooldown(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "cooldown_weapon_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies a squad's weapon reload time.
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponReload(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "reload_weapon_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modifies a squad's weapon scatter.
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponScatter(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "weapon_scatter", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modifies a squad's weapon burst length (time).
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponBurstLength(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "weapon_burst_length_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modifies a squad's weapon rate of fire.
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponBurstRateOfFire(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "weapon_burst_rate_of_fire_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+
+
+--? @shortdesc Modifies a squad's weapon damage.
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_WeaponDamage(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "damage_weapon_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEachEx(groupid, _ApplyModifierToEntity, true, true)
+	end
+	
+	return result
+	
+end
+
+
+
+
+--? @shortdesc Modifies the damage a squad/entity receives.
+--? @result modids
+--? @args SGroupID/EGroupID group, Real scalefactor[, Boolean exclusive]
+function Modify_ReceivedDamage(groupid, factor, exclusive)
+
+	-- create the appropriate modifier
+	local modifier = 0
+	local result = {}
+	
+	if scartype(exclusive) ~= ST_BOOLEAN then
+		exclusive = false
+	end
+	
+	--TODO: received_damage_modifier does not work with a squad modifier. Fix it!--
+	-- "received_damage_modifier" is MAT_Entity only
+	-- but it can be applied to squad with Modifier_ApplyToSquad
+	modifier = Modifier_Create(MAT_Entity, "received_damage_modifier", MUT_Multiplication, exclusive, factor, "")
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then								-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then							-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modifies a squad or entity's armor
+--? @result modids
+--? @args SGroupID/EGroupID group, Real scalefactor[, Boolean exclusive]
+function Modify_Armor(groupid, factor, exclusive)
+
+	-- create the appropriate modifier
+	local modifier = 0
+	local result = {}
+	
+	if scartype(exclusive) ~= ST_BOOLEAN then
+		exclusive = false
+	end
+	
+	modifier = Modifier_Create(MAT_Entity, "armor_modifier", MUT_Multiplication, exclusive, factor, "")
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then								-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then							-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+
+
+
+--? @shortdesc Modifies the chance of a squad/entity being hit
+--? @result modids
+--? @args SGroupID/EGroupID group, Real scalefactor[, Boolean exclusive]
+function Modify_ReceivedAccuracy(groupid, factor, exclusive)
+
+	-- create the appropriate modifier
+	local modifier = 0
+	local result = {}
+	
+	if scartype(exclusive) ~= ST_BOOLEAN then
+		exclusive = false
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		modifier = Modifier_Create(MAT_Squad, "received_accuracy_modifier", MUT_Multiplication, exclusive, factor, "")
+	elseif (scartype(groupid) == ST_EGROUP) then
+		modifier = Modifier_Create(MAT_Entity, "received_accuracy_modifier", MUT_Multiplication, exclusive, factor, "")
+	end
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then								-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then							-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modifies the rate at which a squad gets suppressed
+--? @result modids
+--? @args SGroupID sgroup, Real scalefactor
+function Modify_ReceivedSuppression(group, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Squad, "received_suppression_squad_modifier", MUT_Multiplication, false, factor, "")
+	local result = {}
+	
+	-- apply this to each squad in the group
+	local _ApplyModifier = function (gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	SGroup_ForEachEx(group, _ApplyModifier, true, true)
+	
+	return result
+	
+end
+
+
+
+
+
+--? @shortdesc Modifies the maximum speed for a vehicle. This has no effect on infantry.
+--? @result modids
+--? @args SGroupID sgroup, Real scalefactor
+function Modify_UnitSpeed(group, factor, duration)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Entity, "speed_maximum_modifier", MUT_Multiplication, false, factor, "")
+	local result = {}
+	
+	-- apply this to each squad in the group
+	local _ApplyModifier = function (gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, duration or 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	SGroup_ForEachEx(group, _ApplyModifier, true, true)
+	
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies the Veterancy Experience value of the target SGroup, EGroup, Entity, or Squad. Mathtype is Multiplication by default
+--? @result modids
+--? @args SGroup/EGroup group, Real scalefactor[, Integer mathtype, exclusive] 
+function Modify_UnitVeterancyValue(group, factor, mathtype, exclusive)
+
+	modifier = "entity_veterency_experience_modifier"
+	mathtype = mathtype or MUT_Multiplication
+
+	Util_ApplyModifier(group, modifier, true, factor, mathtype, exclusive)
+	
+end
+
+
+
+--? @shortdesc Modifies the sight radius for a player.
+--? @result modids
+--? @args PlayerID player, Real scalefactor
+function Modify_PlayerSightRadius(playerid, factor)
+
+	local result = {}
+
+	local modifier = Modifier_Create(MAT_Player, "sight_radius_player_modifier", MUT_Multiplication, false, factor, "")
+	table.insert(result, Modifier_ApplyToPlayer(modifier, playerid, 0))
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modifies the sight radius of a squad type for any given player
+--? @result modids
+--? @args PlayerID player, String blueprint, Real scalefactor
+function Modify_SquadTypeSightRadius(playerid, blueprint, factor)
+	
+	local modifier = 0
+	local result = {}
+	
+	__sg_playerTempGroup = SGroup_CreateIfNotFound("__sg_playerTempGroup")
+	Player_GetAll(playerid, __sg_playerTempGroup)
+	
+	-- create the appropriate modifier
+	modifier = Modifier_Create(MAT_Entity, "sight_radius_modifier", MUT_Multiplication, false, factor, "")
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_GetBlueprint(sid) == blueprint then
+			if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+				local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+				table.insert(result, modids)
+				Modifier_AddToSquadTable(sid, modids)
+			end
+		end
+	end
+	
+	if (scartype(__sg_playerTempGroup) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(__sg_playerTempGroup, _ApplyModifierToSquad, true, true)
+	end
+
+	return result
+	
+end
+
+--? @shortdesc Modifies a squad's max health
+--? @extdesc Should only be used on squads
+--? @result modids
+--? @args SGroupID group, int Factor, MUT Usage (MUT_Multiplication, MUT_Addition)
+function Modify_SquadMaxHealth(groupid, factor, usage)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Multiplication
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	local modifier = Modifier_Create(MAT_Squad, "squad_health_maximum_modifier", usageType, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	SGroup_ForEach(groupid, _ApplyModifierToSquad)
+
+	return result
+	
+end
+
+
+--? @shortdesc Modifies the sight radius for an egroup or an sgroup.
+--? @result modids
+--? @args SGroupID/EGroupID group, Real scalefactor
+function Modify_SightRadius(groupid, factor)
+
+	local modifier = 0
+	local result = {}
+	
+	modifier = Modifier_Create(MAT_Entity, "sight_radius_modifier", MUT_Multiplication, false, factor, "")
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		print("SGROUP")
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		print("EGROUP")
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies the territory radius for an egroup or an sgroup.
+--? @result modids
+--? @args EGroupID group, Real scalefactor
+function Modify_TerritoryRadius(groupid, factor)
+
+	local modifier = Modifier_Create(MAT_Entity, "territory_radius_max", MUT_Multiplication, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		print("EGROUP")
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+
+--? @shortdesc Increases the received accuracy, penetration, and damage on a squad by the scalefactor.  For example, a scalefactor of 2 means that the squad gets 2x the received accuracy, 2x the received penetration, and 2x the received damage.
+--? @result modids
+--? @args EGroupID/SGroupID group, Real scalefactor
+function Modify_Vulnerability(group, factor)
+
+	local mod_types = {
+		"received_penetration_modifier",
+		"received_accuracy_modifier",
+		"received_damage_modifier",
+	}
+	
+	local modifiers = {}
+	local result = {}
+	
+	-- create the appropriate modifier
+	for i=1, (#mod_types) do
+		modifiers[i] = Modifier_Create(MAT_Entity, mod_types[i], MUT_Multiplication, false, factor, "")
+	end
+
+	if scartype(group) == ST_SGROUP then
+		
+		-- apply this to each squad in the group
+		local _ApplyModifierToSquad = function (gid, idx, sid)
+			for i=1, (#modifiers) do 
+				if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+					local modids = Modifier_ApplyToSquad(modifiers[i], sid, 0)
+					table.insert(result, modids)
+					Modifier_AddToSquadTable(sid, modids)
+				end
+			end
+		end
+		
+		SGroup_ForEachEx(group, _ApplyModifierToSquad, true, true)
+		
+	elseif scartype(group) == ST_EGROUP then
+	
+		-- apply this to each squad in the group
+		local _ApplyModifierToEntity = function (gid, idx, eid)
+			for i=1, (#modifiers) do 
+				local modids = Modifier_ApplyToEntity(modifiers[i], eid, 0)
+				table.insert(result, modids)
+				Modifier_AddToEntityTable(eid, modids)
+			end
+		end
+		
+		EGroup_ForEachEx(group, _ApplyModifierToEntity, true, true)
+		
+	end
+	
+	return result
+	
+end
+
+
+
+
+--? @shortdesc Modifies the availability limit of a squad type for any given player
+--? @result modids
+--? @args PlayerID player, String blueprint, Integer addition
+function Modify_SquadAvailability(playerid, blueprint, addition)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_SquadType, "squad_availability_modifier", MUT_Addition, false, addition, blueprint)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+
+--? @shortdesc Modifies a squad's rate at which it will capture a strategic point.
+--? @result modids
+--? @args SGroupID group, Real scalefactor
+function Modify_SquadCaptureRate(groupid, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Squad, "capture_rate_squad_modifier", MUT_Multiplication, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	end
+
+	return result
+
+end
+
+--------------------------------------------------
+--? @shortdesc Modifies a squad's health regen.
+--? @result modids
+--? @args SGroupID group,  int Factor, MUT Usage (MUT_Multiplication, MUT_Addition) [,  bool exclusive]
+function Modify_SquadHealthRegen(groupid, factor, usage, exclusive)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Multiplication
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	-- Check exclusivity
+	local exclusiveFlag = false
+	if exclusive ~= nil then
+		exclusiveFlag = exclusive
+	end
+	
+	local modifier = Modifier_Create(MAT_Squad, "squad_health_regeneration_modifier", usageType, exclusiveFlag, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	end
+
+	return result
+
+end
+
+-------------------------------------------------
+
+--? @shortdesc Modifies the target priority of a squad or entity group from the attacker. The value is an addition
+--? @result modids
+--? @args SGroupID/EGroupID group, Integer addition
+function Modify_TargetPriority(groupid, addition)
+
+	-- create the appropriate modifiers
+	local modifier = 0
+	local result = {}
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		modifier = Modifier_Create(MAT_Squad, "target_priority_squad_modifier", MUT_Addition, false, addition, "")
+	elseif (scartype(groupid) == ST_EGROUP) then
+		modifier = Modifier_Create(MAT_Entity, "target_priority_modifier", MUT_Addition, false, addition, "")
+	end
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies the capture time of all strategic points in an EGroup. 
+--? @result modids
+--? @args EGroupID egroup, Real scalefactor
+function Modify_CaptureTime(group, factor)
+
+	-- create the appropriate modifier
+	if factor ~= 0 then
+		factor = 1.0 / factor
+	else
+		factor = 99999 -- capture instantly
+	end
+	local modifier = Modifier_Create(MAT_Entity, "strategic_point_capture_ticks_modifier", MUT_Multiplication, false, factor, "")
+	local result = {}
+
+	-- apply this to each entity in the group
+	local _ApplyModifier = function (gid, idx, eid)
+		if Entity_IsStrategicPoint(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	EGroup_ForEachEx(group, _ApplyModifier, true, true)
+	
+	return result
+	
+end
+
+--? @shortdesc Modifies the capture time of all cover objects in an EGroup.  Higher = less time to capture.
+--? @result modids
+--? @args EGroupID egroup, Real scalefactor
+function Modify_CoverCaptureTime(group, factor)
+
+	-- create the appropriate modifier
+	if factor ~= 0 then
+		factor = 1.0 / factor
+	else
+		factor = 99999 -- capture instantly
+	end
+	local modifier = Modifier_Create(MAT_Entity, "strategic_point_capture_ticks_modifier", MUT_Multiplication, false, factor, "")
+	local result = {}
+
+	-- apply this to each entity in the group
+	local _ApplyModifier = function (gid, idx, eid)
+		if Entity_IsEBPObjCover(Entity_GetBlueprint(eid)) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	EGroup_ForEachEx(group, _ApplyModifier, true, true)
+	
+	return result
+	
+end
+
+
+
+
+--? @shortdesc Modifies the production rate of all factories in an EGroup
+--? @result modids
+--? @args EGroupID sgroup, Real scalefactor
+function Modify_ProductionRate(group, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Entity, "production_speed_modifier", MUT_Multiplication, false, factor, "")
+	local result = {}
+	
+	-- apply this to each squad in the group
+	local _ApplyModifier = function (gid, idx, sid)
+		local modids = Modifier_ApplyToEntity(modifier, sid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(sid, modids)
+	end
+	EGroup_ForEachEx(group, _ApplyModifier, true, true)
+	
+	return result
+	
+end
+
+
+
+
+--? @shortdesc Modifies the production rate of a player.
+--? @result modids
+--? @args PlayerID sgroup, Real scalefactor
+function Modify_PlayerProductionRate(player, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Player, "production_speed_player_modifier", MUT_Multiplication, false, factor, "")
+	
+	return Modifier_ApplyToPlayer(modifier, player, 0)
+	
+end
+
+
+
+
+--? @shortdesc Modifies the recharge time of an ability
+--? @result modids
+--? @args PlayerID/EntityID/SquadID player/entity/squad, AbilityID ability, Real scalefactor[, Integer mathtype]
+function Modify_AbilityRechargeTime(targetid, abilityid, factor, mathtype, duration)
+	local modifier_duration = duration or 0
+	
+	mathtype = mathtype or MUT_Multiplication
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Ability, "ability_recharge_time_modifier", mathtype, false, factor, abilityid)
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, modifier_duration)
+			-- if modifier has duration, they will be removed automatically after so no need to track
+			if modifier_duration == 0 then
+				Modifier_AddToSquadTable(sid, modids)
+			end
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, modifier_duration)
+		if modifier_duration == 0 then
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if scartype(targetid) == ST_PLAYER then
+		return {Modifier_ApplyToPlayer(modifier, targetid, modifier_duration)}
+	elseif scartype(targetid) == ST_ENTITY then
+		return {Modifier_ApplyToEntity(modifier, targetid, modifier_duration)}
+	elseif scartype(targetid) == ST_SQUAD then
+		return {Modifier_ApplyToSquad(modifier, targetid, modifier_duration)}
+	elseif (scartype(targetid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(targetid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(targetid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(targetid, _ApplyModifierToEntity)
+	end
+
+end
+
+--? @shortdesc Modifies the cast time of an ability
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor[, Integer mathtype]
+function Modify_AbilityCastTime(playerid, abilityid, factor, mathtype)
+	
+	mathtype = mathtype or MUT_Multiplication
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Ability, "ability_cast_time_modifier", mathtype, false, factor, abilityid)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+
+end
+
+--? @shortdesc Modifies the channeling time of an ability
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor[, Integer mathtype]
+function Modify_AbilityChannelingTime(targetid, abilityid, factor, mathtype)
+	
+	mathtype = mathtype or MUT_Multiplication
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Ability, "ability_channeling_time_modifier", mathtype, false, factor, abilityid)
+	
+	if scartype(targetid) == ST_PLAYER then
+		return {Modifier_ApplyToPlayer(modifier, targetid, 0)}
+	elseif scartype(targetid) == ST_ENTITY then
+		return {Modifier_ApplyToEntity(modifier, targetid, 0)}
+	elseif scartype(targetid) == ST_SQUAD then
+		return {Modifier_ApplyToSquad(modifier, targetid, 0)}
+	end
+	
+--~ 	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+
+end
+
+
+--? @shortdesc Modifies the munitions cost of an ability
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor[, Integer mathtype]
+function Modify_AbilityMunitionsCost(playerid, abilityid, factor, mathtype)
+	
+	mathtype = mathtype or MUT_Multiplication
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Ability, "ability_cost_munition", mathtype, false, factor, abilityid)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)} 
+
+end
+
+
+--? @shortdesc Modifies the manpower cost of an ability
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor[, Integer mathtype]
+function Modify_AbilityManpowerCost(playerid, abilityid, factor, mathtype)
+	
+	mathtype = mathtype or MUT_Multiplication
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Ability, "ability_cost_manpower", mathtype, false, factor, abilityid)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)} 
+
+end
+
+
+--? @shortdesc Modifies the initial delay time of an ability
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor
+function Modify_AbilityDelayTime(playerid, abilityid, factor)
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Ability, "ability_delay_time_modifier", MUT_Multiplication, false, factor, abilityid)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+
+end
+
+--? @shortdesc Modifies the minimum casting range of an ability. NOTE: it assumes that the actions that the ability executes can also handle the modified range
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor
+function Modify_AbilityMinCastRange(playerid, abilityid, factor)
+
+	local modifier = Modifier_Create(MAT_Ability, "ability_min_range_modifier", MUT_Multiplication, false, factor, abilityid)
+	
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Modifies the maximum casting range of an ability. NOTE: it assumes that the actions that the ability executes can also handle the modified range
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor
+function Modify_AbilityMaxCastRange(playerid, abilityid, factor)
+
+	local modifier = Modifier_Create(MAT_Ability, "ability_max_range_modifier", MUT_Multiplication, false, factor, abilityid)
+	
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+--? @shortdesc Modifies the duration of an ability
+--? @result modids
+--? @args PlayerID player, AbilityID ability, Real scalefactor
+function Modify_AbilityDurationTime(playerid, abilityid, factor)
+
+	local modifier = Modifier_Create(MAT_Ability, "ability_duration_time_modifier", MUT_Multiplication, false, factor, abilityid)
+	
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+
+
+--? @shortdesc Modifies the cost of an entity for a particular player.
+--? @result modids or nil if the modifier could not be applied
+--? @args PlayerID player, String blueprint, Integer resourcetype, Integer addition
+function Modify_EntityCost(playerid, blueprint, resource, addition)
+
+	local modifierType = _entityResourceCostModifiers[resource]
+	if modifierType == nil then
+		return nil
+	end
+	
+	local modifier = Modifier_Create(MAT_EntityType, modifierType, MUT_Addition, false, addition, blueprint)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+
+end	
+
+--? @shortdesc Modifies the cost of an squad for a particular player.
+--? @result modids or nil if the modifier could not be applied
+--? @args PlayerID player, String blueprint, Integer resourcetype, Integer addition
+function Modify_SquadCost(playerid, blueprint, resource, factor, mathtype)
+
+	local modifierType = _squadResourceCostModifiers[resource]
+	if modifierType == nil then
+		return nil
+	end
+	
+	local modifier = Modifier_Create(MAT_SquadType, modifierType, mathtype, false, factor, blueprint)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+
+end	
+
+
+--? @shortdesc Modifies the vehicle repair rate of all a player's engineers
+--? @result modids
+--? @args PlayerID player, Real factor, String engineer_entity_blueprint
+function Modify_VehicleRepairRate(playerid, factor, engineer_blueprint)
+
+--~ 	if engineer_blueprint == nil then
+--~ 		engineer_blueprint = "ebps\\races\\allies\\soldiers\\engineer"
+--~ 	end
+	
+	local modifier = Modifier_Create(MAT_EntityType, "vehicle_repair_rate_modifier", MUT_Multiplication, false, factor, engineer_blueprint)
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+
+
+--? @shortdesc Modifies the vehicle rotation speed
+--? @result modids
+--? @args EGroupID/SGroupID group, Real factor
+function Modify_VehicleRotationSpeed(groupid, factor)
+
+	local modifier = 0
+	local result = {}
+	
+	modifier = Modifier_Create(MAT_Entity, "rotation_rate_modifier", MUT_Multiplication, false, factor, "")
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		print("SGROUP")
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		print("EGROUP")
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+
+
+--? @shortdesc Modifies the turret rotation speed of a vehicle squad
+--? @extdesc The hardpoint should be specified as a string - i.e. "hardpoint_01"
+--? @result modids
+--? @args SGroupID/EGroupID group, String hardpoint, Real scalefactor
+function Modify_VehicleTurretRotationSpeed(groupid, hardpoint, factor)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Weapon, "horizontal_speed_weapon_modifier", MUT_Multiplication, false, factor, hardpoint)
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true --[[spawned]], true --[[despawned]])
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+	
+	return result
+	
+end
+
+
+
+
+--? @shortdesc Modifies the veterancy experience received by a player
+--? @result modids
+--? @args PlayerID player, Real factor
+function Modify_PlayerExperienceReceived(playerid, factor)
+
+	local modifier = Modifier_Create(MAT_Player, "received_experience_player_modifier", MUT_Multiplication, false, factor, "")
+	return {Modifier_ApplyToPlayer(modifier, playerid, 0)}
+	
+end
+
+
+--? @shortdesc Enable or disable hold (garrisoning) for an egroup or sgroup
+--? @result modids
+--? @args EGroupID group, Boolean disable
+function Modify_DisableHold(groupid, disable)
+
+	local factor = -1.0
+	if ( disable == true ) then
+		factor = 1.0
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "hold_disable", MUT_Enable, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+		table.insert(result, modids)
+		Modifier_AddToEntityTable(eid, modids)
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	elseif (scartype(groupid) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(groupid, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+--? @shortdesc Enable or disable camoflage for an egroup or sgroup
+--? @result modids
+--? @args EGroupID group, Boolean disable
+function Modify_EnableCamoflage(groupid, disable)
+
+	local factor = -1.0
+	if ( disable == true ) then
+		factor = 1.0
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "camouflage_enable", MUT_Enable, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	end
+
+	return result
+end
+
+--? @shortdesc Enable or Disable a squad's vulnerability to knock back
+--? @result modids
+--? @args SGroupID group, Boolean disable
+function Modify_SquadInvulnerableToKnockback(groupid, disable)
+
+	local factor = -1.0
+--~ 	if ( disable == true ) then
+--~ 		factor = 1.0
+--~ 	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "enable_knock_back_modifier", MUT_Enable, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	if (scartype(groupid) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(groupid, _ApplyModifierToSquad, true, true)
+	end
+
+	return result
+end
+
+
+
+--? @shortdesc Modifies a projectile's delay_detonate_time.
+--? @result modids
+--? @args PlayerID player, PBG entityBP, Real factor
+function Modify_ProjectileDelayTime(playerid, entityBP, factor)
+	local modifier = Modifier_Create(MAT_EntityType, "projectile_delay_time", MUT_Multiplication, false, factor, entityBP)
+	return Modifier_ApplyToPlayer(modifier, playerid, 0)
+end
+
+
+--? @group scardoc;Util
+
+--? @shortdesc Applies any modifier to the target SGroup, EGroup, or Player
+--? @extdesc Valid applytypes are MAT_...(Entity, Squad etc.), if left default assumption is default type for the target
+--? Cases you want to define applytype: Weapon Modifiers, Enable Modifiers, or a player modifier for all entity or squad types
+--? Valid mathtypes are MUT...(Addition, Multiplication, etc.)
+--? Exclusive modifiers will replace all pre-existing modifiers of that modifier type on the target
+--? @result modids
+--? @args SGroupID/EGroupID/Player groupid, String modifier, Real scalefactor, Real mathtype[, Real applytype, Bool exclusive, String targetname]
+function Util_ApplyModifier(targetid, modifier, applyModifierToEntity, factor, mathtype, applytype, exclusive, targetname)
+	
+	local result = {}
+	
+	if targetname == nil then
+		if type(applytype) == "string" then
+			targetname = applytype
+			applytype = nil
+		elseif type(exclusive) == "string" then
+			targetname = exclusive
+			exclusive = nil
+		else
+			targetname = ""
+		end
+	end
+	
+	if exclusive == nil then
+		if type(applytype) == "boolean" then
+			exclusive = applytype
+			applytype = nil
+		else
+			exclusive = false
+		end
+	end
+	
+	local modtable = {
+		{ 
+			targetscarid = ST_SGROUP,
+			applytype = MAT_Squad,
+			applyto = {
+				apply = Modifier_ApplyToSquad,
+				run = SGroup_ForEach,
+				addtoTable = Modifier_AddToSquadTable
+			}
+		},
+		{ 
+			targetscarid = ST_SGROUP,
+			applytype = MAT_Entity,
+			applyto = {
+				apply = Modifier_ApplyToEntity,
+				run = function(targetid, _ApplyModifier) 
+					local _ApplyModifierToEntities = function(gid, idx, squad)
+						for n = 0, Squad_Count(squad)-1 do
+							local entity = Squad_EntityAt(squad, n)
+							_ApplyModifier(nil,nil,entity)
+						end
+					end
+					SGroup_ForEach(targetid, _ApplyModifierToEntities) 
+				end,
+				addtoTable = Modifier_AddToEntityTable
+			}
+		},
+		{ 
+			targetscarid = ST_EGROUP,
+			applytype = MAT_Entity,
+			applyto = {
+				apply = Modifier_ApplyToEntity,
+				run = EGroup_ForEach,
+				addtoTable = Modifier_AddToEntityTable
+			}
+		},
+		{ 
+			targetscarid = ST_ENTITY,
+			applytype = MAT_Entity,
+			applyto = {
+				apply = Modifier_ApplyToEntity,
+				addtoTable = Modifier_AddToEntityTable
+			}
+		},
+		{ 
+			targetscarid = ST_SQUAD,
+			applytype = MAT_Squad,
+			applyto = {
+				apply = Modifier_ApplyToSquad,
+				addtoTable = Modifier_AddToSquadTable
+			}
+		},
+		{ 
+			targetscarid = ST_PLAYER,
+			applytype = MAT_Player,
+			applyto = {
+				apply = Modifier_ApplyToPlayer
+			}
+		},
+		{ 
+			targetscarid = ST_SQUAD,
+			applytype = MAT_Entity,
+			applyto = {
+				apply = Modifier_ApplyToEntity,
+				run = function(squad, _ApplyModifier) 
+					for n = 0, Squad_Count(squad)-1 do
+						local entity = Squad_EntityAt(squad, n)
+						_ApplyModifier(nil,nil,entity)
+					end
+				end,
+				addtoTable = Modifier_AddToEntityTable
+			}
+		}
+	}
+	
+	
+	for k, v in pairs(modtable) do
+		
+		if scartype(targetid) == v.targetscarid and (applyModifierToEntity == false or v.applytype == MAT_Entity) then
+			
+			applytype = applytype or v.applytype
+			
+			local scarModifier = Modifier_Create(applytype, modifier, mathtype, exclusive, factor, targetname)
+			
+			local _ApplyModifier = function(gid, idx, id)
+				local modids = v.applyto.apply(scarModifier, id, 0)
+				table.insert(result, modids)
+				v.applyto.addtoTable(id, modids)		
+			end
+			
+			if (v.applyto.run ~= nil) and (v.applyto.addtoTable ~= nil) then
+				v.applyto.run(targetid, _ApplyModifier)
+				return result
+				
+			elseif (v.applyto.run == nil) and (v.applyto.addtoTable ~= nil) then
+				_ApplyModifier(nil, nil, targetid)
+				return result
+				
+			else
+				return { v.applyto.apply(scarModifier, targetid, 0) }
+				
+			end
+		end
+	end
+end
+
+--? @shortdesc Modifies an entity's shield regen
+--? @extdesc Should only be used on squads
+--? @result modids
+--? @args SGroupID group, int Factor, MUT Usage (MUT_Multiplication, MUT_Addition)
+function Modify_SquadShieldRegen(groupid, factor, usage)
+
+	-- Create the appropriate modifier
+	local usageType = MUT_Multiplication
+	if usage ~= nil then
+		usageType = usage
+	end
+	
+	local modifier = Modifier_Create(MAT_Squad, "squad_shield_regeneration_modifier", usageType, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	
+	SGroup_ForEach(groupid, _ApplyModifierToSquad)
+
+	return result
+	
+end
+
+--? @shortdesc Modify whether or not the group is revealed in the fog of war.
+--? @args EGroup/SGroup group, Boolean enable, Real durationSeconds
+function Modify_EnableIsVisibleInFOW(group, enable, durationSeconds)
+
+	-- Create the appropriate modifier
+	local factor = -1.0
+	if ( enable == true ) then
+		factor = 1.0
+	end
+	
+	local modifier = Modifier_Create(MAT_Entity, "enable_visible_in_fow", MUT_Enable, false, factor, "")
+	local result = {}
+	
+	local _ApplyModifierToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyModifierToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(group) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(group, _ApplyModifierToSquad, true, false)
+	elseif (scartype(group) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(group, _ApplyModifierToEntity)
+	end
+
+	return result
+	
+end
+
+--? @shortdesc Modify the burn level threshold required to set the entity on fire
+--? @result modids
+--? @args EGroupID egroup, ModifierUsageType mathtype, Real value
+function Modify_OnFireThreshold(group, mathtype, value)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Entity, "on_fire_threshold_modifier", mathtype, false, value, "")
+	local result = {}
+	
+	local _ApplyToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then 
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then 
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(group) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(group, _ApplyToSquad, true, true)
+	elseif (scartype(group) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(group, _ApplyToEntity)
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Modify the health threshold required to set the entity on fire
+--? @result modids
+--? @args EGroupID egroup, ModifierUsageType mathtype, Real value
+function Modify_OnFireHealthPercentage(group, mathtype, value)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Entity, "on_fire_health_percentage_modifier", mathtype, false, value, "")
+	local result = {}
+	
+	local _ApplyToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then 
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then 
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(group) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(group, _ApplyToSquad, true, true)
+	elseif (scartype(group) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(group, _ApplyToEntity)
+	end
+	
+	return result
+	
+end
+
+--? @shortdesc Modify the amount that the burn level decays per tick when not on fire
+--? @result modids
+--? @args EGroupID egroup, ModifierUsageType mathtype, Real value
+function Modify_OnFireDecayAmountPerTick(group, mathtype, value)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Entity, "on_fire_decay_amount_per_tick_modifier", mathtype, false, value, "")
+	local result = {}
+	
+	local _ApplyToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then 
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	EGroup_ForEach(group, _ApplyToEntity)
+	
+	return result
+	
+end
+
+--? @shortdesc Modify the damage done to the entity per tick when it is on fire
+--? @extdesc Can modify the value to zero to allow buildings to be on fire without taking damage
+--? @result modids
+--? @args EGroupID egroup, ModifierUsageType mathtype, Real value
+function Modify_OnFireDamagePerTick(group, mathtype, value)
+
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Entity, "on_fire_damage_per_tick_modifier", mathtype, false, value, "")
+	local result = {}
+	
+	local _ApplyToSquad = function(gid, idx, sid)
+		if Squad_IsAlive(sid) and Squad_Count(sid) > 0 then 
+			local modids = Modifier_ApplyToSquad(modifier, sid, 0)
+			table.insert(result, modids)
+			Modifier_AddToSquadTable(sid, modids)
+		end
+	end
+	local _ApplyToEntity = function(gid, idx, eid)
+		if Entity_IsAlive(eid) then 
+			local modids = Modifier_ApplyToEntity(modifier, eid, 0)
+			table.insert(result, modids)
+			Modifier_AddToEntityTable(eid, modids)
+		end
+	end
+	
+	if (scartype(group) == ST_SGROUP) then
+		-- apply this to each squad in the group
+		SGroup_ForEachEx(group, _ApplyToSquad, true, true)
+	elseif (scartype(group) == ST_EGROUP) then
+		-- apply this to each entity in the group
+		EGroup_ForEach(group, _ApplyToEntity)
+	end
+		
+	return result
+	
+end
+
+--? @shortdesc Modify the number of entities spawned in new squads
+--? @extdesc Intended use case is spawning damaged squadss
+--? @result modids
+--? @args Player player, ModifierUsageType mathtype, Real value
+function Modify_PlayerSquadLoadoutMax(player, mathtype, value)
+	if mathtype == nil then
+		mathtype = MUT_Addition
+	end
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Player, "squad_loadout_max_modifier", mathtype, false, value, "")
+
+	return {Modifier_ApplyToPlayer(modifier, player, 0)}
+	
+end

@@ -1,0 +1,791 @@
+----------------------------------------------------------------------------------------------------------------
+-- Proximity helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+import("GroupCallers.scar")
+
+----------------------------------------------------------------------------------------------------------------
+-- Types
+PROX_SHORTEST = 0
+PROX_LONGEST = 1
+PROX_CENTER = 2
+
+----------------------------------------------------------------------------------------------------------------
+-- Private implementation
+
+_Prox_Private = {
+
+	__skipsave = true,
+
+	-- check if all or any items in a group are in circular proximity of a point ( groupcaller should either be SGroupCaller or EGroupCaller)
+	GroupNearPoint = function ( groupId, point, prox, all, groupcaller, exclude )
+		
+		local CheckItemNearPoint = function ( groupid, itemindex, itemid )
+			
+			local result = World_PointPointProx( point, groupcaller.GetItemPosition( itemid ), prox )
+			return result
+			
+		end
+			
+		local result = groupcaller.ForEachAllOrAny( groupId, all, CheckItemNearPoint )
+		return result
+		
+	end,
+	
+	-- check if all or any items in a group are in proximity of a marker ( groupcaller should either be SGroupCaller or EGroupCaller)
+	GroupNearMarker = function ( groupId, marker, all, groupcaller, exclude )
+		
+		local CheckItemNearMarker = function ( groupid, itemindex, itemid )
+			
+			-- different proximity check depending on marker proximity type
+			local result = Marker_InProximity( marker, groupcaller.GetItemPosition( itemid ) )
+			return result
+			
+		end
+			
+		local result = groupcaller.ForEachAllOrAny( groupId, all, CheckItemNearMarker )
+		return result
+		
+	end,
+	
+	-- check if all or any items in a group are in proximity of a marker ( groupcaller should either be SGroupCaller or EGroupCaller)
+	GroupWithinTerritorySector = function ( groupId, sectorID, all, groupcaller, exclude )
+		
+		local CheckWithinTerritorySector = function ( groupid, itemindex, itemid )
+			
+			-- different proximity check depending on marker proximity type
+			local id = World_GetTerritorySectorID( groupcaller.GetItemPosition( itemid ) )
+			return ( sectorID == id )
+			
+		end
+			
+		local result = groupcaller.ForEachAllOrAny( groupId, all, CheckWithinTerritorySector )
+		return result
+		
+	end,
+	
+	-- check if all or any items in a group are near another group
+	GroupNearGroup = function( group1, groupcaller1, group2, groupcaller2, prox, all, exclude )
+		
+		local CheckGroupNearGroup = function( groupid, itemindex, itemid )
+						
+			if ( exclude ~= nil and Squad_GetID( exclude ) == Squad_GetID( itemid ) ) then
+				return false
+			end
+			
+			local itempos1 = groupcaller1.GetItemPosition( itemid )
+			
+			-- check if group2 is near itempos1
+			return _Prox_Private.GroupNearPoint( group2, itempos1, prox, all, groupcaller2 )
+			
+		end
+		
+		local result = groupcaller1.ForEachAllOrAny( group1, all, CheckGroupNearGroup )
+		return result
+	
+	end,
+	
+	-- returns the distance between 2 groups centers
+	GroupToGroupProxCenter = function( groupId1, groupcaller1, groupId2, groupcaller2 )
+		return World_DistancePointToPoint(	groupcaller1.GetPosition( groupId1), groupcaller2.GetPosition( groupId2 ) )
+	end,
+	
+	-- returns the closest or furthest distance between two groups
+	GroupToGroupProx = function( groupId1, groupcaller1, groupId2, groupcaller2, closest)
+		
+		local distance = 0
+		if( closest ) then distance = 9999999 end -- set distance to a really big number
+		
+		local CheckDistance = function( groupid, itemindex, itemid )
+			
+			local itempos = groupcaller1.GetItemPosition( itemid )
+			local dist = groupcaller2.GetDistanceToPoint( groupId2, itempos, closest )
+			
+			if( closest ) then 
+				if( dist < distance ) then distance = dist end
+			else
+				if( dist > distance ) then distance = dist end
+			end
+			
+		end
+		
+		groupcaller1.ForEach( groupId1, CheckDistance )
+		
+		return distance
+		
+	end
+}
+
+
+----------------------------------------------------------------------------------------------------------------
+-- Exported implementation
+
+--? @group scardoc;Proximity
+
+
+--? @shortdesc Returns the distance between two squad groups. use checktype PROX_SHORTEST, PROX_LONGEST, or PROX_CENTER.
+--? @extdesc
+--? If check is PROX_SHORTEST this will return the shortest distance between the two groups.\n
+--? If check is PROX_LONGEST this will return the longest distance between the two groups.\n
+--? If check is PROX_CENTER this will return the distance between the two groups centers.\n
+--? @args SGroupID sgroup1, SGroupID sgroup2, ProxType checktype
+--? @result Real
+
+function Prox_SGroupSGroup(groupid1, groupid2, checktype)
+	if( checktype == PROX_CENTER ) then
+		return _Prox_Private.GroupToGroupProxCenter( 
+			groupid1, SGroupCaller,
+			groupid2, SGroupCaller
+		)
+	else
+		return _Prox_Private.GroupToGroupProx(
+			groupid1, SGroupCaller,
+			groupid2, SGroupCaller,
+			(checktype == PROX_SHORTEST)
+		)
+	end	
+end
+
+
+--? @shortdesc Returns the distance between two entity groups. use checktype PROX_SHORTEST, PROX_LONGEST, or PROX_CENTER.
+--? @extdesc
+--? If check is PROX_SHORTEST this will return the shortest distance between the two groups.\n
+--? If check is PROX_LONGEST this will return the longest distance between the two groups.\n
+--? If check is PROX_CENTER this will return the distance between the two groups centers.\n
+--? @args EGroupID egroup1, EGroupID egroup2, ProxType checktype
+--? @result Real
+function Prox_EGroupEGroup(groupid1, groupid2, checktype)
+	if( checktype == PROX_CENTER ) then
+		return _Prox_Private.GroupToGroupProxCenter( 
+			groupid1, EGroupCaller,
+			groupid2, EGroupCaller
+		)
+	else
+		return _Prox_Private.GroupToGroupProx(
+			groupid1, EGroupCaller,
+			groupid2, EGroupCaller,
+			(checktype == PROX_SHORTEST)
+		)
+	end	
+end
+
+
+--? @shortdesc Returns the distance between an entity group and a squad group.  use checktype PROX_SHORTEST, PROX_LONGEST, or PROX_CENTER.
+--? @extdesc
+--? If check is PROX_SHORTEST this will return the shortest distance between the two groups.\n
+--? If check is PROX_LONGEST this will return the longest distance between the two groups.\n
+--? If check is PROX_CENTER this will return the distance between the two groups centers.\n
+--? @args EGroupID egroup1, SGroupID sgroup2, ProxType checktype
+--? @result Real
+function Prox_EGroupSGroup(egroupid, sgroupid, checktype)
+	if( checktype == PROX_CENTER ) then
+		return _Prox_Private.GroupToGroupProxCenter( 
+			egroupid, EGroupCaller,
+			sgroupid, SGroupCaller
+		)
+	else
+		return _Prox_Private.GroupToGroupProx(
+			egroupid, EGroupCaller,
+			sgroupid, SGroupCaller,
+			(checktype == PROX_SHORTEST)
+		)
+	end	
+end
+
+
+--? @shortdesc Returns the distance between a marker and an entity group.  use checktype PROX_SHORTEST, PROX_LONGEST, or PROX_CENTER.
+--? @extdesc
+--? If check is PROX_SHORTEST this will return the shortest distance between the two groups.\n
+--? If check is PROX_LONGEST this will return the longest distance between the two groups.\n
+--? If check is PROX_CENTER this will return the distance between the two groups centers.\n
+--? @args MarkerID marker, EGroupID egroup, ProxType checktype
+--? @result Real
+function Prox_MarkerEGroup(markerid, egroupid, checktype)
+	if( checktype == PROX_CENTER ) then
+		return World_DistancePointToPoint(
+			EGroup_GetPosition( egroupid ),
+			Marker_GetPosition( markerid )
+		)
+	else
+		return World_DistanceEGroupToPoint(
+			egroupid,
+			Marker_GetPosition( markerid ),
+			(checktype == PROX_SHORTEST)
+		)
+	end	
+end
+
+
+--? @shortdesc Returns the distance between a marker and a squad group.  use checktype PROX_SHORTEST, PROX_LONGEST, or PROX_CENTER.
+--? @extdesc
+--? If check is PROX_SHORTEST this will return the shortest distance between the two groups.\n
+--? If check is PROX_LONGEST this will return the longest distance between the two groups.\n
+--? If check is PROX_CENTER this will return the distance between the two groups centers.\n
+--? @args MarkerID marker, SGroupID sgroup, ProxType checktype
+--? @result Real
+function Prox_MarkerSGroup(markerid, sgroupid, checktype)
+	if( checktype == PROX_CENTER ) then
+		return World_DistancePointToPoint(
+			SGroup_GetPosition( sgroupid ),
+			Marker_GetPosition( markerid )
+		)
+	else
+		return World_DistanceSGroupToPoint(
+			sgroupid,
+			Marker_GetPosition( markerid ),
+			(checktype == PROX_SHORTEST)
+		)
+	end	
+end
+
+
+
+
+
+
+--? @shortdesc Returns true if ANY or ALL squads from a group are in range of a given position, marker, or territory sector
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.\n
+--? @extdesc Markers with proximity type rectangle will use circular proximity check if custom range is supplied\n
+--? @args SGroupID sgroup, MarkerID/Position/SectorID position, Boolean all[, Real range]
+--? @result Boolean
+function Prox_AreSquadsNearMarker(sgroupid, pos, all, range)
+
+	-- do some type checking
+	if (scartype(sgroupid) ~= ST_SGROUP) then fatal("Prox_AreSquadsNearMarker: Invalid SGroupID") end
+	if (scartype(all) ~= ST_BOOLEAN) then fatal("Prox_AreSquadsNearMarker: Invalid ANY/ALL flag") end
+
+	-- dispatch to appropriate function
+	if (scartype(pos) == ST_MARKER) then
+		if (range == nil) then
+			return _Prox_AreSquadsNearMarker(sgroupid, pos, all)
+		else
+			if (range < 0.0) then fatal("Prox_AreSquadsNearMarker: Invalid range") end
+			pos = Marker_GetPosition(pos)
+			return _Prox_AreSquadsNearPosition(sgroupid, pos, range, all)
+		end
+	elseif (scartype(pos) == ST_NUMBER) then
+		return _Prox_AreSquadsWithinTerritory(sgroupid, pos, all)
+	elseif (scartype(pos) == ST_SCARPOS) then 
+		if ((range == nil) or (range < 0.0)) then fatal("Prox_AreSquadsNearMarker: Invalid range") end
+		return _Prox_AreSquadsNearPosition(sgroupid, pos, range, all)
+	else
+		fatal("Prox_AreSquadsNearMarker: Invalid position")
+	end
+
+end
+
+
+--? @shortdesc Returns true if ANY or ALL squad members (i.e. individual guys, not squads as a whole) from a group are in range of a given position, marker, or territory sector. DO NOT USE THIS FUNCTION UNLESS YOU ABSOLUTELY HAVE TO!!
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.\n
+--? @extdesc Markers with proximity type rectangle will use circular proximity check if custom range is supplied\n
+--? @args SGroupID sgroup, MarkerID/Position/SectorID position, Boolean all[, Real range]
+--? @result Boolean
+function Prox_AreSquadMembersNearMarker(sgroupid, pos, all, range)
+
+	local marker = nil
+	local sectorID = nil
+	
+	-- covert a marker to a position, and use it's proximity if range was left out
+	if (scartype(pos) == ST_MARKER) then
+		if (range == nil) then
+			-- if range is not supplied, use marker's internal proximity
+			marker = pos
+		else
+			pos = Marker_GetPosition(pos)
+		end
+	elseif (scartype(pos) == ST_NUMBER) then
+		sectorID = pos
+	end
+
+	-- do some type checking
+	if (scartype(sgroupid) ~= ST_SGROUP) then fatal("Prox_AreSquadMembersNearMarker: Invalid SGroupID") end
+	if (scartype(all) ~= ST_BOOLEAN) then fatal("Prox_AreSquadMembersNearMarker: Invalid ANY/ALL flag") end
+	
+	--
+	if ( marker ~= nil ) then
+		if (scartype(marker) ~= ST_MARKER) then fatal("Prox_AreSquadMembersNearMarker: Invalid Marker") end
+		
+	elseif ( sectorID ~= nil ) then
+		if (scartype(sectorID) ~= ST_NUMBER) then fatal("Prox_AreSquadMembersNearMarker: Invalid Territory Sector ID") end
+		
+	else
+		if (scartype(pos) ~= ST_SCARPOS) then fatal("Prox_AreSquadMembersNearMarker: Invalid Position") end
+		if (scartype(range) ~= ST_NUMBER) then fatal("Prox_AreSquadMembersNearMarker: Invalid Range") end
+	end
+	
+	--
+	local _CheckSquad = function(gid, idx, sid)
+		
+		for n=1, Squad_Count(sid) do
+			
+			local isInProximity = false
+			local entityPos = Entity_GetPosition( Squad_EntityAt(sid, n-1) )
+			
+			if ( marker ~= nil ) then
+				isInProximity = Marker_InProximity( marker, entityPos )
+			elseif ( sectorID ~= nil ) then
+				isInProximity = ( World_GetTerritorySectorID( entityPos ) == sectorID )
+			else
+				isInProximity = World_PointPointProx( entityPos, pos, range)
+			end
+			
+			if (isInProximity) then
+				if (all == ANY) then
+					return true
+				end
+			else
+				if (all == ALL) then
+					return false
+				end
+			end
+			
+		end
+		
+		-- no item in range
+		return all 
+		
+--		if (all == ANY) then
+--			return false			-- false until we find on that is
+--		elseif (all == ALL) then
+--			return true				-- true until we find one that isn't
+--		end
+		
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroupid, all, _CheckSquad)
+	
+end
+
+
+
+--? @shortdesc Returns true if ANY or ALL entities from a group are in range of a given position, marker, or territory sector.
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.
+--? @extdesc Markers with proximity type rectangle will use circular proximity check if custom range is supplied\n
+--? @args EGroupID egroup, MarkerID/Position/SectorID position, Boolean all[, Real range]
+--? @result Boolean
+function Prox_AreEntitiesNearMarker(egroupid, pos, all, range)
+
+	local marker = nil
+	local sectorID = nil
+	
+	-- covert a marker to a position, and use it's proximity if range was left out
+	if (scartype(pos) == ST_MARKER) then
+		if (range == nil) then
+			-- if range is not supplied, use marker's internal proximity
+			marker = pos
+		else
+			pos = Marker_GetPosition(pos)
+		end
+	elseif (scartype(pos) == ST_NUMBER) then
+		sectorID = pos
+	end
+
+	-- do some type checking
+	if (scartype(egroupid) ~= ST_EGROUP) then fatal("Prox_AreEntitiesNearMarker Invalid EGroupID") end
+	if (scartype(all) ~= ST_BOOLEAN) then fatal("Prox_AreEntitiesNearMarker Invalid ANY/ALL flag") end
+	
+	--
+	if ( marker ~= nil ) then
+
+		if (scartype(marker) ~= ST_MARKER) then fatal("Prox_AreEntitiesNearMarker Invalid Marker") end
+	
+		-- if marker is present, use its internal proximity
+		return _Prox_Private.GroupNearMarker(
+					egroupid,
+					marker,
+					all,
+					EGroupCaller
+				)
+	elseif ( sectorID ~= nil ) then
+
+		if (scartype(sectorID) ~= ST_NUMBER) then fatal("Prox_AreSquadsNearMarker: Invalid Territory Sector ID") end
+	
+		-- if territory sector ID is present, use it
+		return _Prox_Private.GroupWithinTerritorySector(
+					egroupid,
+					sectorID,
+					all,
+					EGroupCaller
+				)
+	else
+		if (scartype(pos) ~= ST_SCARPOS) then fatal("Prox_AreEntitiesNearMarker Invalid Position") end
+		if (scartype(range) ~= ST_NUMBER) then fatal("Prox_AreEntitiesNearMarker Invalid Range") end
+	
+		-- use good old circular proximity check
+		return _Prox_Private.GroupNearPoint(
+					egroupid,
+					pos,
+					range,
+					all,
+					EGroupCaller
+				)
+	end
+end
+
+
+
+--? @shortdesc Returns true if ANY or ALL of a player's squads are in range of a given position, marker, or territory sector. THIS FUNCTION IS VERY SLOW. DO NOT USE THIS UNLESS ABSOLUTELY NECESSARY.
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.\n
+--? @extdesc Markers with proximity type rectangle will use circular proximity check if custom range is supplied\n
+--? @args PlayerID player, MarkerID/Position/SectorID position, Boolean all[, Real range, SBP/Table filterlist, Integer filtertype, Boolean ignore_camouflage]
+--? @result Boolean
+function Prox_ArePlayersNearMarker(playerid, pos, all, range, filterlist, filtertype, ignore_camouflage)
+
+	local marker = nil
+	local sectorID = nil
+	
+	-- do some type checking
+	if (scartype(playerid) ~= ST_PLAYER) then fatal("Prox_ArePlayersNearMarker: Invalid PlayerID") end
+	if (scartype(all) ~= ST_BOOLEAN) then fatal("Prox_IsPlayerNearMarker: Invalid ANY/ALL flag") end
+	
+	-- get player squads
+	local sgroupid = Player_GetSquads(playerid)
+	
+	-- filter group if requested
+	if filterlist ~= nil and (scartype(filterlist) == ST_TABLE or scartype(filterlist) == ST_PBG) then
+		if filtertype ~= FILTER_KEEP and filtertype ~= FILTER_REMOVE then
+			filtertype = FILTER_REMOVE
+		end
+		SGroup_Filter(sgroupid, filterlist, filtertype)
+	end
+
+	if ignore_camouflage == true then
+		SGroup_FilterCamouflaged(sgroupid, FILTER_REMOVE)
+	end
+	
+	
+	-- delegate
+	return Prox_AreSquadsNearMarker(sgroupid, pos, all, range)
+end
+
+--? @shortdesc Returns true if ANY or ALL of a player's entities are in range of a given position, marker, or territory sector. THIS FUNCTION IS VERY SLOW. DO NOT USE THIS UNLESS ABSOLUTELY NECESSARY.
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.\n
+--? @extdesc Markers with proximity type rectangle will use circular proximity check if custom range is supplied\n
+--? @args PlayerID player, MarkerID/Position/SectorID position, Boolean all[, Real range, EBP/Table filterlist, Integer filtertype, Boolean ignore_camouflage]
+--? @result Boolean
+function Prox_ArePlayerEntitiesNearMarker(playerid, pos, all, range, filterlist, filtertype, ignore_camouflage)
+
+	local marker = nil
+	local sectorID = nil
+	
+	-- do some type checking
+	if (scartype(playerid) ~= ST_PLAYER) then fatal("Prox_ArePlayersNearMarker: Invalid PlayerID") end
+	if (scartype(all) ~= ST_BOOLEAN) then fatal("Prox_IsPlayerNearMarker: Invalid ANY/ALL flag") end
+	
+	-- get player entities
+	local egroupid = Player_GetEntities(playerid)
+	
+	-- filter group if requested
+	if filterlist ~= nil and (scartype(filterlist) == ST_TABLE or scartype(filterlist) == ST_PBG) then
+		if filtertype ~= FILTER_KEEP and filtertype ~= FILTER_REMOVE then
+			filtertype = FILTER_REMOVE
+		end
+		EGroup_Filter(egroupid, filterlist, filtertype)
+	end
+
+	if ignore_camouflage == true then
+		EGroup_FilterCamouflaged(egroupid, FILTER_REMOVE)
+	end
+	
+	
+	-- delegate
+	return Prox_AreEntitiesNearMarker(egroupid, pos, all, range)
+end
+
+--? @shortdesc Returns true if ANY or ALL of a teams's squads are in range of a given position, marker, or territory sector. THIS FUNCTION IS VERY SLOW. DO NOT USE THIS UNLESS ABSOLUTELY NECESSARY.
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.\n
+--? @extdesc Markers with proximity type rectangle will use circular proximity check if custom range is supplied\n
+--? @args TeamID team, MarkerID/Position/SectorID position, Boolean all[, Real range, SBP/Table filterlist, Integer filtertype, Boolean ignore_camouflage]
+--? @result Boolean
+function Prox_AreTeamsNearMarker(teamid, marker, anyNear, range, filterlist, filtertype, ignore_camouflage)
+	
+	local __areTeamsNear = function(tid, pix, pid)
+		if Prox_ArePlayersNearMarker(pid, marker, anyNear, range, filterlist, filtertype, ignore_camouflage) then
+			return true
+		end
+	end
+	
+	return Team_ForEachAllOrAny_LEGACY(teamid, ANY, __areTeamsNear)
+
+end
+
+
+--? @shortdesc Returns true if ANY or ALL of a player's members (i.e. individual guys, not squads as a whole) are in range of a given position, marker, or territory sector. DO NOT USE THIS FUNCTION UNLESS YOU ABSOLUTELY HAVE TO!!
+--? @extdesc You MUST specify a range if you are using a position rather than a marker.
+--? @args PlayerID player, MarkerID/Position/SectorID position, Boolean all[, Real range, SBP/Table filterlist, Integer filtertype, Boolean ignore_camouflage]
+--? @result Boolean
+function Prox_ArePlayerMembersNearMarker(playerid, pos, all, range, filterlist, filtertype, ignore_camouflage)
+
+	local marker = nil
+	local sectorID = nil
+	
+	-- covert a marker to a position, and use it's proximity if range was left out
+	if (scartype(pos) == ST_MARKER) then
+		if (range == nil) then
+			-- if range is not supplied, use marker's internal proximity
+			marker = pos
+		else
+			pos = Marker_GetPosition(pos)
+		end
+	elseif (scartype(pos) == ST_NUMBER) then
+		sectorID = pos
+	end
+
+	-- do some type checking
+	if (scartype(all) ~= ST_BOOLEAN) then fatal("Prox_ArePlayerMembersNearMarker: Invalid ANY/ALL flag") end
+	
+	--
+	if ( marker ~= nil ) then
+		if (scartype(marker) ~= ST_MARKER) then fatal("Prox_ArePlayerMembersNearMarker: Invalid Marker") end
+		
+	elseif ( sectorID ~= nil ) then
+		if (scartype(sectorID) ~= ST_NUMBER) then fatal("Prox_ArePlayerMembersNearMarker: Invalid Territory Sector ID") end
+		
+	else
+		if (scartype(pos) ~= ST_SCARPOS) then fatal("Prox_ArePlayerMembersNearMarker: Invalid Position") end
+		if (scartype(range) ~= ST_NUMBER) then fatal("Prox_ArePlayerMembersNearMarker: Invalid Range") end
+	end
+	
+	-- get all of a player's squads
+	local sgroupid = Player_GetSquads(playerid)
+	
+	-- filter group if requested
+	if filterlist ~= true then
+		if filtertype ~= FILTER_KEEP and filtertype ~= FILTER_REMOVE then
+			filtertype = FILTER_REMOVE
+		end
+		SGroup_Filter(sgroupid, filterlist, filtertype)
+	end
+
+	if ignore_camouflage == true then
+		SGroup_FilterCamouflaged(sgroupid, FILTER_REMOVE)
+	end
+	
+	
+	--
+	local _CheckSquad = function(gid, idx, sid)
+		
+		for n=1, Squad_Count(sid) do
+			
+			local isInProximity = false
+			local entityPos = Entity_GetPosition( Squad_EntityAt(sid, n-1) )
+			
+			if ( marker ~= nil ) then
+				isInProximity = Marker_InProximity( marker, entityPos )
+			elseif ( sectorID ~= nil ) then
+				isInProximity = ( World_GetTerritorySectorID( entityPos ) == sectorID )
+			else
+				isInProximity = World_PointPointProx( entityPos, pos, range)
+			end
+			
+			if (isInProximity) then
+				if (all == ANY) then
+					return true
+				end
+			else
+				if (all == ALL) then
+					return false
+				end
+			end
+			
+		end
+		
+		-- no item in range
+		return all 
+		
+--		if (all == ANY) then
+--			return false			-- false until we find on that is
+--		elseif (all == ALL) then
+--			return true				-- true until we find one that isn't
+--		end
+		
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroupid, all, _CheckSquad)
+end
+
+
+
+
+
+--? @shortdesc Checks if ALL or ANY players squads are in proximity of a given squad group.
+--? @extdesc Set "all" to true to check that ALL squads are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playerid, SGroupID sgroup, Real proximity, Boolean all, SquadID exclude, SBP/Table filterlist, Int filtertype, Boolean ignore_camouflage
+--? @result Boolean
+function Prox_PlayerSquadsInProximityOfSquads(playerid, sgroupid, proximity, all, exclude, filterlist, filtertype, ignore_camouflage)
+	
+	local playerSquads = Player_GetSquads( playerid )
+	
+	if filterlist ~= nil and scartype(filterlist) == ST_TABLE then
+		if filtertype ~= FILTER_KEEP and filtertype ~= FILTER_REMOVE then
+			filtertype = FILTER_REMOVE
+		end
+		SGroup_Filter(playerSquads, filterlist, filtertype)
+	end
+	
+	if ignore_camouflage == true then
+		SGroup_FilterCamouflaged(playerSquads, FILTER_REMOVE)
+	end
+	
+	return _Prox_Private.GroupNearGroup( 
+					playerSquads, SGroupCaller,
+					sgroupid, SGroupCaller,
+					proximity, all, exclude
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY players squads are in proximity of a given entity group.
+--? @extdesc Set "all" to true to check that ALL squads are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playerid, EGroupID egroup, Real proximity, Boolean all, SBP/Table filterlist, Int filtertype, Boolean ignore_camouflage
+--? @result Boolean
+function Prox_PlayerSquadsInProximityOfEntities(playerid, egroupid, proximity, all, filterlist, filtertype, ignore_camouflage)
+
+	local playerSquads = Player_GetSquads( playerid )
+
+	if filterlist ~= nil and scartype(filterlist) == ST_TABLE then
+		if filtertype ~= FILTER_KEEP and filtertype ~= FILTER_REMOVE then
+			filtertype = FILTER_REMOVE
+		end
+		SGroup_Filter(playerSquads, filterlist, filtertype)
+	end
+
+	if ignore_camouflage == true then
+		SGroup_FilterCamouflaged(playerSquads, FILTER_REMOVE)
+	end
+	
+	return _Prox_Private.GroupNearGroup( 
+					playerSquads, SGroupCaller,
+					egroupid, EGroupCaller,
+					proximity, all
+			)
+end
+
+
+
+
+--? @shortdesc Checks if ALL or ANY players entities are in proximity of a given squad group.
+--? @extdesc Set "all" to true to check that ALL entities are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playerid, SGroupID sgroup, Real proximity, Boolean all
+--? @result Boolean
+function Prox_PlayerEntitiesInProximityOfSquads(playerid, sgroupid, proximity, all)
+	return _Prox_Private.GroupNearGroup( 
+					Player_GetEntities( playerid ), EGroupCaller,
+					sgroupid, SGroupCaller,
+					proximity, all
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY players squads are in proximity of a given players squads.
+--? @extdesc Set "all" to true to check that ALL squads are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playerid1, PlayerID playerid2, Real proximity, Boolean all
+--? @result Boolean
+function Prox_PlayerSquadsInProximityOfPlayerSquads(playerid1, playerid2, proximity, all)
+	return _Prox_Private.GroupNearGroup( 
+					Player_GetSquads( playerid1 ), SGroupCaller,
+					Player_GetSquads( playerid2 ), SGroupCaller,
+					proximity, all
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY players squads are in proximity of a given players entities.
+--? @extdesc Set "all" to true to check that ALL squads are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playersquads, PlayerID playerentities, Real proximity, Boolean all
+--? @result Boolean
+function Prox_PlayerSquadsInProximityOfPlayerEntities(playerid1, playerid2, proximity, all)
+	return _Prox_Private.GroupNearGroup( 
+					Player_GetSquads( playerid1 ), SGroupCaller,
+					Player_GetEntities( playerid2 ), EGroupCaller,
+					proximity, all
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY players entities are in proximity of a given squad group.
+--? @extdesc Set "all" to true to check that ALL entities are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playerentities, PlayerID playersquads, Real proximity, Boolean all
+--? @result Boolean
+function Prox_PlayerEntitiesInProximityOfPlayerSquads(playerid1, playerid2, proximity, all)
+	return _Prox_Private.GroupNearGroup( 
+					Player_GetEntities( playerid1 ), EGroupCaller,
+					Player_GetSquads( playerid2 ), SGroupCaller,
+					proximity, all
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY players squads are in proximity of a given entity group.
+--? @extdesc Set "all" to true to check that ALL entities are in proximity, or set "all" to false to check for ANY.
+--? @args PlayerID playerid, EGroupID egroup, Real proximity, Boolean all, EntityID exclude
+--? @result Boolean
+function Prox_PlayerEntitiesInProximityOfEntities(playerid, egroupid, proximity, all, exclude )
+	return _Prox_Private.GroupNearGroup( 
+					Player_GetEntities( playerid ), EGroupCaller,
+					egroupid, EGroupCaller,
+					proximity, all, exclude
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY squads are in proximity of a given squad group.
+--? @extdesc Set "all" to true to check that ALL squads are in proximity, or set "all" to false to check for ANY.
+--? @args SGroupID sgroup1, SGroupID sgroup2, Real proximity, Boolean all
+--? @result Boolean
+function Prox_SquadsInProximityOfSquads( sgroupid1, sgroupid2, proximity, all )
+	return _Prox_Private.GroupNearGroup( 
+					sgroupid1, SGroupCaller,
+					sgroupid2, SGroupCaller,
+					proximity, all
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY squads are in proximity of a given entity group.
+--? @extdesc Set "all" to true to check that ALL squads are in proximity, or set "all" to false to check for ANY.
+--? @args SGroupID sgroup, EGroupID egroup, Real proximity, Boolean all
+--? @result Boolean
+function Prox_SquadsInProximityOfEntities( sgroupid, egroupid, proximity, all )
+	return _Prox_Private.GroupNearGroup( 
+					sgroupid, SGroupCaller,
+					egroupid, EGroupCaller,
+					proximity, all
+			)
+end
+
+
+--? @shortdesc Checks if ALL or ANY entities are in proximity of a given entity group.
+--? @extdesc Set "all" to true to check that ALL entities are in proximity, or set "all" to false to check for ANY.
+--? @args EGroupID egroup1, EGroupID egroup2, Real proximity, Boolean all
+--? @result Boolean
+function Prox_EntitiesInProximityOfEntities( egroupid1, egroupid2, proximity, all )
+	return _Prox_Private.GroupNearGroup( 
+					egroupid1, EGroupCaller,
+					egroupid2, EGroupCaller,
+					proximity, all
+			)
+end
+
+--? @shortdesc Takes something (Entity, Squad, SGroup, EGroup, Position) in, then returns a random position
+--? @extdesc Minimum is the distance from the origin point that is guaranteed to have a return greater than
+--? @extdesc Minimum is ignored if it is greater than the radius
+--? @args Object item, Integer radius, Integer minimum
+--? @result Position
+
+function Prox_GetRandomPosition(item, radius, minimum)
+    local origin = item
+	if not(scartype(origin) == ST_SCARPOS) then 
+		origin = Util_GetPosition(origin)
+	end
+	
+	local minimum = minimum or 0
+
+	local posTable = { }
+	local rotation = World_GetRand(0, 360)
+	local randomRadius = World_GetRand(minimum, math.floor(radius))
+	posTable.z = (math.sin(rotation)*randomRadius) + origin.z
+	posTable.x = (math.cos(rotation)*randomRadius) + origin.x
+	
+	return World_Pos(posTable.x, origin.y, posTable.z)
+end

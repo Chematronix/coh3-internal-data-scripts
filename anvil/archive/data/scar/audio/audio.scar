@@ -1,0 +1,418 @@
+-----------------------------------------------------------------------
+-- Project Specific Audio Variables
+-- Copyright 2022 SEGA Corporation, Developed by Relic Entertainment
+--
+-- These variables are loaded globally in <project>.scar (anvil.scar)
+-- SCAR constants use ALL_CAPS_WITH_UNDERSCORES http://relicwiki/display/REL/Scar+naming+conventions
+-----------------------------------------------------------------------
+
+-- Music Intensity Events
+-- * Set state of 'mus_gameplay_state' via Wwise Events
+-- * Used with Music_LockIntensity() function in engine/scar/music.scar
+MUSIC_DEFAULT = "mus_combat_intensity_state_ambient"
+MUSIC_EXPLORE = "mus_combat_intensity_state_ambient"
+MUSIC_COMBAT = "mus_combat_intensity_state_comb"
+
+MUSIC_UNLOCK_INTENSITY = "MUSIC_UNLOCK_INTENSITY"		--Doesn't actually send a Wwise event, just a placeholder variable used for triggering Music_UnlockIntensity() by music.ticket_thresholds
+
+
+-- Music Intensity Ranges
+-- * These ranges are used by Music_UnlockIntensity() to set the appropriate music intensity after
+-- 	 a specified Music_LockIntensity() duration elapses OR when Music_UnlockIntensity() is manually called.
+-- * If the current combat intensity level is greater than or equal to the 'lowerBound', it will trigger the 
+-- 	 corresponding 'musicEvent' for that music intensity level once unlocked
+MUSIC_INTENSITY_RANGES = 
+{
+
+	{
+		lowerBound = 0,
+		musicEvent = MUSIC_EXPLORE
+	},
+	{
+		lowerBound = 4,
+		musicEvent = MUSIC_COMBAT
+	}
+}
+
+
+-- Music stinger triggers from Cardinal. Not yet used in Anvil, but here for reference in case we need
+
+--MUS_STING_PRIMARY_OBJ_START = "sfx_ui_event_queue_campaign_objective_start"
+--MUS_STING_PRIMARY_OBJ_COMPLETE = "sfx_ui_event_queue_campaign_objective_complete"
+--MUS_STING_PRIMARY_OBJ_COMPLETE_ENDGAME = "sfx_ui_event_queue_campaign_objective_complete_endgame"
+--MUS_STING_PRIMARY_OBJ_FAIL = "sfx_ui_event_queue_campaign_objective_fail"
+--MUS_STING_BONUS_OBJ_START = "sfx_ui_event_queue_campaign_objective_start"
+--MUS_STING_BONUS_OBJ_COMPLETE ="sfx_ui_event_queue_campaign_objective_complete"
+--MUS_STING_BONUS_OBJ_FAIL = "sfx_ui_event_queue_campaign_objective_fail"
+--MUS_STING_WARN_OBJ_START = "sfx_ui_event_queue_campaign_objective_start"
+--MUS_STING_WARN_OBJ_COMPLETE = "sfx_ui_event_queue_campaign_objective_complete"
+--MUS_STING_WARN_OBJ_FAIL = "sfx_ui_event_queue_campaign_objective_fail"
+--MUS_STING_POSITIVE = "mus_stinger_campaign_positive"
+--MUS_STING_TRIUMPHANT = "mus_stinger_campaign_triumph_short"
+--MUS_STING_NEGATIVE = "mus_stinger_campaign_negative"
+--MUS_STINGER_WARNING = "mus_stinger_campaign_warning"
+--MUS_STINGER_ALERT = "mus_stinger_campaign_alert"
+
+--STINGER_COMBAT_THREAT = "mus_stinger_event_combat_threat"		-- go easy on using these, probably only use under direction from the audio team
+--STINGER_ALERT = "mus_stinger_alert"								-- if playing these in a speech event, add a 3-second wait after triggering the stinger so speech doesn't play over top
+
+
+-- values for manually manipulating the combat_intensity in missions
+local intensity_decrease_speed_multiplier = 0.005 -- this is set in tuning_presentation -> audio -> tuning -> combat_intensity
+local combat_intensity_ambient_threshold = 4 -- this is set above in MUSIC_INTENSITY_RANGES, MUSIC_COMBAT lowerBound
+local maximum_combat_intensity = 24 -- this is set in tuning_presentation -> audio -> tuning -> combat_intensity -> player_count_mapping
+local music_combat_hold_time = 30 -- the minimum length in seconds for which it's appropriate to call combat music manually
+
+-- values for keeping track of team ticket scores
+-- 'team' is local player, 'other_team' is opposing team to local player
+local team_tickets = 0
+local team_previous_tickets = 0
+local other_team_tickets = 0
+local other_team_previous_tickets = 0
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Audio")
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+--? @shortdesc Called by OnInit() in core.scar.
+function Audio_OnInit()
+
+	_audio = {
+		music = {
+			queue = {},									-- list of music to change to switch to
+			current_event,								-- music currently being played
+			max_tickets = { event_name = "mus_battle_set_intro" },	-- All players at max tickets
+			start = { event_name = "mus_battle_set_notused" },		-- At the start of the match (after any scripted intros) when play actually begins (currently unlinked)
+			first_contact = {							-- When first combat of the match occurs
+				event_name = "aud_first_contact",
+				multiplayer = { event_name = "aud_first_contact_MP" },
+				singleplayer = { event_name = "aud_first_contact_SP" },
+			},
+			ticket_thresholds = { -- Used in conjunction with Audio_OnTicketsChanged()
+				{ tickets = 0.02, event_name = "mus_battle_set_finale", priority = 1, enemy_only = true, music_intensity = MUSIC_COMBAT },	-- Either team reaches 25. Indefinitely locks music intensity to MUSIC_COMBAT
+				{ tickets = 0.06, event_name = "mus_battle_set_previctory", priority = 2, enemy_only = true, music_intensity = MUSIC_COMBAT },-- Enemy team reaches 50. Unlocks music intensity (passing control back to engine).
+				{ tickets = 0.34, event_name = "mus_battle_set_level_03", priority = 3, enemy_only = false, music_intensity = nil },			-- Enemy team hits 100. Doesn't affect music intensity.
+				{ tickets = 0.72, event_name = "mus_battle_set_level_02", priority = 4, enemy_only = false, music_intensity = nil },			-- Enemy team hits 300 (or relative percentage from max, in this case, 400). Doesn't affect music intensity.
+				{ tickets = 0.90, event_name = "mus_battle_set_level_01", priority = 5, enemy_only = false, music_intensity = nil },
+			},
+			health_thresholds = { -- Used in conjunction with Audio_TrackHealth()
+				{ health = 0.1, event_name = "mus_battle_set_finale", priority = 1, enemy_only = true, music_intensity = MUSIC_COMBAT },	-- Either team's VIP stuff reaches this health threshold. Indefinitely locks music intensity to MUSIC_COMBAT
+				{ health = 0.2, event_name = "mus_battle_set_previctory", priority = 2, enemy_only = true, music_intensity = MUSIC_COMBAT },-- Either team's VIP stuff reaches this health threshold. Unlocks music intensity (passing control back to engine).
+				{ health = 0.34, event_name = "mus_battle_set_level_03", priority = 3, enemy_only = false, music_intensity = nil },			-- Either team's VIP stuff reaches this health threshold. Doesn't affect music intensity.
+				{ health = 0.67, event_name = "mus_battle_set_level_02", priority = 4, enemy_only = false, music_intensity = nil },			-- Either team's VIP stuff reaches this health threshold. Doesn't affect music intensity.
+				{ health = 0.90, event_name = "mus_battle_set_level_01", priority = 5, enemy_only = false, music_intensity = nil },
+			},
+			misc_thresholds = { -- Used in conjunction with Audio_OnMatchStateChanged()
+				{ level = 1, event_name = "mus_battle_set_finale", priority = 1, enemy_only = true, music_intensity = MUSIC_COMBAT },
+				{ level = 2, event_name = "mus_battle_set_previctory", priority = 2, enemy_only = true, music_intensity = MUSIC_COMBAT },
+				{ level = 3, event_name = "mus_battle_set_level_03", priority = 3, enemy_only = false, music_intensity = nil },
+				{ level = 4, event_name = "mus_battle_set_level_02", priority = 4, enemy_only = false, music_intensity = nil },
+				{ level = 5, event_name = "mus_battle_set_level_01", priority = 5, enemy_only = false, music_intensity = nil },
+			},
+		}
+	}
+end
+
+
+--? @shortdesc Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") signalling the max ticket count has changed.
+--? Sets the max ticket count for a given player (or all players if none specified).
+function Audio_OnMaxTicketsChanged(max_tickets, player)
+	if _audio and scartype(max_tickets) == ST_NUMBER then
+		_audio.max_tickets = max_tickets	--TODO: Track this separately for each team
+	end
+end
+
+
+--? @shortdesc Called by core.scar after opening cinematics and events are complete.
+function Audio_Start()
+	if _audio.max_tickets and _audio.max_tickets > 0 then
+		table.insert(_audio.music.queue, _audio.music.max_tickets)
+		team_tickets = _audio.max_tickets
+		team_previous_tickets = _audio.max_tickets
+		other_team_tickets = _audio.max_tickets
+		other_team_previous_tickets = _audio.max_tickets
+	else
+		table.insert(_audio.music.queue, _audio.music.start)
+	end
+	Rule_AddInterval(Audio_Update, 4)
+	Rule_AddGlobalEvent(Audio_OnDamageReceived, GE_DamageReceived)
+end
+
+
+--? @shortdesc Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling the ticket count has changed.
+function Audio_OnTicketsChanged(player, tickets, previous_tickets, silent)
+
+	local is_local_team = Player_ObserveRelationship(Game_GetLocalPlayer(), player) == R_ALLY
+	previous_tickets = previous_tickets or _audio.max_tickets
+	if is_local_team then
+		team_tickets = tickets
+		team_previous_tickets = previous_tickets
+	else
+		other_team_tickets = tickets
+		other_team_previous_tickets = previous_tickets
+	end
+	
+	-- Play associated VO if ticket threshold crossed or lead switches
+	if not (silent or Event_IsAnyRunning() or Util_IsCinematicMode() or previous_tickets <= 0) then
+		if is_local_team then
+			Sound_PlaySpeech(
+				"ticker_status", 
+				{player_id = Player_GetID(player),
+				 team_tickets = team_tickets, 
+				 team_previous_tickets = team_previous_tickets, 
+				 other_team_tickets = other_team_tickets, 
+				 other_team_previous_tickets = other_team_previous_tickets,
+				 max_tickets = _audio.max_tickets})
+		else
+			-- If it is the opposing team, send in that team's tickets as the player's team tickets
+			Sound_PlaySpeech(
+				"ticker_status", 
+				{player_id = Player_GetID(player),
+				 team_tickets = other_team_tickets, 
+				 team_previous_tickets = other_team_previous_tickets, 
+				 other_team_tickets = team_tickets, 
+				 other_team_previous_tickets = team_previous_tickets,
+				 max_tickets = _audio.max_tickets})
+		end
+	end
+
+	-- Change music if ticket threshold crossed
+	if _audio.max_tickets > 0 then
+		local ticket_threshold_ratio = tickets / _audio.max_tickets
+		for _, threshold in pairs(_audio.music.ticket_thresholds) do
+			if ticket_threshold_ratio <= threshold.tickets and (not threshold.enemy_only or not is_local_team) then
+				table.insert(_audio.music.queue, threshold)
+				break
+			end
+		end
+	end
+end
+
+-- Global event callback for GE_DamageReceived.
+-- Triggers music change when first combat occurs.
+function Audio_OnDamageReceived(context)
+	if context.damage > 0 
+		and not World_OwnsEntity(context.victim) 
+		and context.attacker 
+		and context.attacker ~= context.victim
+		and scartype(context.attacker) == ST_ENTITY 
+		and not World_OwnsEntity(context.attacker) then
+
+		local defending_player = Entity_GetPlayerOwner(context.victim)
+		local attacking_player = Entity_GetPlayerOwner(context.attacker)
+		local local_player = Game_GetLocalPlayer()
+
+		-- HACK: World_IsMultiplayerGame() does not include skirmishes so test for Project_OnInit as well (since anvil.scar is used only by campaign scripts)
+		if World_IsMultiplayerGame() or Project_OnInit == nil then
+			-- Trigger if a squad belonging to the local player's team is in combat
+			if Player_ObserveRelationship(local_player, defending_player) == R_ALLY or Player_ObserveRelationship(local_player, attacking_player) == R_ALLY then
+				Sound_PlayMusicEvent(_audio.music.first_contact.multiplayer.event_name)
+				print("Audio_OnDamageReceived() - ".._audio.music.first_contact.multiplayer.event_name)
+				Rule_RemoveGlobalEvent(Audio_OnDamageReceived)
+			end
+		else
+			-- Trigger if a squad belonging to the local player is in combat
+			if local_player == attacking_player or local_player == defending_player then
+				Sound_PlayMusicEvent(_audio.music.first_contact.singleplayer.event_name)
+				print("Audio_OnDamageReceived() - ".._audio.music.first_contact.singleplayer.event_name)
+				Rule_RemoveGlobalEvent(Audio_OnDamageReceived)
+			end
+		end
+	end
+end
+
+
+--? @shortdesc Called via Core_CallDelegateFunctions("OnMatchStateChanged") signalling the player is close(r) to defeat.
+--? Used with win conditions that don't use tickets or health to trigger changes in music.
+function Audio_OnMatchStateChanged(player, level)
+	local is_local_team = Player_ObserveRelationship(Game_GetLocalPlayer(), player) == R_ALLY
+	for _, threshold in pairs(_audio.music.misc_thresholds) do
+		if threshold.level == level and (not threshold.enemy_only or not is_local_team) then
+			table.insert(_audio.music.queue, threshold)
+			break
+		end
+	end
+end
+
+
+
+--? @shortdesc Called via Core_CallDelegateFunctions("OnWinConditionTriggered") when a win condition has been met.
+-- Cleans up UI and rules associated with this script module.
+function Audio_OnWinConditionTriggered(match_result)		
+	if Rule_Exists(Audio_Update) then 
+		Rule_Remove(Audio_Update)
+	end
+	if Rule_Exists(Audio_OnDamageReceived) then 
+		Rule_RemoveGlobalEvent(Audio_OnDamageReceived)
+	end
+end
+
+
+--? @shortdesc Called via Core_CallDelegateFunctions("OnGameOver") to signal the match to end.
+--? @args LuaTable match_result - Match result table containing win reason and tables of player indices for the winners and losers. 
+--?								e.g. {winners={1,3}, losers={2,4}, win_reason=WR_NONE} 
+--? Boolean silent - Whether to play victory/defeat VO
+function Audio_OnGameOver(match_result, silent)
+
+	-- Stop squad chatter
+	Sound_Play2D ("mix_mute_speech_on")
+	
+	local ending_music = "mus_set_state_victory"
+	local ending_speech = "game_over_intel_win"
+	
+	if #match_result.winners > 0 then	
+		-- Definitive winner(s) and loser(s)
+		if not Table_Contains(match_result.winners, World_GetPlayerIndex(Game_GetLocalPlayer())) then
+			ending_music = "mus_set_state_defeat"
+			ending_speech = "game_over_intel_lose"
+		end
+	else
+		-- No definitive winner - assume a draw
+	end
+
+	Sound_Play2D(ending_music)
+	if not silent then
+		Sound_PlaySpeech(ending_speech, {})
+	end
+end
+
+
+--? @shortdesc Sends appropriate Victory or Defeat Wwise music event on campaign exclusive After Action Report screen 
+--? @extdesc Called via function inside metamp_rtslibrary.scar that fires upon After Action Report screen, this function handles victory and defeat music for all campaign missions.
+--? @args Bool isLocalPlayerWinner
+--? @result Void
+function Audio_AfterActionReport(isLocalPlayerWinner) 
+	if isLocalPlayerWinner then
+		Sound_Play2D("mus_set_state_victory")
+	else
+		Sound_Play2D("mus_set_state_defeat")
+	end
+end
+
+
+--? @shortdesc Used to associate the in-game music with the health of one or more squads/entities (e.g. for annihilation win condition).
+--? @args LuaTable items - Table of entities/squads/entity IDs/squad IDs whose health to track, grouped by team (eg. {{1111,2222}, {3333,4444}} if each team had two squads/entities of import).
+--? number any_or_all - Whether to compare the health of ANY or ALL items in each list against the _audio.music.health_thresholds. Default is ALL (i.e. total health of all items).
+function Audio_TrackHealth(items, any_or_all)
+	_audio.track_health = {
+		items = items,
+		any_or_all = ALL,
+	}
+	if scartype(any_or_all) == ST_BOOLEAN then
+		_audio.track_health.any_or_all = any_or_all
+	end
+end
+
+
+--? @shortdesc Checks health of entities/squads identified by Audio_TrackHealth() and queues associated music change.
+function Audio_UpdateHealth()
+	if _audio.track_health and _audio.track_health.items then
+
+		-- Changes music level when health threshold crossed. Returns true if music level changed
+		local _CheckThresholds = function(health, is_local_team)
+			for _, threshold in pairs(_audio.music.health_thresholds) do
+				if health < threshold.health and (not threshold.enemy_only or not is_local_team) then
+					table.insert(_audio.music.queue, threshold)
+					break
+				end
+			end
+		end
+
+		local local_player = Game_GetLocalPlayer()
+		local any = _audio.track_health.any_or_all == ANY
+		for _, items in pairs(_audio.track_health.items) do
+			local total_health = 0
+			local is_local_team = false
+			for _, item in pairs(items) do
+				local health = 0
+				local item_type = scartype(item)
+				local entity
+				local squad
+				if item_type == ST_NUMBER then
+					if Entity_IsValid(item) then
+						entity = Entity_FromID(item)
+					elseif Squad_IsValid(item) then
+						squad = Squad_FromID(item)
+					end
+				elseif item_type == ST_ENTITY then
+					entity = item
+				elseif item_type == ST_SQUAD then
+					squad = item
+				end
+				if entity and Entity_IsAlive(entity) then
+					health = Entity_GetHealthPercentage(entity)
+					is_local_team = is_local_team or Player_ObserveRelationship(local_player, Entity_GetPlayerOwner(entity)) == R_ALLY
+				elseif squad and Squad_IsAlive(squad) then
+					health = Squad_GetHealthPercentage(squad, true)
+					is_local_team = is_local_team or Player_ObserveRelationship(local_player, Squad_GetPlayerOwner(squad)) == R_ALLY
+				end
+				if _audio.track_health.any_or_all == ANY then
+					_CheckThresholds(health, is_local_team)
+				else
+					total_health = total_health + health
+				end
+			end
+			if _audio.track_health.any_or_all == ALL and #items > 0 then
+				_CheckThresholds(total_health/#items, is_local_team)
+			end
+		end
+	end
+end
+
+
+--? @shortdesc Rule that changes music level (if there's a change queued).
+function Audio_Update(context)
+
+	-- Check health of anything added by Audio_TrackHealth()
+	Audio_UpdateHealth()
+
+	-- Order queue by priority
+	if #_audio.music.queue > 1 then
+		table.sort(_audio.music.queue,
+			function(a, b)
+				if a.priority and b.priority then
+					return a.priority < b.priority
+				end
+				return a.event_name < b.event_name
+			end)
+	end
+
+	-- Play highest priority music event
+	if #_audio.music.queue > 0 then
+		local audio = _audio.music.queue[1]
+		if audio.event_name ~= _audio.music.current_event then
+			Sound_Play2D(audio.event_name)
+			_audio.music.current_event = audio.event_name
+			print("Music changed to "..audio.event_name)
+
+			-- Lock music intensity level if threshold has valid music intensity
+			if audio.music_intensity and (audio.music_intensity ~= MUSIC_UNLOCK_INTENSITY) then
+				Music_LockIntensity(audio.music_intensity)
+				print("Music intensity locked")
+			elseif audio.music_intensity and (audio.music_intensity == MUSIC_UNLOCK_INTENSITY) then
+				Music_UnlockIntensity()
+				print("Music intensity unlocked")
+			end
+		end
+		-- Clear queue
+		_audio.music.queue = {}
+	end
+end
+
+
+--? @shortdesc forces combat_intensity down towards the combat -> ambient threshold for more rapid ambient transition
+--? @extdesc use when combat is complete (necessarily, due to objective completion) but the automatic time to ambient is inappropriate for the narrative beat
+function ForceMusicCombatIntensityAmbient()
+	Sound_ForceSetMinimumMusicCombatIntensity(combat_intensity_ambient_threshold + intensity_decrease_speed_multiplier, 1) -- ForceSetMinimumMusicCombatIntensity bypasses the threshold and must be set on opposite side of intended destination
+end
+
+--? @shortdesc sets target combat_intensity to max, triggering combat, and holds it there for the minimum viable call time
+--? @extdesc use when combat music should foreshadow an immediately upcoming battle
+function HoldMaxMusicCombatIntensityCombat() 
+	Sound_SetMinimumMusicCombatIntensity(maximum_combat_intensity, music_combat_hold_time) -- _SetMinimumMusicCombatIntensity raises intensity linearly, triggering the threshold
+end

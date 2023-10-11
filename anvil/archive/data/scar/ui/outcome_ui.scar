@@ -1,0 +1,159 @@
+-----------------------------------------------------------------------
+-- Outcome UI
+--
+-- (c) Relic Entertainment 2021
+--
+-- End-of-match behavior invoked from a game mode script via Core_CallDelegateFunctions("OnGameOver")
+-- when a win condition is triggered.
+-----------------------------------------------------------------------
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Outcome")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+
+--? @shortdesc End-of-match flow invoked by a game mode script via Core_CallDelegateFunctions("OnGameOver") when a win condition is triggered.
+--? @args LuaTable match_result - Match result table containing win reason and tables of player indices for the winners and losers. e.g. {winners={1,3}, losers={2,4}, win_reason=WR_NONE} 
+--? Boolean silent - Whether to player victory/defeat VO
+function Outcome_OnGameOver(match_result, silent)
+
+	local _PrintPlayerData = function(outcome_type, player_indices)
+		print(outcome_type)
+		for i = 1, #player_indices do
+			local player = World_GetPlayerAt(player_indices[i])
+			print(string.format("    %s (player %d, %s)",
+				Loc_ToAnsi(Player_GetDisplayName(player)),
+				World_GetPlayerIndex(player),
+				Player_GetRaceName(player)))
+		end
+	end
+
+	-- Log match result
+	print(string.format("Match ended. Duration: %s, Win Reason: %d", 
+		Loc_ToAnsi(Loc_FormatTime_H_M_S(World_GetGameTime(), false)),
+		match_result.win_reason))
+	_PrintPlayerData("Winners:", match_result.winners)
+	_PrintPlayerData("Losers:", match_result.losers)
+
+	for i = 1, World_GetPlayerCount() do
+		-- Set everything invulnerable
+		--SGroup_SetInvulnerable(Player_GetSquads(World_GetPlayerAt(i)), true)
+		--EGroup_SetInvulnerable(Player_GetEntities(World_GetPlayerAt(i)), true)
+		
+		-- Disable AI
+		--if not Player_IsHuman(World_GetPlayerAt(i)) then
+			--AI_Enable(World_GetPlayerAt(i), false)
+		--end
+	end
+
+	UI_SetEnablePauseMenu(false)
+	UI_ToggleDecorators()
+	Misc_ClearSelection()
+	Misc_SetSelectionInputEnabled(false)
+	Misc_SetDefaultCommandsEnabled(false)
+
+	-- Final (optional) camera pan to whatever triggered the win condition (e.g destroyed HQ).
+	if scartype(match_result.point_of_interest) == ST_SCARPOS then 
+		Camera_MoveTo(match_result.point_of_interest)
+	end
+	Camera_SetInputEnabled(false)
+
+
+	-- End-of-match stinger
+	local xaml =
+[[<Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" 
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" 
+		xmlns:esControls="clr-namespace:WPFGUI.Shared.Controls;assembly=EngineUI"
+		xmlns:esUtility="clr-namespace:WPFGUI.Shared.Utility;assembly=EngineUI"
+		SnapsToDevicePixels="True"
+		Background="Black">
+	<Grid>
+		<Grid.Triggers>
+			<EventTrigger RoutedEvent="FrameworkElement.Loaded">
+				<BeginStoryboard>
+					<Storyboard>
+						<DoubleAnimation Storyboard.TargetProperty="(Grid.Opacity)" 
+							From="1" To="0" BeginTime="0:0:3" Duration="0:0:1" />
+						<DoubleAnimationUsingKeyFrames Storyboard.TargetName="outcomeTextBlock" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)">
+                			<EasingDoubleKeyFrame KeyTime="00:00:00.3000000" Value="1">
+                    			<EasingDoubleKeyFrame.EasingFunction>
+                        			<QuadraticEase EasingMode="EaseOut"/>
+                    			</EasingDoubleKeyFrame.EasingFunction>
+                			</EasingDoubleKeyFrame>
+            			</DoubleAnimationUsingKeyFrames>
+						<DoubleAnimationUsingKeyFrames Storyboard.TargetName="outcomeTextBlock" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)">
+                			<EasingDoubleKeyFrame KeyTime="00:00:00.3000000" Value="1">
+                    			<EasingDoubleKeyFrame.EasingFunction>
+                        			<QuadraticEase EasingMode="EaseOut"/>
+                    			</EasingDoubleKeyFrame.EasingFunction>
+                			</EasingDoubleKeyFrame>
+            			</DoubleAnimationUsingKeyFrames>
+					</Storyboard>
+				</BeginStoryboard>
+			</EventTrigger>
+		</Grid.Triggers>
+		<esControls:VideoPlayerControl SourceFilePath="defeat_video" Visibility="{Binding [is_defeat], Converter={StaticResource BoolToVis}}"/>
+		<esControls:VideoPlayerControl SourceFilePath="victory_video" Visibility="{Binding [is_defeat], Converter={StaticResource InvBoolToVis}}" />
+		
+		<StackPanel VerticalAlignment="Center" Effect="{StaticResource DropShadowNoBackgroundStyle}">			
+			<!-- Match result -->
+			<TextBlock x:Name="outcomeTextBlock" Text="{Binding Path=[outcome], Converter={StaticResource LocalizedStringConverter}}"
+					Style="{StaticResource DefaultHeaderText}"
+					FontSize="200" Opacity="0.6" RenderTransformOrigin="0.5,0.5"
+					HorizontalAlignment="Center">
+				<TextBlock.RenderTransform>
+                    <ScaleTransform ScaleX="8" ScaleY="8"/>
+            	</TextBlock.RenderTransform>
+			</TextBlock>
+		</StackPanel>
+	</Grid>
+</Grid>
+]]
+
+	-- Base final local audio/visuals on match result
+	local data_context = {
+		outcome = "$11190933",		-- "Victory!"
+		is_defeat = false,
+	}
+
+	if #match_result.winners > 0 then	
+		-- Definitive winner(s) and loser(s)
+		if not Table_Contains(match_result.winners, World_GetPlayerIndex(Game_GetLocalPlayer())) then
+			data_context.outcome = "$11190934"		-- "Defeat"
+			data_context.is_defeat = true
+		end
+	else
+		-- No definitive winner - assume a draw
+		data_context.outcome = "$11190935"			-- "Stalemate"
+	end
+
+	UI_AddChild("", "XamlPresenter", "GameOverUI", {
+			IsHitTestVisible = false,
+			Xaml = xaml,
+			DataContext = UI_CreateDataContext(data_context)
+		})
+
+	-- Track match results
+	for _, player_index in pairs(match_result.winners) do
+		World_SetPlayerWin(World_GetPlayerAt(player_index))
+	end
+	for _, player_index in pairs(match_result.losers) do
+		World_SetPlayerLose(World_GetPlayerAt(player_index))
+	end
+
+	-- Trigger end of match (delay dictated by duration of victory/defeat audio)
+	Rule_AddOneShot(Outcome_DelayedGameOver, 5.0, match_result)	
+end
+
+
+-- Delayed rule used to end the match.
+function Outcome_DelayedGameOver(context, match_result)
+	World_SetGameOver(match_result.win_reason or -1)
+end

@@ -1,0 +1,120 @@
+----------------------------------------------------------------------------------------------------------------
+-- Contains a helper functions for creating uid tables etc
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+----------------------------------------------------------------------------------------------------------------
+
+-- do not scardoc
+-- format is optional
+function _UID_MAKETABLE( create_func, exist_func, format, size, is_static, bStopIfMissing )
+	-- validate params
+	if create_func == nil or format == nil or size == nil then fatal("invalid parameters") end
+	if bStopIfMissing == nil then bStopIfMissing = true end
+	--
+	local T = {}
+	for i = 1, size do
+		local name = string.format( format, i )
+		if bStopIfMissing == true and not exist_func(name) then
+			--print("Couldn't find " .. name)
+			break
+		end
+		--print("Creating " .. name)
+		T[i] = create_func( name )
+	end
+	
+	-- do not save static tables
+	if is_static then
+		T.__skipsave = true
+	end
+	
+	--
+	return T
+end 
+
+
+function _Private_EGroup_Exists(name)
+	return EGroup_Exists(name)
+end
+
+function _Private_SGroup_Exists(name)
+	return SGroup_Exists(name)
+end
+
+function _Private_Marker_Exists(name)
+	return Marker_Exists(name, "")
+end
+
+--
+--? @group scardoc;ID
+--
+
+----------------------------------------------------------------------------------
+--? @shortdesc Returns a table of markers from the world builder. Creates as many as it finds
+--? @extdesc mkr_table = Marker_GetTable( 'mkr_%d' ) -- creates a table with 3 markers named 'mkr_1', 'mkr_2', and 'mkr_3' (and so on) from the WB\n\n
+--? mkr_table2 = Marker_GetTable( 'mkr_%02d' )  -- creates a table with 3 markers named 'mkr_01', 'mkr_02', 'mkr_03' (and so on) from the WB\n\n
+--? mkr_table3 = Marker_GetTable( 'mkr_%03d_patrol' )  -- creates a table with 3 markers named 'mkr_001_patrol', 'mkr_002_patrol' (and so on) from the WB\n\n
+--? @args String format
+--? @result LuaTable
+function Marker_GetTable( format )
+	local function Create( name ) return Marker_FromName( name, "" ) end
+	
+	-- marker tables are static (they do not get saved)
+	return _UID_MAKETABLE( Create, _Private_Marker_Exists, format, 9999 )
+end
+
+----------------------------------------------------------------------------------
+--? @shortdesc Returns a fixed size table of markers from the world builder.  Markers that do not
+--? exist in the WB, will be nil in the table.  This is why we call it 'non-sequential'
+--? @args String format, Integer size
+--? @result LuaTable
+function Marker_GetNonSequentialTable( format, size )
+	local function Create( name )
+		if Marker_Exists( name, "" ) then
+			return Marker_FromName( name, "" )
+		else
+			return nil
+		end
+	end
+	
+	-- marker tables are static (they do not get saved)
+	return _UID_MAKETABLE( Create, _Private_Marker_Exists, format, size, true, false )
+end
+
+----------------------------------------------------------------------------------
+--? @shortdesc Returns a table of egroups from the world builder
+--? @extdesc See Marker_GetTable for more info on format parameter
+--? @args String format
+--? @result LuaTable
+function EGroup_GetWBTable( format )
+	local function Create( name ) return EGroup_FromName( name ) end
+	return _UID_MAKETABLE( Create, _Private_EGroup_Exists, format, 9999 )
+end
+
+----------------------------------------------------------------------------------
+--? @shortdesc Returns a table of sgroups from the world builder
+--? @extdesc See Marker_GetTable for more info on format parameter
+--? @args String format
+--? @result LuaTable
+function SGroup_GetWBTable( format )
+	local function Create( name ) return SGroup_FromName( name ) end
+	return _UID_MAKETABLE( Create, _Private_SGroup_Exists, format, 9999 )
+end
+
+----------------------------------------------------------------------------------
+--? @shortdesc Returns a table of egroups NOT in the world builder
+--? @extdesc See Marker_GetTable for more info on format parameter
+--? @args String format, Integer size
+--? @result LuaTable
+function EGroup_CreateTable( format, size  )
+	local function Create( name ) return EGroup_Create( name ) end
+	return _UID_MAKETABLE( Create, _Private_EGroup_Exists, format, size, false, false )
+end
+
+----------------------------------------------------------------------------------
+--? @shortdesc Returns a table of sgroups NOT in the world builder
+--? @extdesc See Marker_GetTable for more info on format parameter
+--? @args String format, Integer size
+--? @result LuaTable
+function SGroup_CreateTable( format, size  )
+	local function Create( name ) return SGroup_Create( name ) end
+	return _UID_MAKETABLE( Create, _Private_SGroup_Exists, format, size, false, false )
+end

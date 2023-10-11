@@ -1,0 +1,852 @@
+-------------------------------------------------------------------------
+-- Unit Entry framework
+-- 
+-- Relic Entertainment 2018
+--
+-- This system spawns squads and allows for various scripted entry mechanics. The system also provides hooks for project-specific
+-- code to extend the system in various ways - new entry methods, new unit parameters, preprocessing of units lists, etc.
+--
+-- See: Core Unit Entry Framework
+--      http://relicwiki/display/EE/Core+Unit+Entry+Framework	(in the EE, you can Control-click on this link to go there)
+-------------------------------------------------------------------------
+
+
+
+--? @shortdesc Create and spawn a set of units (a "deployment") in one go. 
+--? @extdesc See details here: http://relicwiki/display/EE/Core+Unit+Entry+Framework
+--? @args PlayerID player, SGroupID/Table sgroup, Table units, MarkerID/Pos spawn[, Table entryMethod, Real stagger, Table options]
+--? @result Table deployment
+function UnitEntry_DeploySquads(player, sgroup, units, spawn, entryMethod, stagger, options)
+
+	if t_UnitEntry_DeploymentsInProgress == nil then
+		UnitEntry_Init()
+	end
+	
+	entryMethod = entryMethod or UNITENTRY.Default
+	stagger = stagger or 0
+	options = options or {}
+	
+	-- fix up entry method data
+	if scartype(entryMethod) == ST_STRING then
+		entryMethod = {spawnType = entryMethod} 	-- create an on-the-fly entry method using the string as the event
+	elseif entryMethod.spawnType == nil then
+		entryMethod.spawnType = ""
+	end
+
+	-- if this is a single unit table, make it a table with just that one unit in it
+	if units[1] == nil then
+		units = {units}
+	end
+	
+	-- make a copy, so the same unit table can be used in multiple deployments
+	units = Clone(units)
+	
+	-- add this deployment to the list of deployments-in-progress
+	local deployment = {
+		player = player,
+		sgroup = sgroup,
+		units = units,
+		spawn = spawn,
+		entryMethod = entryMethod,
+		stagger = stagger,
+		options = options,
+		uniqueSGroup = SGroup_CreateUniqueWithPrefix("UnitEntry Temp"),	-- this only exists for the duration of the spawn, but can be used to reference the units in this spawn even if they're being spawned into a group that already has units
+		id = UnitEntry_GenerateUniqueID(),
+	}
+	table.insert(t_UnitEntry_DeploymentsInProgress, deployment)
+	
+	
+	--
+	-- Pre-processing
+	--
+	UnitEntry_PreprocessDeployment(deployment)
+
+
+	--
+	-- Create units
+	--
+	for index, unit in pairs(units) do 									-- create ALL of the units immediately (they're created but NOT spawned just yet)
+		UnitEntry_CreateUnit(unit, deployment)
+	end
+	
+	
+	--
+	-- Spawn units
+	--
+	if entryMethod.createButDontSpawn ~= true then
+		UnitEntry_StartDeployment(deployment)
+	end
+	
+	return deployment
+	
+end
+
+
+
+--
+-- Steps:
+-- 
+-- Preprocess deployment
+-- Create units
+-- Start deployment
+--		maybe then:		Wait to start spawning		(only if there is an initialSpawnDelay set on the entryMethod)
+-- Start spawning units
+--		maybe then:		Staggered spawn				(if using a staggered spawn)
+-- Finish deployment
+--
+
+function UnitEntry_PreprocessDeployment(deployment)
+
+	local units = deployment.units
+
+	-- if entryMethod has forceLocation set, move the unit's individual spawn location to the location provided to the deploy function
+	if deployment.entryMethod.forceSpawnLocation == true then
+		for index, unit in pairs(units) do
+			if unit.destination == nil then
+				unit.destination = unit.spawn 
+			end
+			unit.spawn = deployment.spawn
+
+		end
+	end
+
+	-- unroll any items that use the numSquads parameter (so now one entry = one squad)	
+	for index = #units, 1, -1 do 							-- work backwards through the unit list (because we'll be adding things on the way)
+		local unit = units[index]
+		local numSquads = unit.numSquads					-- check if this entry uses the numSquads parameter
+		if numSquads == 0 then 								-- if numSquads is 0, remove the entry entirely
+			table.remove(units, index)
+		elseif numSquads ~= nil then			
+			unit.numSquads = nil							-- if so, blank out the numSquads key from this item...
+			for count = 1, (numSquads-1) do 			
+				table.insert(units, index, Clone(unit))		-- ...and make numSquads-1 extra copies, inserting them all at the some spot in the index
+			end
+		end
+		unit.originalSpawn = unit.spawn	
+	end
+	
+	-- call delegates
+	Core_CallDelegateFunctions("UnitEntry_PreprocessDeployment", deployment)
+	
+	-- call any preprocess functions for the entry method
+	if scartype(deployment.entryMethod.preprocessFunction) == ST_FUNCTION then
+		deployment.entryMethod.preprocessFunction(deployment)
+	end
+
+end
+
+
+
+function UnitEntry_StartDeployment(deployment)
+
+	-- call delegates
+	Core_CallDelegateFunctions("UnitEntry_StartDeployment", deployment)
+	
+	-- call any start functions for the entry method
+	if scartype(deployment.entryMethod.startFunction) == ST_FUNCTION then
+		deployment.entryMethod.startFunction(deployment)
+	end
+	
+	if deployment.cancelled ~= true then		-- if the deployment was cancelled, don't do anything else
+	
+		-- start the spawning process
+		local initialSpawnDelay = deployment.initialSpawnDelay or deployment.entryMethod.initialSpawnDelay or 0
+		if initialSpawnDelay == 0 then 
+			UnitEntry_StartSpawningUnits(deployment)														-- spawn immediately
+		elseif initialSpawnDelay > 0 then
+			Rule_AddOneShot(UnitEntry_WaitToStartSpawning, initialSpawnDelay, {deployment = deployment})	-- add a rule to start spawning after a delay
+		else
+			-- Do nothing																					-- entryMethod will handle starting the spawn itself
+		end
+		
+	end
+	
+end
+
+function UnitEntry_WaitToStartSpawning(context, data)
+	UnitEntry_StartSpawningUnits(data.deployment)
+end
+
+
+function UnitEntry_StartSpawningUnits(deployment)
+
+	-- call the SpawnUnit function for each item (all at once or set up a rule to do them staggered, depending on the context)
+	
+	if deployment.stagger == 0 or deployment.stagger == nil or deployment.completeImmediately == true then
+		
+		-- instant spawn all of the units
+		
+		local anyUnitWaitingOnMoveToDestination = false
+		for index, unit in pairs(deployment.units) do 
+			UnitEntry_SpawnUnit(unit, deployment)
+
+			if unit.waitingOnMoveToDestination then
+				anyUnitWaitingOnMoveToDestination = true
+			end
+		end
+
+		if anyUnitWaitingOnMoveToDestination then
+			Rule_AddInterval(UnitEntry_AllUnits_HaveFinishedMoving, 0.5, {deployment = deployment, staggeredSpawn = false})
+		end
+		
+		UnitEntry_FinishDeployment(deployment)
+		
+	else
+	
+		-- staggered spawn 
+		
+		UnitEntry_SpawnUnit(deployment.units[1], deployment)		-- spawn the first
+		
+		deployment.nextIndexToSpawn = 2								-- now set up a rule for the rest
+		Rule_AddInterval(UnitEntry_StaggeredSpawn, deployment.stagger, {deployment = deployment})
+		
+		Rule_AddInterval(UnitEntry_AllUnits_HaveFinishedMoving, 0.5, {deployment = deployment, staggeredSpawn = true})
+
+	end
+	
+end
+
+
+function UnitEntry_StaggeredSpawn(context, data)
+
+	local deployment = data.deployment
+	local unit = deployment.units[deployment.nextIndexToSpawn]
+
+	if deployment.completeImmediately == true then		-- exit out if the completeImmediately flag has been set (everything will have been spawned anyway)
+		return
+	end
+
+	UnitEntry_SpawnUnit(unit, deployment)
+	
+	-- set up the spawn of the next unit
+	deployment.nextIndexToSpawn = deployment.nextIndexToSpawn + 1
+	if deployment.units[deployment.nextIndexToSpawn] == nil then
+
+		-- that was the last unit!
+		UnitEntry_FinishDeployment(deployment)		
+		Rule_RemoveMe()
+		
+	end
+			
+end
+
+
+function UnitEntry_FinishDeployment(deployment)
+
+	if deployment.finished ~= true then
+	
+		deployment.finished = true 	-- this stops double-calling the finish functions if the deployment was forced to complete immediately in the middle of spawning
+		
+		-- special callback for the encounter system	- for the entire deployment
+		if deployment.options.encounterSystemData ~= nil then
+			for index = #deployment.options.encounterSystemData.enc.inProcessSpawns, 1, -1 do 
+				if deployment.options.encounterSystemData.enc.inProcessSpawns[index] == value then 
+					table.remove(deployment.options.encounterSystemData.enc.inProcessSpawns, index)
+				end 
+			end
+		end
+		
+		-- call any delegates
+		Core_CallDelegateFunctions("UnitEntry_EndDeployment", deployment)
+		
+		-- call any end functions for the entry method
+		if scartype(deployment.entryMethod.endFunction) == ST_FUNCTION then
+			deployment.entryMethod.endFunction(deployment)
+		end
+	
+		-- user callback
+		if scartype(deployment.options.onCompleteCallback) == ST_FUNCTION then
+			deployment.options.onCompleteCallback(deployment)
+		end
+	
+		-- remove the deployment from the list of in-progress spawns
+		for index = #t_UnitEntry_DeploymentsInProgress, 1, -1 do
+			if t_UnitEntry_DeploymentsInProgress[index] == deployment then
+				table.remove(t_UnitEntry_DeploymentsInProgress, index)
+			end
+		end
+		
+		SGroup_Destroy(deployment.uniqueSGroup)
+		deployment.uniqueSGroup = nil 
+		
+	end
+	
+end
+
+
+
+
+--
+-- Squad creation phase
+--
+
+function UnitEntry_CreateUnit(unit, deployment)
+
+	local sbp = unit.sbp
+	local player = unit.player or deployment.player
+	local loadout = unit.loadout or 0
+	
+
+
+	-- resolve the location and facing
+	local spawnLocation, spawnFacing = UnitEntry_ResolveSpawnLocation(unit, deployment)
+	
+	
+	-- create the unit and store the IDs
+	unit.squadID = Squad_CreateToward(sbp, player, loadout, spawnLocation, spawnFacing)
+	unit.squadWorldID = Squad_GetID(unit.squadID)
+	
+	
+	-- add new squad to the requested SGroups
+	if deployment.sgroup ~= nil then
+		if scartype(deployment.sgroup) == ST_SGROUP then
+			deployment.sgroup = {deployment.sgroup}
+		end
+		for index, sgroup in pairs(deployment.sgroup) do 
+			SGroup_Add(sgroup, unit.squadID)
+		end
+	end
+	if unit.sgroup ~= nil then
+		if scartype(unit.sgroup) == ST_SGROUP then
+			unit.sgroup = {unit.sgroup}
+		end
+		for index, sgroup in pairs(unit.sgroup) do 
+			SGroup_Add(sgroup, unit.squadID)
+		end
+	end
+	SGroup_Add(deployment.uniqueSGroup, unit.squadID)
+	
+	
+	-- call delegates
+	Core_CallDelegateFunctions("UnitEntry_CreateUnit", unit, deployment)
+
+	-- user callback
+	if scartype(deployment.options.onCreateCallback) == ST_FUNCTION then
+		deployment.options.onCreateCallback(unit, deployment)
+	end
+	
+end
+
+
+
+
+
+
+--
+-- Spawning phase
+--
+
+function UnitEntry_SpawnUnit(unit, deployment)
+
+	if unit.spawned == true or Squad_IsValid(unit.squadWorldID) == false then -- early exit if this unit has been spawned already
+		return
+	end
+	
+	SGroup_Single(sg_UnitEntry_TempSGroup, unit.squadID)
+	
+	local formation = deployment.entryMethod.formation or deployment.options.formation or ""			
+	local ignoreFormation = deployment.options.ignoreFormation or false
+	local ignorePathfindingGroup = deployment.options.ignorePathfindingGroup or eg_UnitEntry_EmptyIgnoreGroup
+	local ignorePathfindingPos = deployment.options.ignorePathfindingPos or false
+
+	local spawnLocation, spawnFacing = UnitEntry_ResolveSpawnLocation(unit, deployment)	-- resolve the location and facing again (it might have changed since creating the units)
+	
+	local spawnType = deployment.entryMethod.spawnType
+	if deployment.completeImmediately == true then										-- if we're completing immediately then replace the spawn event with one that triggers nothing	
+		spawnType = "none"
+	end
+	
+	-- spawn unit
+	Squad_SpawnFormationToward(	unit.squadID,
+								ignorePathfindingGroup,
+								spawnLocation,
+								spawnFacing,
+								formation,
+								ignoreFormation,
+								ignorePathfindingPos,
+								spawnType	)
+	
+	unit.spawned = true	
+
+	-- trigger any specified animator actions (i.e. spawn FX)
+	if deployment.entryMethod.onSpawnAnimatorAction ~= nil then
+		Squad_SetAnimatorAction(unit.squadID, deployment.entryMethod.onSpawnAnimatorAction)
+	end
+	
+	-- garrison this squad into it's spawn location if appropriate 
+	local garrison = unit.originalSpawn or deployment.spawn 
+	if (scartype(garrison) == ST_SGROUP and SGroup_CountSpawned(garrison) >= 1) or 
+		(scartype(garrison) == ST_EGROUP and EGroup_CountSpawned(garrison) >= 1) then 
+		
+		local canLoadSquad = false 
+		
+		if scartype(garrison) == ST_SGROUP then 
+			canLoadSquad = Squad_CanLoadSquad(SGroup_GetSpawnedSquadAt(garrison, 1), unit.squadID, false, false)
+		elseif scartype(garrison) == ST_EGROUP then
+			canLoadSquad = Entity_CanLoadSquad(EGroup_GetSpawnedEntityAt(garrison, 1), unit.squadID, false, false)
+		end
+		
+		if canLoadSquad == true then 
+			Cmd_Garrison(sg_UnitEntry_TempSGroup, garrison, nil, nil, true)
+		end
+	end
+	
+	-- add requested upgrades
+	if unit.upgrade ~= nil then
+		if scartype(unit.upgrade) == ST_PBG then
+			unit.upgrade = {unit.upgrade}
+		end
+		for index, upgrade in pairs(unit.upgrade) do 
+			Cmd_InstantUpgrade(sg_UnitEntry_TempSGroup, upgrade)
+		end
+	end
+	if unit.entityUpgrade ~= nil then
+		if scartype(unit.entityUpgrade) == ST_PBG then
+			unit.entityUpgrade = {unit.entityUpgrade}
+		end
+		local squad = SGroup_GetSpawnedSquadAt(self.sgroup, 1)
+		for index, entityUpgrade in pairs(unit.entityUpgrade) do 
+			for index = 1, Squad_Count(squad) do
+				Entity_CompleteUpgrade(Squad_EntityAt(squad, index - 1), entityUpgrade)
+			end
+		end
+	end
+	
+	
+
+	-- call delegates
+	Core_CallDelegateFunctions("UnitEntry_SpawnUnit", unit, deployment)
+
+	-- entry method callback
+	if scartype(deployment.entryMethod.onSpawnFunction) == ST_FUNCTION then
+		deployment.entryMethod.onSpawnFunction(unit, deployment)
+	end
+
+	-- user callback
+	if scartype(deployment.options.onSpawnCallback) == ST_FUNCTION then
+		deployment.options.onSpawnCallback(unit, deployment)
+	end
+	
+	-- send unit to destination
+	local destination = unit.destination or deployment.options.destination
+	if destination ~= nil then
+
+		local attackMove = unit.attackMove or deployment.options.attackMove
+		local player = unit.player or deployment.player	
+	
+		if scartype(destination) == ST_STRING then
+			if Marker_Exists(destination, "") then
+				destination = Marker_FromName(destination, "")
+				unit.destination = destination
+			else
+				print("marker not found: "..destination)
+				destination = nil
+			end
+		end
+
+		local groupcaller = __GetGroupCaller(destination)
+		
+		-- if destination is an object...
+		if scartype(destination) == ST_EGROUP or scartype(destination) == ST_SGROUP then
+		
+			local relationship = Util_GetRelationship(player, destination)
+			
+			if relationship == R_ALLY then
+			
+				-- garrison allied objects if they have a hold extension
+				if scartype(destination) == ST_EGROUP and EGroup_CountSpawned(destination) >= 1 and Entity_CanLoadSquad(EGroup_GetSpawnedEntityAt(destination, 1), unit.squadID, true, false) then
+					Cmd_Garrison(sg_UnitEntry_TempSGroup, destination, true, true)
+				elseif scartype(destination) == ST_SGROUP and SGroup_CountSpawned(destination) >= 1 and Squad_CanLoadSquad(SGroup_GetSpawnedSquadAt(destination, 1), unit.squadID, true, false) then
+					Cmd_Garrison(sg_UnitEntry_TempSGroup, destination, true, true)
+				else
+					destination = Util_GetPosition(destination) 			-- just move here
+				end
+				
+			elseif relationship == R_ENEMY then
+				
+				-- attack move on enemy objects
+				Cmd_AttackMove(sg_UnitEntry_TempSGroup, destination, true)
+				
+			elseif relationship == nil then
+			
+				-- check if it's an available sync weapon
+				local swid = groupcaller.GetSyncWeaponID(destination)
+				if SyncWeapon_IsOwnedByPlayer(swid, nil) then
+					Cmd_CaptureTeamWeapon(sg_util_temp, destination)
+				else
+					destination = Util_GetPosition(destination) 			-- just move here (syncweapon not available)
+				end
+				
+			end
+			
+		end
+		
+		-- fallback on a regular move (possibly attack-move)
+		if scartype(destination) == ST_SCARPOS or scartype(destination) == ST_MARKER then
+			if attackMove == true then
+				Cmd_AttackMove(sg_UnitEntry_TempSGroup, destination, true)
+			else
+				if scartype(destination) == ST_MARKER then 
+					Cmd_Move(sg_UnitEntry_TempSGroup, destination, true, nil, Marker_GetDirection(destination))
+				else
+					Cmd_Move(sg_UnitEntry_TempSGroup, destination, true)
+				end
+			end
+			
+			unit.waitingOnMoveToDestination = true	-- flag to denote that we need to wait for this unit to move before calling Finish
+			
+		end
+	
+	end	
+	
+	if unit.waitingOnMoveToDestination == true then
+		-- call the finish function when you get to the destination
+	else
+		UnitEntry_SpawnUnit_Finish(unit, deployment)															-- call the finish function immediately
+	end
+	
+	SGroup_Clear(sg_UnitEntry_TempSGroup)
+	
+end
+
+
+
+
+-- checks if all units in a deployment are spawned and have finished moving
+function UnitEntry_AllUnits_HaveFinishedMoving(context, data)
+	
+	local deployment = data.deployment
+	local allUnitsHaveFinishedMoving = true
+	for index, unit in pairs(deployment.units) do
+		if data.staggeredSpawn == true and index >= deployment.nextIndexToSpawn then
+			-- staggered spawn: do not check units that are not spawned yet
+			break
+		end
+		
+		if unit.waitingOnMoveToDestination == true then
+			if Squad_IsValid(unit.squadWorldID) == false then
+				allUnitsHaveFinishedMoving = false
+			else
+				-- check to see if the squad has finished moving to its destination.
+				local destination = unit.destination or deployment.options.destination
+				if Squad_IsMoving(unit.squadID) == false 
+					or Squad_HasDestination(unit.squadID) == false 
+					or Util_GetDistanceSquared(unit.squadID, destination) <= 25								-- 5m (which is 25 when squared)
+					or Util_GetDistanceSquared(Squad_GetDestination(unit.squadID), destination) >= 25 then
+					UnitEntry_SpawnUnit_Finish(unit, deployment)
+					unit.waitingOnMoveToDestination = false
+				else
+					allUnitsHaveFinishedMoving = false -- this unit has not finished moving yet
+				end
+			end
+		end
+	end
+	
+	if allUnitsHaveFinishedMoving == true and data.staggeredSpawn == true and deployment.units[deployment.nextIndexToSpawn] == nil -- staggered spawn: all units are spawned
+		or allUnitsHaveFinishedMoving == true and data.staggeredSpawn == false then
+		Rule_RemoveMe() -- remove this rule when all units are spawned and have reached their destination
+	end
+	
+end
+
+
+function UnitEntry_SpawnUnit_Finish(unit, deployment)
+
+	-- call delegates
+	Core_CallDelegateFunctions("UnitEntry_SpawnUnit_Finish", unit, deployment)
+
+	-- entry method callback
+	if scartype(deployment.entryMethod.onSpawnFinishFunction) == ST_FUNCTION then
+		deployment.entryMethod.onSpawnFinishFunction(unit, deployment)
+	end
+
+	-- user callback
+	if scartype(deployment.options.onSpawnFinishCallback) == ST_FUNCTION then
+		deployment.options.onSpawnFinishCallback(unit, deployment)
+	end
+
+	-- special callback for the encounter system	- for this unit only
+	if deployment.options.encounterSystemData ~= nil then
+		deployment.options.encounterSystemData.func(deployment.options.encounterSystemData.enc, unit.squadID)
+	end
+	
+end
+
+
+
+--
+-- Functions to immediately complete deployments that are currently in progress (i.e. when an NIS is about to play, or some other event whereby you want everything present)
+--
+
+
+--? @shortdesc Forces ALL in-process deployments to complete instantly.
+--? @result Void
+function UnitEntry_CompleteAllDeploymentsImmediately()
+
+	for index = #t_UnitEntry_DeploymentsInProgress, 1, -1 do 
+
+		local deployment = t_UnitEntry_DeploymentsInProgress[index]
+
+		UnitEntry_CompleteDeploymentImmediately(deployment)
+		
+	end
+
+end
+
+--? @shortdesc Forces a specific in-process deployment to complete instantly.
+--? @args DeploymentID deployment
+--? @result Void
+function UnitEntry_CompleteDeploymentImmediately(deployment)
+
+	-- set to instant spawning
+	deployment.completeImmediately = true
+	
+	-- Run the spawn and post spawn functions for all deploys in progress
+	UnitEntry_StartSpawningUnits(deployment)
+	
+	-- Remove the rules already in place
+	
+end
+
+
+
+
+
+
+--
+-- Misc helper functions
+--
+
+function UnitEntry_GenerateUniqueID()
+
+	if i_UnitEntry_LastUsedDeploymentID == nil then 
+	
+		i_UnitEntry_LastUsedDeploymentID = 0
+		return i_UnitEntry_LastUsedDeploymentID	
+		
+	else
+		
+		i_UnitEntry_LastUsedDeploymentID = i_UnitEntry_LastUsedDeploymentID + 1
+		return i_UnitEntry_LastUsedDeploymentID
+		
+	end
+
+end
+
+
+
+
+
+DST_FURTHEST_HIDDEN = 0
+DST_FURTHEST_VISIBLE = 1
+DST_CLOSEST_HIDDEN = 2
+DST_CLOSEST_VISIBLE = 3
+
+
+--? @shortdesc Returns a spawnLocation and Facing. If the unit has a custom spawn, it uses that, otherwise it gets it from deployment
+function UnitEntry_ResolveSpawnLocation(unit, deployment)
+
+	local spawn = unit.spawn or deployment.spawn
+	local facing = unit.facing or deployment.facing or deployment.options.facing
+
+	-- if the spawn is a table, pick one randomly now
+	if scartype(spawn) == ST_TABLE then	
+		spawn = Table_GetRandomItem(spawn)
+		unit.spawn = spawn		-- write this back onto the unit, as it will be used again later (and we need to ensure we pick the same one!)
+	end 	
+
+	if (scartype(spawn) == ST_SGROUP and SGroup_CountSpawned(spawn) == 0) or				-- if the location is a EGroup/SGroup, check if that group is empty
+	   (scartype(spawn) == ST_EGROUP and EGroup_CountSpawned(spawn) == 0) then
+		spawn = unit.backupSpawn or deployment.options.backupSpawn							-- and if so, replace it with a backupSpawn location if there is one
+	end
+	
+	-- check if a marker is getting referenced by name
+	if scartype(spawn) == ST_STRING then
+		if Marker_Exists(spawn, "") then
+			spawn = Marker_FromName(spawn, "")
+		else
+			print("UnitEntry: Unit specified a spawn marker with the name "..spawn.." but it could not be found")
+			spawn = nil
+		end
+	end
+
+	if scartype(spawn) == ST_SGROUP then
+		spawn = SGroup_GetPosition(spawn)
+		if facing == nil then 
+			facing = spawn
+		end
+	elseif scartype(spawn) == ST_EGROUP then
+		spawn = EGroup_GetPosition(spawn)
+		if facing == nil then 
+			facing = spawn
+		end
+	elseif scartype(spawn) == ST_SCARPOS then
+		if facing == nil then 
+			facing = spawn
+		end
+	elseif scartype(spawn) == ST_MARKER then
+		if facing == nil then 
+			local dir = Marker_GetDirection(spawn)
+			facing = Marker_GetPosition(spawn)
+			facing.x = facing.x + (dir.x * 100)
+			facing.y = facing.y + (dir.y * 100)
+			facing.z = facing.z + (dir.z * 100)	
+		end
+		spawn = Marker_GetPosition(spawn)
+	else
+		local a = 2
+		fatal("UnitEntry_CreateUnit: invalid spawn location type " .. scartype_tostring(spawn))
+	end
+	
+	-- if a dynamic spawn position is requested, calculate that now
+	local dynamicSpawnType = unit.dynamicSpawnType or deployment.options.dynamicSpawnType 
+	local destination = unit.destination or deployment.options.destination 
+	
+	if dynamicSpawnType ~= nil and destination ~= nil then
+	
+		-- if the table is a "dynamic spawn", resolve the position
+		if dynamicSpawnType == DST_FURTHEST_HIDDEN then
+			spawn = Util_FindHiddenSpawn(Util_GetPosition(spawn), Util_GetPosition(destination), true)
+		elseif unit.dynamicSpawnType == DST_FURTHEST_VISIBLE then
+			spawn = Util_FindVisibleSpawn(Util_GetPosition(spawn), Util_GetPosition(destination), true)
+		elseif unit.dynamicSpawnType == DST_CLOSEST_HIDDEN then
+			spawn = Util_FindHiddenSpawn(Util_GetPosition(spawn), Util_GetPosition(destination), false)
+		elseif unit.dynamicSpawnType == DST_CLOSEST_VISIBLE then
+			spawn = Util_FindVisibleSpawn(Util_GetPosition(spawn), Util_GetPosition(destination), false)
+		end
+		
+		facing = Util_GetPosition(destination)
+		
+			
+	end
+
+	unit.spawn = spawn		-- write this back onto the unit, as it will be used again later (and we need to ensure we pick the same one!)
+	unit.facing = facing
+
+	return spawn, facing
+	
+end
+
+
+
+function UnitEntry_CancelDeployment(deployment)
+
+	for index, unit in pairs(deployment.units) do 
+		
+		-- delete the unit that was created if it hasn't been spawned yet
+		if unit.spawned ~= true then
+			if Squad_IsValid(unit.squadWorldID) then
+				Squad_Destroy(unit.squadID)
+			end
+		end
+		
+		-- special callback for the encounter system	- for the entire deployment
+		if deployment.options.encounterSystemData ~= nil then
+			
+			local data = deployment.options.encounterSystemData
+			
+			for index = #data.enc.inProcessSpawns, 1, -1 do 
+				if data.enc.inProcessSpawns[index] == value then 
+					table.remove(data.enc.inProcessSpawns, index)
+				end 
+			end
+		end		
+		
+	end
+
+	deployment.cancelled = true
+
+end
+
+
+function UnitEntry_RemoveDeploymentFromInProgressList(deployment)
+
+	for index = #t_UnitEntry_DeploymentsInProgress, 1, -1 do
+	
+		if t_UnitEntry_DeploymentsInProgress[index] == deployment then
+			table.remove(t_UnitEntry_DeploymentsInProgress, index)
+		end
+		
+	end
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+--
+-- Initialization (called from the Core.scar file)
+--
+
+function UnitEntry_Init()
+
+	--
+	-- initialize some variables
+	--
+
+	t_UnitEntry_DeploymentsInProgress = {}		-- this holds all the deployments that are currently in progress (so they can all be tracked and/or completed immediately)
+	sg_UnitEntry_TempSGroup = SGroup_CreateIfNotFound("sg_unitEntryTempSGroup")
+	eg_UnitEntry_EmptyIgnoreGroup = EGroup_CreateIfNotFound("eg_UnitEntry_EmptyIgnoreGroup")
+	
+
+	--
+	-- Standard unit entry methods
+	--
+
+	UNITENTRY = {}	-- create the table that all the spawn methods are housed in
+
+	UNITENTRY.Default = {		-- default spawn method, units use their default fx and stuff from the motion tree
+		spawnType = "",
+	}
+	
+	
+	UNITENTRY.None = {			-- units use nothing, not event their default fx
+		spawnType = "none",
+	}
+
+	UNITENTRY.CreateButDontSpawn = {
+		spawnType = "",
+		createButDontSpawn = true,
+	}
+	
+	
+	--
+	-- Call modules for other unit entry methods (i.e. project-specific)
+	--
+	
+	Core_CallDelegateFunctions("UnitEntry_RegisterEntryMethods")	-- Note: Delegates should ADD their items to the UNITENTRY table, rather than re-declare it
+
+	
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

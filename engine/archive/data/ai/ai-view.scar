@@ -1,0 +1,13 @@
+import( 'utility/dbview.scar' )
+
+-- EDIT THIS FILTER TO PRUNE THE MENU
+function filter( k,v) 
+	--return true
+	return (string.find(k,"s_squad")==1)
+end
+
+mainmenu = _G
+	
+-- setup the menu system
+initmenu( mainmenu, filter )
+enable_menu(1)

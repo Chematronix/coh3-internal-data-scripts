@@ -1,0 +1,1337 @@
+--? @group scardoc;Encounter
+
+--? @shortdesc Callback helper function for triggering an Encounter goal. Name of parameters: 'encounter'.
+--? @extdesc Invokes Encounter:TriggerGoal() for data.encounter
+--? @extdesc Example usage: Event_*(EventHandler_TriggerEncounterGoal, {encounter = <myEncounter>}, ...)
+--? @args Table data
+function EventHandler_TriggerEncounterGoal(data, relocationData)
+	data.encounter:TriggerGoal(data, relocationData)
+end
+
+--? @shortdesc Callback helper function for relocate an Encounter goal. Name of parameters: 'encounter'.
+--? @extdesc Example usage: Event_*(EventHandler_ResetGoalRelocation, {encounter = <myEncounter>}, ...)
+--? @args Table data
+function EventHandler_RelocateGoal(data, relocationData)
+	data.encounter:RelocateGoal(data, relocationData)
+end
+
+--? @shortdesc Callback helper function for relocate  an Encounter goal to the original location. Name of parameters: 'encounter'.
+--? @extdesc Example usage: Event_*(EventHandler_ResetGoalRelocation, {encounter = <myEncounter>}, ...)
+--? @args Table data
+function EventHandler_ResetGoalRelocation(data)
+	data.encounter:ResetGoalRelocation()
+end
+
+-- encounter class template
+Encounter = {}
+
+Encounter.units = {}
+Encounter.data = {}
+Encounter.goal = nil
+Encounter.sgroup = nil
+Encounter.egroupNearbyAllies = nil -- contains the nearby allied entities (not belonging to a squad). This EGroup is created only if the goal trigger condition is OnEngage or OnAttacked or if Encounter:UpdateNearbyAllies() is called 
+Encounter.spawned = false -- This is a general encounter variable controlling whether the Encounter can have it's Spawn() function called or not.
+Encounter.enabled = false
+Encounter.wasKilled = false --If the encounter had been already spawned and was killed.
+Encounter.storedGoalData = nil
+Encounter.inProcessSpawns = {} -- This table stores the indexes of all deploys that are currently in progress as part of this encounter.
+
+
+--? @shortdesc Create a new encounter from encounter data. If spawnNow is true, spawns specified units immediately.
+--? @extdesc See: http://relicwiki/display/REL/Ai+Encounters
+--? @args EncounterData data[, Bool spawnNow, Bool/Int spawnStaggered]
+--? @result Encounter
+function Encounter:Create(data, spawnNow, spawnStaggered)
+	
+	__AI_encounterCounter = __AI_encounterCounter + 1
+	
+	local encounter = Clone(self)
+	if(spawnNow == nil) then spawnNow = true end
+	
+	-- This is so that spawnStaggered can either be a bool or a number
+	-- If it's a bool (true = default of 1.5 & false = 0)
+	-- If it's a number then it just uses the number directly
+	-- The first condition also checks for null
+	if(not spawnStaggered) then 
+		spawnStaggered = 0 
+	elseif scartype(spawnStaggered) == ST_BOOLEAN then
+		if spawnStaggered == true then
+			spawnStaggered = 1.5
+		else
+			spawnStaggered = 0
+		end
+	end
+	
+	--setup encounter data
+	encounter.data = Clone(data)
+	encounter.data.name = "enc" .. __AI_encounterCounter .. "_" .. (data.name or "encounter" .. (AI_GetNumEncounters()+1))
+	if(encounter.data.player == nil) then encounter.data.player = __defaultEnemyPlayer end
+	encounter.sgroup = SGroup_Create(encounter.data.name)
+	encounter.data.triggerGoalDelay = encounter.data.triggerGoalDelay or 0
+
+	
+	Ai:Print("**** Creating encounter: " .. encounter.data.name .. " ****")
+	
+	--The encounter needs to have either units, or an intent (predefined units)
+	if(data.units == nil and data.intent == nil) then
+		fatal("No units or intent defined for encounter " .. encounter.data.name)
+	end
+	
+	--If the encounter has an intent, add them to the units list
+	if(data.intent ~= nil) then
+		data.units = data.units or {}
+		
+		local intent = data.intent[World_GetRand(1, #data.intent)]
+		
+		for k,v in pairs(intent) do
+			table.insert(data.units, v)
+		end
+	end
+	
+	--Create each of the units based on data
+	--Debug: Performance debugging. '-enc_percsquads <X>' determines the fraction of squads to add per encounter. eg. x=0.5 spawns only half.
+	local maxNumSquads = #data.units
+	if(Misc_IsCommandLineOptionSet("enc_percsquads")) then
+		maxNumSquads = math.ceil(tonumber(Misc_GetCommandLineString("enc_percsquads")) * #data.units)
+	end
+	
+	for k=1, maxNumSquads do
+		encounter:AddUnit(data.units[k])
+	end
+	
+	if(spawnNow) then
+		encounter:Spawn(spawnStaggered)
+	end
+	
+	return encounter
+end
+
+--? @shortdesc Create a new encounter with a generic FormationAttack goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, Marker/INT encRange, Marker/INT encLeash]
+--? @result Encounter
+function Encounter:CreateFormationAttack(encName, encUnits, spawnLoc, encTarget, dynamicSpawn, encRange, encLeash)
+	--Create and spawn
+	local attackEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--Attack goal
+	local goalData = {
+		name = GOAL_FORMATION_ATTACK,
+		target = encTarget or spawnLoc,
+		range = encRange,
+		leashRange = encLeash,
+		maxIdleTime = -1,
+	}
+	attackEnc:SetGoal(goalData)
+	
+	return attackEnc
+end
+
+
+--? @shortdesc Create a new encounter with a generic FormationAttack goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, Marker/INT encRange, Marker/INT encLeash]
+--? @result Encounter
+function Encounter:CreateFormationDefendArea(encName, encUnits, spawnLoc, encTarget, dynamicSpawn, encRange, encLeash)
+	--Create and spawn
+	local defendEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--Attack goal
+	local goalData = {
+		name = GOAL_FORMATION_DEFEND,
+		target = encTarget or spawnLoc,
+		range = encRange,
+		leashRange = encLeash,
+		maxIdleTime = -1,
+	}
+	defendEnc:SetGoal(goalData)
+	
+	return defendEnc
+end
+
+--? @shortdesc Create a new encounter with a generic Attack goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, Marker/INT encRange, Marker/INT encLeash]
+--? @result Encounter
+function Encounter:CreateAttack(encName, encUnits, spawnLoc, encTarget, dynamicSpawn, encRange, encLeash)
+	--Create and spawn
+	local attackEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--Attack goal
+	local goalData = {
+		name = GOAL_ATTACK,
+		target = encTarget or spawnLoc,
+		range = encRange,
+		leashRange = encLeash,
+		maxIdleTime = -1,
+	}
+	attackEnc:SetGoal(goalData)
+	
+	return attackEnc
+end
+
+--? @shortdesc Create a new encounter with a generic Defend goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, Marker/INT encRange, Marker/INT encLeash]
+--? @result Encounter
+function Encounter:CreateDefend(encName, encUnits, spawnLoc, encTarget, dynamicSpawn, encRange, encLeash)
+	--Create and spawn
+	local defendEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--Defend goal
+	local goalData = {
+		name = GOAL_DEFEND,
+		target = encTarget or spawnLoc,
+		range = encRange,
+		leashRange = encLeash,
+		maxIdleTime = -1,
+	}
+	defendEnc:SetGoal(goalData)
+	
+	return defendEnc
+end
+
+--? @shortdesc Create a new encounter with a generic Patrol goal. 
+--? @extdesc pathLoop can be: LOOP_NONE, LOOP_NORMAL, LOOP_TOGGLE_DIRECTION
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, Marker/String encPath[, Marker/Pos dynamicSpawn, INT pathWait, INT pathLoop]
+--? @result Encounter
+function Encounter:CreatePatrol(encName, encUnits, spawnLoc, encPath, dynamicSpawn, pathWait, pathLoop)
+	--Create and spawn
+	local patrolEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	if(encPath == nil) then encPath = spawnLoc end
+	
+	--Patrol goal (defend with patrol parameters)
+	local goalData = {
+		name = GOAL_DEFEND,
+		target = spawnLoc,
+		patrolParams = {
+			marker = nil,
+			path = nil,
+			wait = pathWait,
+			loop = pathLoop,
+			invertPathAtEnd = false,
+			startFromClosestWP = false,
+		},
+		maxIdleTime = -1,
+	}
+	
+	if(scartype(encPath) == ST_MARKER or scartype(encPath) == ST_SCARPOS) then
+		goalData.patrolParams.marker = encPath
+	elseif(scartype(encPath) == ST_STRING) then
+		goalData.patrolParams.path = encPath
+	else
+		fatal("Invalid parameter for patrol. Must be marker or waypoints (string)")
+	end
+	
+	patrolEnc:SetGoal(goalData)
+	
+	return patrolEnc
+end
+
+--? @shortdesc Create a new encounter with a generic Move goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, INT moveRange]
+--? @result Encounter
+function Encounter:CreateMove(encName, encUnits, spawnLoc, encTarget, dynamicSpawn, moveRange)
+	--Create and spawn
+	local moveEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--Move goal
+	local goalData = {
+		name = GOAL_MOVE,
+		target = encTarget or spawnLoc,
+		range = moveRange,
+		maxIdleTime = -1,
+	}
+	moveEnc:SetGoal(goalData)
+	
+	return moveEnc
+end
+
+--? @shortdesc Create a new encounter with a generic Ability goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, INT moveRange]
+--? @result Encounter
+function Encounter:CreateAbility(encName, encUnits, spawnLoc, targetAbility, encTarget, dynamicSpawn)
+	--Create and spawn
+	local abilityEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--Ability goal
+	local goalData = {
+		name = GOAL_ABILITY,
+		target = encTarget or spawnLoc,
+		maxIdleTime = -1,
+		abilityParams = {
+			abilityPBG = targetAbility,
+		},
+	}
+	abilityEnc:SetGoal(goalData)
+	
+	return abilityEnc
+end
+
+--? @shortdesc Create a new encounter with a generic TownLife goal.
+--? @args String name, SBP/Table encUnits, Marker/Pos spawnLoc, EGroup/SGeoup/Marker/Pos encTarget[, Marker/Pos dynamicSpawn, INT townLifeRange]
+--? @result Encounter
+function Encounter:CreateTownLife(encName, encUnits, spawnLoc, encTarget, dynamicSpawn, townLifeRange)
+	--Create and spawn
+	local townLifeEnc = Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	
+	--TownLife goal
+	local goalData = {
+		name = GOAL_TOWNLIFE,
+		target = encTarget or spawnLoc,
+		range = townLifeRange,
+		maxIdleTime = -1,
+	}
+	townLifeEnc:SetGoal(goalData)
+	
+	return townLifeEnc
+end
+
+--? @shortdesc Create a new basic encounter.
+--? @args String name, Marker/Pos spawnLoc, SBP/Table encUnits[, Marker/Pos dynamicSpawn]
+--? @result Encounter
+function Encounter:CreateBasic(encName, spawnLoc, encUnits, dynamicSpawn)
+	local encData = {
+		name = encName,
+		spawn = spawnLoc,
+		dynamicSpawnTarget = dynamicSpawn,
+		dynamicSpawnHidden = dynamicSpawnHidden or true,
+	}
+	
+	if(scartype(encUnits) == ST_PBG) then
+		encData.units = {encUnits}
+	elseif(scartype(encUnits) == ST_TABLE) then
+		encData.units = encUnits
+	end
+	
+	return Encounter:Create(encData)
+end
+
+--? @shortdesc Create a new encounter from an SGroup, with default encounter data
+--? @extdesc Encounter player is derived from sgroup; all squads in sgroup must be owned by same player.
+--? @args SGroup squadgroup 
+--? @result Encounter
+function Encounter:ConvertSGroup(squadgroup)
+	
+	if(SGroup_CountSpawned(squadgroup) + SGroup_CountDeSpawned(squadgroup) > 0) then
+		local encData = {
+			name = "converted_" .. (AI_GetNumEncounters() + 1),
+			player = Squad_GetPlayerOwner(SGroup_GetSpawnedSquadAt(squadgroup, 1)),
+			units = {}
+		}
+		for i=1, SGroup_CountSpawned(squadgroup) do
+			table.insert(encData.units, Squad_GetBlueprint( SGroup_GetSpawnedSquadAt(squadgroup, i) ))
+		end
+		
+		local enc = Encounter:Create(encData, false)
+		enc.spawned = true
+		enc.enabled = true
+		Ai:AddEncounter(enc)
+		if enc.sgroup ~= nil then
+			SGroup_AddGroup(enc.sgroup, squadgroup)
+		else
+			enc.sgroup = squadgroup
+		end
+		
+		for i,unit in ipairs(enc.units) do
+			unit.sgroup = SGroup_CreateUnique()
+			SGroup_Add(unit.sgroup, SGroup_GetSpawnedSquadAt(squadgroup, i))
+		end
+		
+		--Define a spawn point in case it needs to be re-spawned
+		enc.data.spawn = SGroup_GetPosition(enc.sgroup)
+		
+		--Make sure that all squads are designer locked immediately
+		if AI_IsLocalAIPlayer(enc.data.player) then
+			AI_LockSquads(enc.data.player, enc.sgroup)
+		end
+		
+		Ai:Print("**** Finished creating encounter from sgroup ****")
+		
+		return enc
+	else
+		fatal("Unable to convert sgroup into encounter. Sgroup is empty (" .. SGroup_GetName(squadgroup) .. ")")
+	end
+	
+	return nil
+end
+
+--Encounter update logic
+function Encounter:Update()
+	
+	-- Run through units and update them (remove them from the encounter if they're now dead)
+	for k=#self.units, 1, -1 do
+		local unit = self.units[k]
+	
+		if(unit.sgroup and SGroup_CountSpawned(unit.sgroup) + SGroup_CountDeSpawned(unit.sgroup) == 0) then
+			Ai:Print("Unit '" .. unit.data.name .. "' is dead. Removing from encounter '" .. self.data.name .. "'...")
+			
+			if(unit.data.onDeath ~= nil) then 
+				unit.data.onDeath(unit)
+			end
+			table.remove(self.units, k)
+		end
+	end
+	
+	-- Check if the encounter is still alive. If not, kill it
+	if(not self:IsAlive() and not self.wasKilled) then
+		Ai:Print("Encounter '" .. self.data.name .. "' has been killed.")
+		self.spawned = false
+		self.enabled = false
+		self.wasKilled = true
+		if(self.goalTrigger) then 
+			Rule_RemoveWithID(self.goalTrigger) 
+			self.goalTrigger = nil
+		end
+		if(self.data.onDeath) then self.data.onDeath(self) end
+	end
+end
+
+-- Spawn callback used in the case of delayed / staggered spawns
+-- Calls PostSpawn() only if all the encounters units are spawned
+function UpdateSpawnCount(enc, squadSpawned)
+	
+	-- This line might not be needed
+	SGroup_Add(enc.sgroup, squadSpawned)
+
+	-- Post spawn can run multiple times, because of staggered spawns of the initial encounter
+	if enc.IsAlive(enc) then
+		enc.PostSpawn(enc)
+	end
+end
+
+--? @shortdesc Spawns the units within an. Does nothing if the encounter has already been spawned.
+--? @args Bool spawnStaggered
+function Encounter:Spawn(spawnStaggered)
+
+	--Don't do anything if the encounter is already spawned
+	if(self.spawned) then return end
+	
+	if(spawnStaggered == nil) then spawnStaggered = 0 end
+	
+	-- getting a squadlist from each unit for use in the UnitEntry_DeploySquads function
+	local squadList = {}
+	for k,unit in pairs(self.units) do
+		table.insert(squadList, unit:SpawnTable())
+	end
+	
+	if #squadList <= 0 then
+		return
+	end
+	
+	-- callback to the encounter system in case of delayed spawns
+	local encounterSystemData = {
+		func = UpdateSpawnCount,
+		enc = self,
+	}
+	
+	-- SGroups to add this deployment to
+	local sgroups = {self.sgroup, self.data.sgroup, self.data.sgroups}
+	
+	-- Start the deployment of units
+	local deployment = UnitEntry_DeploySquads(self.data.player, sgroups, squadList, self.data.spawn, self.data.spawnType, spawnStaggered, {encounterSystemData = encounterSystemData})
+
+	table.insert(self.inProcessSpawns, deployment)
+end
+
+-- Processes the encounter after all units have been spawned
+function Encounter:PostSpawn()
+
+	-- for each unit in the encounter
+	for k,unit in pairs(self.units) do
+		
+		if (AI_IsLocalAIPlayer(self.data.player)) then
+			AI_LockSquads( self.data.player, unit.sgroup )
+		end
+		
+		SGroup_AddGroup(self.sgroup, unit.sgroup)
+	end	
+	
+	--Update resource guidance for the goal
+	self:UpdateResourceGuidance()
+	
+	-- setting flags
+	if (not self.spawned) then
+		Ai:Print("Encounter spawned: " .. self.data.name)
+		self.spawned = true
+		self.enabled = true
+		self.wasKilled = false
+		-- add the encounter to the AI
+		Ai:AddEncounter(self)
+		Ai:Print("**** Added encounter ****")
+	end
+	
+	-- check for triggerOnSight/Engaged events.
+	if(self.data.goal) then
+		
+		if self.data.startGoalInIdle ~= false then
+			self:SetGoal(self.data.goal, false)
+		end
+		
+		if SGroup_IsEmpty(self:GetSGroup()) == false then
+			InitGoalTrigger(self)
+		elseif self.data.startGoalInIdle ~= false then
+			self:TriggerGoal()
+		end
+	end
+
+	-- trigger a spawn callback if necessary
+	if(self.data.onSpawn) then self.data.onSpawn(self) end
+end
+
+function Encounter:TriggerGoalOnSight(secondaryTriggerGoalOnAttacked)
+
+	self.data.triggerGoalOnSight = true 
+	self.data.triggerGoalOnEngage = nil 
+	self.data.triggerGoalOnAttacked = nil
+	
+	self.data.secondaryTriggerGoalOnAttacked = secondaryTriggerGoalOnAttacked
+	
+	InitGoalTrigger(self)
+	
+end
+
+function Encounter:TriggerGoalOnEngage(secondaryTriggerGoalOnAttacked)
+
+	self.data.triggerGoalOnSight = nil
+	self.data.triggerGoalOnEngage = true 
+	self.data.triggerGoalOnAttacked = nil
+	
+	self.data.secondaryTriggerGoalOnAttacked = secondaryTriggerGoalOnAttacked
+	
+	InitGoalTrigger(self)
+	
+end
+
+function Encounter:TriggerGoalOnAttacked()
+
+	self.data.triggerGoalOnSight = nil
+	self.data.triggerGoalOnEngage = nil
+	self.data.triggerGoalOnAttacked = true 
+	
+	InitGoalTrigger(self)
+	
+end
+
+
+function InitGoalTrigger(enc)
+
+	if enc.data.triggerGoalOnSight then
+		if enc.goalTrigger ~= nil then
+			Rule_RemoveWithID(enc.goalTrigger)
+			enc.goalTrigger = nil
+		end
+		enc.goalTrigger = Event_EncounterCanSeePlayerSquads(EventHandler_TriggerEncounterGoal, {encounter = enc}, enc:GetSGroup(), World_GetPlayerAt(1), enc.data.triggerGoalDelay)
+	elseif enc.data.triggerGoalOnEngage then
+		enc:UpdateNearbyAllies()
+		if enc.goalTrigger ~= nil then
+			Rule_RemoveWithID(enc.goalTrigger)
+			enc.goalTrigger = nil
+		end
+		enc.goalTrigger = Event_IsEngaged(EventHandler_TriggerEncounterGoal, {encounter = enc}, enc:GetSGroup(), enc:GetEgroupNearbyAllies(), 3, enc.data.triggerGoalDelay)
+	elseif enc.data.triggerGoalOnAttacked then
+		enc:UpdateNearbyAllies()
+		if enc.goalTrigger ~= nil then
+			Rule_RemoveWithID(enc.goalTrigger)
+			enc.goalTrigger = nil
+		end
+		enc.goalTrigger = Event_IsUnderAttack(EventHandler_TriggerEncounterGoal, {encounter = enc}, enc:GetSGroup(), enc:GetEgroupNearbyAllies(), 5.0, (scartype(enc.data.triggerGoalOnAttacked) == ST_PLAYER and enc.data.triggerGoalOnAttacked or nil), enc.data.triggerGoalDelay)
+	elseif enc.data.triggerDeferred ~= true then
+		enc:TriggerGoal()
+	end
+	
+	if enc.data.triggerImmediately == nil and enc.data.triggerGoalOnAttacked == nil and enc.data.secondaryTriggerGoalOnAttacked == true then
+		enc:UpdateNearbyAllies()
+		if enc.secondaryGoalTrigger ~= nil then
+			Rule_RemoveWithID(enc.secondaryGoalTrigger)
+			enc.secondaryGoalTrigger = nil
+		end				
+		enc.secondaryGoalTrigger = Event_IsUnderAttack(EventHandler_TriggerEncounterGoal, {encounter = enc}, enc:GetSGroup(), enc:GetEgroupNearbyAllies(), 5.0, (scartype(enc.data.triggerGoalOnAttacked) == ST_PLAYER and enc.data.triggerGoalOnAttacked or nil), enc.data.triggerGoalDelay)
+	end
+	
+end
+
+-- If a unit is added to an encounter, this is the function used as a callback
+-- This is so that once the unit is spawned it can be processed the same way as the other encounter units
+function AddedUnitsPostSpawn(enc, squadSpawned)
+	
+	-- This line might not be needed
+	SGroup_Add(enc.sgroup, squadSpawned)
+	
+	-- for each unit in the encounter
+	for k,unit in pairs(enc.units) do
+		if (not unit.spawned) then
+		
+			if (AI_IsLocalAIPlayer(enc.data.player)) then
+				AI_LockSquads( enc.data.player, unit.sgroup )
+			end
+		
+			SGroup_AddGroup(enc.sgroup, unit.sgroup)
+		
+			if(enc.data.sgroups)then
+				for k,v in pairs(enc.data.sgroups) do 
+					SGroup_AddGroup(v, enc.sgroup)
+				end	
+			end
+		end
+	end	
+	
+	enc:UpdateResourceGuidance()
+	
+	-- setting flags
+	enc.spawned = true
+	enc.enabled = true
+	enc.wasKilled = false
+	
+	-- check for triggerOnSight/Engaged events.
+	if(enc:HasGoal() == false and enc.data.goal) then
+
+		if enc.data.startGoalInIdle ~= false then
+			enc:SetGoal(enc.data.goal, false)
+		end
+		
+		if SGroup_IsEmpty(enc:GetSGroup()) == false then
+			InitGoalTrigger(enc)
+		elseif enc.data.startGoalInIdle ~= false then
+			enc:TriggerGoal()
+		end
+	end
+	
+	enc:RebootIfNeeded()
+end
+
+--? @shortdesc Adds unit(s) to the encounter
+--? @extdesc See Encounter.scar for details
+--? unitData is a table that can either hold a single unit OR a set of unit tables
+--? The format of each individual unit table is the same as regular encounter unit tables
+--? spawnType is of type SPAWN.<>
+--? @args Table unitData, SPAWN spawnType
+--? @result Void
+function Encounter:AddUnits(unitData, spawnType, spawnStaggered)
+	
+	local combinedUnitTable = {}
+
+	if(not spawnStaggered) then 
+		spawnStaggered = 0 
+	elseif (spawnStaggered == true) then
+		spawnStaggered = 1.5	
+	end
+	
+	-- First we check to see if unitData is a single unit or multiple
+	if (unitData[1]) then
+		-- Implies that it's a table of units
+		 
+		for key, value in pairs(unitData) do
+			local unitTable = self:AddUnit(value)
+			
+			if unitTable ~= nil then
+				for key, value in pairs(unitTable) do
+					table.insert(combinedUnitTable, value)
+				end
+			end
+		end
+	else
+		-- Implies that it's a single unit
+		local unitTable = self:AddUnit(unitData)
+		
+		if unitTable ~= nil then
+			for key, value in pairs(unitTable) do
+				table.insert(combinedUnitTable, value)
+			end
+		end
+	end
+	
+	if (self.wasKilled) then
+		--Added a unit into an encounter that was previously killed. Needs to be added back into the encounter list.
+		self.spawned = true
+		self.wasKilled = false
+		self.enabled = true
+		Ai:AddEncounter(self)
+	end
+	
+	if(self.spawned) then
+		-- getting a squadlist from each unit for use in the UnitEntry_DeploySquads function
+		local squadList = {}
+		for k,unit in next, combinedUnitTable do
+			table.insert(squadList, unit:SpawnTable())
+		end
+		
+		-- callback to the encounter system in case of delayed spawns
+		local encounterSystemData = {
+			func = AddedUnitsPostSpawn,
+			enc = self,
+		}
+		
+		-- sgroups to add this deployment to
+		local sgroups = {self.sgroup, self.data.sgroup, self.data.sgroups}
+		
+		-- Start the deployment of units
+		local deployment = UnitEntry_DeploySquads(self.data.player, sgroups, squadList, self.data.spawn, spawnType, spawnStaggered, {encounterSystemData = encounterSystemData})
+		
+		table.insert(self.inProcessSpawns, deployment)
+	end
+end
+
+--Creates a new unit and returns it
+function Encounter:AddUnit(unitData)
+
+	local enc = self.data 
+
+	if scartype(unitData) == ST_PBG then
+		unitData = {sbp = unitData}	
+	end
+	if scartype(unitData) ~= ST_TABLE then
+		fatal("Invalid unit data for encounter " .. self.data.name)
+	end
+
+	--Check to see if the unit meets the requirements to be added
+	if (not AI_IsMatchingDifficulty(unitData.difficulty)) then
+		Ai:Print("Ignoring unit based on difficulty.")
+		return
+	end
+	
+	if(not _PassesConditions(unitData.conditions)) then
+		Ai:Print("Ignoring unit based on conditions.")
+		return
+	end		
+		
+	
+	----Handle unique spawning (single unit per spawn point)
+	--if newUnit.spawn == nil and self.data.uniqueSpawns and scartype(self.data.spawn) == ST_TABLE and #self.data.spawn > 1 then
+		--local i = World_GetRand(1, #self.data.spawn)
+		--newUnit.spawn = self.data.spawn[i]
+		--table.remove(self.data.spawn, i)
+	--end
+	
+	
+	--Handle numSquads parameter
+	local count = unitData.numSquads or 1		-- we're going to be multiplying out multi-squad entries, so make a local copy and then nil that value out 
+	unitData.numSquads = nil 
+
+	local name = unitData.name
+	
+	local unitTable = {}
+	
+	for i = 1, count do
+	
+		if name ~= nil then
+			unitData.name = name .. i 
+		end
+		
+		local unit = Unit:Create(unitData, self)
+		
+		table.insert(self.units, unit)
+		table.insert(unitTable, unit)
+		
+	end
+	
+	return unitTable
+	
+end
+
+
+--? @shortdesc Creates encounter goal from goal data; goals determine unit behaviours.
+--? @extdesc See: http://relicwiki/display/REL/Ai+Goal
+--? @args GoalData goalData, bool  triggerGoal (dafault:true), [HandleID previousEncounterID]
+--? @result Void
+function Encounter:SetGoal(goalData, triggerGoal, previousEncounterID)
+	-- clone before clear, so we can also accept our own goal.data 
+	if goalData ~= nil then
+		self.storedGoalData = Clone(goalData)
+	end
+	self:ClearGoal()
+	
+	if not self.enabled then
+		print("Encounter: " .. self.data.name .. " is disabled. Delaying goal: " .. self.storedGoalData.name)
+		return
+	end
+
+	Ai:Print("Encounter: " .. self.data.name .. " setting goal: " .. self.storedGoalData.name)
+	
+	if(self.storedGoalData.name == "Defend") then
+		self.goal = Ai.goals.DefendGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	elseif(self.storedGoalData.name == "Attack") then
+		self.goal = Ai.goals.AttackGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	elseif(self.storedGoalData.name == "Move") then
+		self.goal = Ai.goals.MoveGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	elseif(self.storedGoalData.name == "Ability") then
+		self.goal = Ai.goals.AbilityGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	elseif(self.storedGoalData.name == "FormationAttack") then
+		self.goal = Ai.goals.FormationAttackGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	elseif(self.storedGoalData.name == "FormationDefend") then
+		self.goal = Ai.goals.FormationDefendAreaGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	elseif(self.storedGoalData.name == "TownLife") then
+		self.goal = Ai.goals.TownLifeGoal:Create(self, self.storedGoalData, nil, nil, nil, previousEncounterID)
+	else
+		fatal("Invalid goal name (" .. self.storedGoalData.name .. ")")
+	end
+	
+	self.data.goal = goalData
+	
+	if triggerGoal == nil or triggerGoal == true then
+		self:TriggerGoal()
+	end
+	
+end
+
+--? @shortdesc Determines whether or not the encounter has an active and valid goal.
+--? @result Bool
+function Encounter:HasGoal()
+	return self.goal ~= nil and self.goal.internalAIEncounterPtr ~= nil and AIEncounter_IsValid(self.goal.internalAIEncounterPtr.AIPlayerID, self.goal.internalAIEncounterPtr.AIEncounterID)
+end
+
+function Encounter:HasGoalTriggered()
+	return self:HasGoal() and self.goal:HasGoalTriggered()
+end
+
+--? @shortdesc Clears the current goal.
+--? @result Void
+function Encounter:ClearGoal()
+	if(self.goal) then
+		if(self.goal.internalAIEncounterPtr ~= nil) then
+			local internalAIEncounterPtr = self.goal.internalAIEncounterPtr
+			self.goal.internalAIEncounterPtr = nil
+			if (AIEncounter_IsValid(internalAIEncounterPtr.AIPlayerID, internalAIEncounterPtr.AIEncounterID)) then
+				AIEncounter_Notify_ClearCallbacks(internalAIEncounterPtr)
+				AIEncounter_Cancel(internalAIEncounterPtr)
+			end
+		end
+		self.goal:OnCanceled()
+	end
+	
+	self.goal = nil
+	
+	--Remove any event triggers, if present.
+	if(self.goalTrigger) then
+		Rule_RemoveWithID(self.goalTrigger)
+		self.goalTrigger = nil
+	end
+	if(self.secondaryGoalTrigger) then
+		Rule_RemoveWithID(self.secondaryGoalTrigger)
+		self.secondaryGoalTrigger = nil
+	end
+	
+	if self.goalRelocationResetEvent then
+		Rule_RemoveWithID(self.goalRelocationResetEvent)
+		self.goalRelocationResetEvent = nil
+	end
+	
+end
+
+--? @shortdesc Removes an encounter's onSight/onEngage event and immediately starts its goal.
+--? @extdesc Only works if the encounter has both data.goal, and a valid goal trigger
+--? @result Void
+function Encounter:TriggerGoal(data, relocationData)
+	
+	if self.goal ~= nil then
+		
+		if self.goalTrigger then
+			Rule_RemoveWithID(self.goalTrigger)
+			self.goalTrigger = nil
+		end
+		if self.secondaryGoalTrigger then
+			Rule_RemoveWithID(self.secondaryGoalTrigger)
+			self.secondaryGoalTrigger = nil
+		end
+		
+		if self.goal.internalAIEncounterPtr ~= nil then
+			
+			self:RelocateGoal(data, relocationData)
+			self.goal:TriggerGoal()
+			
+		end
+		
+		-- Stop Idle Behaviours
+		_idleBehaviour_stop(self.units)
+		
+	elseif (self.data.goal) then		-- goal hasn't been set on the encounter yet (because it skipped the idle stage?)
+		
+		if self.goalTrigger then
+			Rule_RemoveWithID(self.goalTrigger)
+			self.goalTrigger = nil
+		end
+		if self.secondaryGoalTrigger then
+			Rule_RemoveWithID(self.secondaryGoalTrigger)
+			self.secondaryGoalTrigger = nil
+		end
+		
+		self:SetGoal(self.data.goal)
+		
+		-- Stop Idle Behaviours
+		_idleBehaviour_stop(self.units)
+		
+	end
+	
+end
+
+function Encounter:RelocateGoal(data, relocationData)
+	
+	if self.data.relocateGoalOnTrigger and relocationData ~= nil then
+
+		local relocation_position = nil
+		
+		if self.data.triggerGoalOnSight then
+			if relocationData.spottedSquad ~= nil then
+				relocation_position = Squad_GetPosition(relocationData.spottedSquad)
+			end
+		elseif self.data.triggerGoalOnEngage then
+			if relocationData.sg_AttackedSquads ~= nil and scartype(relocationData.sg_AttackedSquads) == ST_SGROUP and (not SGroup_IsEmpty(relocationData.sg_AttackedSquads)) then
+				relocation_position = SGroup_GetPosition(relocationData.sg_AttackedSquads)
+			elseif relocationData.attackingSquad ~= nil and scartype(relocationData.attackingSquad) == ST_SQUAD then
+				relocation_position = Squad_GetPosition(relocationData.attackingSquad)
+			elseif relocationData.eg_AttackedEntities ~= nil and scartype(relocationData.eg_AttackedEntities) == ST_EGROUP and (not EGroup_IsEmpty(relocationData.eg_AttackedEntities)) then
+				relocation_position = EGroup_GetPosition(relocationData.eg_AttackedEntities)
+			elseif relocationData.attackingEntity ~= nil and scartype(relocationData.attackingEntity) == ST_ENTITY then
+				relocation_position = Entity_GetPosition(relocationData.attackingEntity)
+			end
+		elseif self.data.triggerGoalOnAttacked then
+			if relocationData.attackingSquad ~= nil and scartype(relocationData.attackingSquad) == ST_SQUAD then
+				relocation_position = Squad_GetPosition(relocationData.attackingSquad)
+			elseif relocationData.attackingEntity ~= nil and scartype(relocationData.attackingEntity) == ST_ENTITY then
+				relocation_position = Entity_GetPosition(relocationData.attackingEntity)
+			end
+		end
+		
+		if relocation_position ~= nil then
+		
+			if self.data.relocateGoalTemporarily then
+				if SGroup_IsEmpty(self:GetSGroup()) == false then
+					self.goalRelocationResetEvent = Event_IsOutOfCombat(EventHandler_ResetGoalRelocation, {encounter = self}, self:GetSGroup(), 3,  5)
+				end
+			end
+			
+			self.goal:RelocateGoal(relocation_position)
+		end
+	end
+end
+
+--? @shortdesc Moves back the goal to the original location 
+--? @extdesc Only works if the goal was previously relocated after being triggered
+--? @result Void
+function Encounter:ResetGoalRelocation()
+	
+	if self.goalRelocationResetEvent then
+		Rule_RemoveWithID(self.goalRelocationResetEvent)
+	end
+	
+	self.goal:ResetGoalRelocation()
+	
+	if self.data.relocateGoalOnTrigger then
+		
+		if SGroup_IsEmpty(self:GetSGroup()) == false then
+			if self.data.triggerGoalOnSight then
+				if self.goalTrigger ~= nil then
+					Rule_RemoveWithID(self.goalTrigger)
+					self.goalTrigger = nil
+				end
+				self.goalTrigger = Event_EncounterCanSeePlayerSquads(EventHandler_RelocateGoal, {encounter = self}, self:GetSGroup(), player1, self.data.triggerGoalDelay)
+			elseif self.data.triggerGoalOnEngage then
+				self:UpdateNearbyAllies()
+				if self.goalTrigger ~= nil then
+					Rule_RemoveWithID(self.goalTrigger)
+					self.goalTrigger = nil
+				end
+				self.goalTrigger = Event_IsEngaged(EventHandler_RelocateGoal, {encounter = self}, self:GetSGroup(), self:GetEgroupNearbyAllies(), 3, self.data.triggerGoalDelay)
+			elseif self.data.triggerGoalOnAttacked then
+				self:UpdateNearbyAllies()
+				if self.goalTrigger ~= nil then
+					Rule_RemoveWithID(self.goalTrigger)
+					self.goalTrigger = nil
+				end
+				self.goalTrigger = Event_IsUnderAttack(EventHandler_RelocateGoal, {encounter = self}, self:GetSGroup(), self:GetEgroupNearbyAllies(), 5.0, (scartype(self.data.triggerGoalOnAttacked) == ST_PLAYER and self.data.triggerGoalOnAttacked or nil), self.data.triggerGoalDelay)
+			end
+		end
+	end
+end
+
+function Encounter_RestartGoal(enc, previousEncounterID, wasAlreadyTriggered)
+	if (enc.storedGoalData and Util_HasPosition(enc.storedGoalData.target) and (not enc:Goal_HasValidObjective()) and SGroup_IsAlive(enc.sgroup)) then
+		-- StoredGoalData will be used. Assuming self.goal.data is equivalent to self.storedGoalData.
+		enc:SetGoal(nil, wasAlreadyTriggered, previousEncounterID)
+		
+		InitGoalTrigger(enc)
+		
+		return true
+	end
+	return false
+end
+
+--? @shortdesc If encounter has a goal, but no currently running AI Encounter, restarts the goal.
+--? @extdesc Returns true if goal was restarted, false otherwise. If we pass a previousEncounterID, it restarts the
+--? encounter using that handle id. This is used for save / load
+--? @result Bool
+function Encounter:RestartGoal(previousEncounterID, wasAlreadyTriggered)
+	return Encounter_RestartGoal(self, previousEncounterID, wasAlreadyTriggered)
+end
+
+--? @shortdesc Sets the goal data for the encounter. If encounter has a goal with a running AI Encounter, updates the goal.
+--? @extdesc See: http://relicwiki/display/REL/Ai+Goal
+--? @extdesc Use GetGoalData() to get 
+--? @args GoalData goalData 
+--? @result Void
+function Encounter:UpdateGoal(goalData)
+	if goalData ~= nil then
+		self.storedGoalData = Clone(goalData)
+	end
+
+	if (self.storedGoalData and self:Goal_HasValidObjective()) then
+		self.goal:UpdateGoalData(self.storedGoalData)
+	end
+end
+
+--? @shortdesc Gets clone of current goal data.  May be nil.
+--? @result GoalData
+function Encounter:GetGoalData()
+	return Clone(self.storedGoalData)
+end
+
+--? @shortdesc Gets the encounter's sgroup. Caution: sgroup may be empty
+--? @result SGroup sgroup
+function Encounter:GetSGroup()
+	return self.sgroup
+end
+
+--? @shortdesc Gets the encounter's nearby allied Egroup. Caution: egroup may be empty. Automatically created whenever the Encounter triggers OnEngage or OnAttacked. To force the EGroup creation call Encounter:UpdateNearbyAllies()
+--? @result EGroup egroup
+function Encounter:GetEgroupNearbyAllies()
+	return self.egroupNearbyAllies
+end
+
+function Encounter:UpdateNearbyAllies()
+	-- always create the egroup... the event requires it to exist for c++ binding to be happy
+	if self.egroupNearbyAllies == nil then
+		self.egroupNearbyAllies = EGroup_Create(self.data.name .. "NearbyAllies")
+	else
+		EGroup_Clear(self.egroupNearbyAllies)	
+	end
+	
+	if self.data.goal == nil or 
+	self.data.goal.target == nil or 
+	(self.data.goal.range <= 0 and self.data.goal.leashRange <= 0) then
+		return
+	end
+	
+	local radius = self.data.goal.range
+	
+	if radius < self.data.goal.leashRange then
+		radius = self.data.goal.leashRange
+	end
+	
+	World_GetEntitiesNearPoint(self.data.player, self.egroupNearbyAllies, Util_GetPosition(self.data.goal.target), radius, OT_Ally)
+	
+end
+
+--? @shortdesc Starts encounter running (encounters are enabled by default) if it was disabled previously.
+--? @result Void
+function Encounter:Enable()
+	if self.enabled then return end
+	
+	if not self.spawned then fatal("Attempted to enable an encounter with no spawned squads") end
+
+	self.enabled = true
+	
+	--For skirmishAI
+	if(self.storedGoalData) then
+		Ai:Print("Enabling encounter " .. self.data.name)
+		self:SetGoal()
+	end
+end
+
+--? @shortdesc Stops running the encounter and clears the current goal.
+--? @result Void
+function Encounter:Disable()
+	if not self.enabled then return end
+	self.enabled = false
+	
+	--For skirmishAI
+	if(self.goal) then
+		Ai:Print("Disabling encounter " .. self.data.name)
+		-- self.storedGoalData expected to be equivalent to self.goal.data
+		self:ClearGoal()
+	end
+	
+	Cmd_Stop(self.sgroup)
+end
+
+--? @shortdesc After adding units to a pre-existing encounter it is sometimes necessary to reboot it, as it may have disabled itself if all it's units died. This function checks and does that safely.
+--? @result Void
+function Encounter:RebootIfNeeded()
+	if self:HasGoal() == false then
+		self:RestartGoal()
+	end
+	if self:IsEnabled() == false and SGroup_CountSpawned(self:GetSGroup()) >= 1 then
+		self:Enable()
+	end 
+end
+
+--? @shortdesc Removes all encounter units that belong to the given sgroup
+--? @result Void
+function Encounter:RemoveUnitsBySGroup(squadgroup)
+	for i = #self.units, 1, -1 do
+		local unit = self.units[i]
+		if(SGroup_ContainsSGroup(unit.sgroup, squadgroup, ANY)) then
+			self:RemoveUnit(i)
+		end
+	end
+end
+
+--? @shortdesc Find and removes a unit from an encounter based on the squad.
+--? @result Void
+function Encounter:RemoveUnitBySquad(squad)
+	for i = #self.units, 1, -1 do
+		local unit = self.units[i]
+		if SGroup_ContainsSquad(unit.sgroup, Squad_GetID(squad), false) then
+			self:RemoveUnit(i)
+		end
+	end
+end
+
+function Encounter:RemoveUnit(pos)
+	Ai:Print("Removed unit[" .. pos .. "]: " .. self.units[pos].data.name .. " from encounter: " .. self.data.name)
+	
+	SGroup_RemoveGroup(self.sgroup, self.units[pos].sgroup)
+	
+	table.remove(self.units, pos)
+	
+	self:UpdateResourceGuidance()
+	
+	--Remove the onDeath event, if any
+	if(#self.units == 0) then
+		self.data.onDeath = nil
+	end
+end
+
+--? @shortdesc Adds an sgroup to an encounter
+--? @result Void
+function Encounter:AddSGroup(squadgroup, name, onDeath)
+	if(name == nil) then name = "addedSGroup_" .. (#self.units+1) end
+
+	if (not self:IsAlive()) then
+		self.spawned = true
+		self.enabled = true
+		self.wasKilled = false
+		Ai:AddEncounter(self)
+	end
+
+	for i=1, SGroup_CountSpawned(squadgroup) do
+		local unitData = {}
+		unitData.name = name
+		unitData.sbp = Squad_GetBlueprint( SGroup_GetSpawnedSquadAt(squadgroup, i) )
+		
+		local unit = Unit:Create(unitData, self)
+		unit.sgroup = SGroup_CreateUnique()
+		SGroup_Add(unit.sgroup, SGroup_GetSpawnedSquadAt(squadgroup, i))
+		
+		if(onDeath ~= nil) then unit:SetOnDeath(onDeath) end		
+		
+		table.insert(self.units, unit)
+		SGroup_AddGroup(self.sgroup, unit.sgroup)
+	end
+	
+	self:UpdateResourceGuidance()
+end
+
+
+--? @shortdesc Forces the encounter to spawn its units instantly
+--? @result Void
+function Encounter:CompleteDeployImmediately()
+	for key, deployIndex in next, self.inProcessSpawns do
+		UnitEntry_CompleteImmediately(deployIndex)
+	end
+end
+
+--Returns whether or not this encounter is currently enabled in the update loop
+function Encounter:IsEnabled()
+	return self.enabled
+end
+
+--Returns whether or not the encounter is alive
+function Encounter:IsAlive()
+	return self.sgroup and SGroup_CountSpawned(self.sgroup) + SGroup_CountDeSpawned(self.sgroup) > 0
+end
+
+
+--? @shortdesc Clears the encounter's onDeath callback. If includeUnits is set to true, it clears onDeath callbacks for units as well.
+--? @args Bool includeUnits
+--? @result Void
+function Encounter:RemoveOnDeath(includeUnits)
+	self.data.onDeath = nil
+	
+	if(includeUnits) then
+		for k,unit in pairs(self.units) do
+			unit:SetOnDeath(nil)
+		end
+	end
+end
+
+--? @shortdesc Sets a new onDeath callback for the encounter
+--? @args ScarFn func 
+--? @result Void
+function Encounter:SetOnDeath(func)
+	self.data.onDeath = func
+end
+
+
+
+--[[
+-- Encounter: private functions
+]]--
+
+function Encounter_OnLoadRestart(enc)
+	assert(enc ~= nil, "Invalid nil encounter")
+	assert(enc.data ~= nil, "Encounter missing data, can't reload.")
+	
+	if (AI_IsLocalAIPlayer(enc.data.player)) then
+		if (enc.sgroup ~= nil) then
+			AI_LockSquads(enc.data.player, enc.sgroup)
+		end
+	end
+	
+	if (enc.goal == nil) then
+		return -- Encounter didn't have goal, nothing to do
+	end
+	
+	local hadObjective = enc.goal.internalAIEncounterPtr ~= nil
+	local wasAlreadyTriggered = enc.goal.hasTriggered
+	local previousEncounterID = nil
+	if hadObjective then
+		previousEncounterID = enc.goal.internalAIEncounterPtr.AIEncounterID
+	end
+	
+	-- IMPORTANT: on load, internalAIEncounterPtr may refer to handles that no longer exist, so we *MUST* clear them.
+	enc.goal.internalAIEncounterPtr = nil
+
+	if (hadObjective and enc.enabled and enc:IsAlive()) then
+		Ai:Print("RESTARTED ENCOUNTER:"..tostring(enc.data.name))
+		Encounter_RestartGoal(enc, previousEncounterID, wasAlreadyTriggered)
+	else
+		Ai:Print("Found Inactive Encounter (did nothing):"..tostring(enc.data.name))
+	end
+end
+
+function Encounter:__OnAIMigrated(player)
+	assert(self ~= nil, "Invalid nil encounter")
+	assert(self.data ~= nil, "Encounter missing data, can't migrate.")
+	assert(self.data.player ~= nil, "Encounter missing player, can't migrate.")
+	
+	if (self.data.player ~= player) then
+		return -- Encounter player didn't migrate, nothing to do
+	end
+	
+	if (AI_IsLocalAIPlayer(self.data.player)) then
+		if (self.sgroup ~= nil) then
+			AI_LockSquads(self.data.player, self.sgroup)
+		end
+	else
+		-- IMPORTANT: if AI isn't enabled on this machine now, internalAIEncounterPtr might refer to handles that no longer exist, so we *MUST* clear them.
+		self.goal.internalAIEncounterPtr = nil
+	end
+
+	-- need to restart goal (if there is one) to enable AI Encounter on machine with AI
+	if (self.enabled and self:IsAlive()) then
+		Ai:Print("RESTARTED ENCOUNTER:"..tostring(self.data.name))
+		self:RestartGoal()
+	else
+		Ai:Print("Found Inactive Encounter (did nothing):"..tostring(self.data.name))
+	end
+end
+
+
+--[[
+-- Encounter:Goal_* guidance functions
+]]--
+
+--? @shortdesc Set the goal's OnSuccess callback.
+--? @result Void
+function Encounter:SetGoalOnSuccess(func)
+	if(not (scartype(func) == ST_FUNCTION or scartype(func) == ST_NIL)) then
+		fatal("Attempted to set an invalid type on a Goal's OnSuccess callback (" .. scartype_tostring(func) .. ")")
+	elseif(self.goal) then
+		self.goal.data.onSuccess = func
+	end
+end
+
+--? @shortdesc Set the goal's OnFailure callback.
+--? @result Void
+function Encounter:SetGoalOnFailure(func)
+	if(not (scartype(func) == ST_FUNCTION or scartype(func) == ST_NIL)) then
+		fatal("Attempted to set an invalid type on a Goal's OnFailure callback (" .. scartype_tostring(func) .. ")")
+	elseif(self.goal) then
+		self.goal.data.onFailure = func
+	end
+end
+
+--Updates what resources the ai_goal can work with.
+function Encounter:UpdateResourceGuidance()
+	if (self.goal ~= nil and self.goal.internalAIEncounterPtr ~= nil) then
+		if (AIEncounter_IsValid(self.goal.internalAIEncounterPtr.AIPlayerID, self.goal.internalAIEncounterPtr.AIEncounterID)) then
+			if(AIEncounter_IsAIPlayerValid(self.goal.internalAIEncounterPtr)) then
+				self.goal:UpdateResourceGuidance()
+			end
+		else
+			self.goal.internalAIEncounterPtr = nil
+		end
+	end
+end
+
+
+--Returns True if all the conditions in the conditionList are true.
+function _PassesConditions(conditionList)
+	if(conditionList == nil) then
+		return true
+	else
+		if(scartype(conditionList) ~= ST_TABLE) then
+			conditionList = {conditionList}
+		end
+		
+		for k,condition in pairs(conditionList) do
+			if(scartype(condition) == ST_BOOLEAN and condition == false) then
+				return false
+			elseif(scartype(condition) == ST_FUNCTION and condition() ~= true) then
+				return false
+			end
+		end
+		return true
+	end
+end
+
+-- Determine if encounter has a valid goal and AI Encounter; returns true if goal and  AI Encounter are valid, false otherwise.
+function Encounter:Goal_HasValidObjective()
+	return (self.goal ~= nil and self.goal.internalAIEncounterPtr ~= nil and AIEncounter_IsValid(self.goal.internalAIEncounterPtr.AIPlayerID, self.goal.internalAIEncounterPtr.AIEncounterID))
+end
+
+
+
+function Encounter:SetSpawnLocation(new_location)
+	self.data.spawn = new_location
+end
+
+
+
+
+------------------------------------------------
+-- DEBUG
+------------------------------------------------
+--Debug. Kills half of the enemy entities in all encounters belonging to 'player'.
+function Encounter_KillHalf(player)
+	for k,enc in pairs(AI_GetActiveEncounters()) do
+		if enc.data.player == player then
+			for i,unit in pairs(enc.units) do
+				if(SGroup_CountSpawned(unit.sgroup) > 0) then
+					local count = SGroup_TotalMembersCount(unit.sgroup, true)
+					local targetCount = math.floor(count/2)
+					
+					local squad = SGroup_GetSpawnedSquadAt(unit.sgroup,1)
+					for j=count-1, 0, -1 do
+						if count > targetCount then
+							local entity = Squad_EntityAt(squad, j)
+							if Entity_IsOfType(entity, "infantry") then
+								Entity_Kill(entity)
+								count = count-1
+							end
+						else
+							break
+						end
+					end				
+				end
+			end
+		end
+	end
+end

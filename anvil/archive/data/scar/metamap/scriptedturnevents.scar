@@ -1,0 +1,18 @@
+-----------------------------------------------------------------------
+--
+--  Scripted Turn Events
+--
+-- (c) Relic Entertainment 2020
+--
+--  Supports running scripted actions during a scripted phase of player turns on the turn based campaign metamap.
+--  This gives a separation of when scripted actions vs player and AI actions should occur.
+--
+-----------------------------------------------------------------------
+
+Core_RegisterModule("ScriptedTurnEvents")
+
+function ScriptedTurnEvents_Start()
+	if World_IsSetupTurnPhase() then
+		World_EndSetupTurnPhase()
+	end
+end

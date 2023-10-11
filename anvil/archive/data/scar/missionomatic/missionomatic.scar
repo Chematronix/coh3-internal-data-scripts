@@ -1,0 +1,693 @@
+--
+-- Mission-o-Matic 1000
+--
+-- Run-time script module that takes a "recipe" and initializes all of the modules, etc. 
+--
+
+import("anvil.scar")
+
+Core_RegisterModule("MissionOMatic")
+
+-- Objectives
+import("missionomatic/missionomatic_objectives.scar")
+import("missionomatic/missionomatic_debug.scar")
+import("conditionlist.scar")
+import("actionlist.scar")
+import("playbills.scar")
+
+-- AI Encounter system
+import("aimanager/ai.scar")
+
+import("missionomatic/goals/goal_wave.scar")
+
+local default_entry_company_us = "company_paratrooper_us"
+local default_entry_company_uk = "company_armoured_uk"
+
+-- Other stuff
+
+
+--if next(myTable) == nil then
+--easy table is empty check
+
+--? @group MissionOMatic
+
+function MissionOMatic_OnGameSetup()
+	
+end
+
+function MissionOMatic_OnInit()
+	
+	MissionOMatic_SetupCheatMenu()
+	
+	sg_startingUnits = SGroup_CreateIfNotFound("sg_startingUnits")
+	eg_startingBuildings = EGroup_CreateIfNotFound("eg_startingBuildings")
+	
+
+	g_IntroObjectives = {} --holds intro objectives
+	g_PrimaryObjectives = {} --holds primary objectives
+	g_MissionObjectives = {} --handles mission flow
+	g_AllMissionObjectives = {} --holds every objective in a list (for searching)
+	g_AllPlaybills = {} --holds all playbills
+	g_CurrentObjective = 1
+	
+	local campaign = Game_RetrieveTableData("campaign", false)
+	local player = World_GetPlayerAt(1)
+	if campaign == nil or campaign.campaign_id == nil or campaign.campaign_id == "" then
+		local SetupCompanyFromCommandLine = function(command_line, company_name_str)
+			if Misc_IsCommandLineOptionSet(command_line) then
+				-- Set the name of the company through command line to emulate campaign company
+				local company_bp_name = Misc_GetCommandLineString(command_line)
+				if company_bp_name == "any" or not SBP_Exists(company_bp_name) then
+					-- If any is mentioned, default it
+					local race = Player_GetRace(player)
+					if race == RACE.AMERICANS then
+						print("Default US company is used: "..default_entry_company_us)
+						company_bp_name = default_entry_company_us
+					elseif race == RACE.BRITISH then
+						print("Default UK company is used: "..default_entry_company_uk)
+						company_bp_name = default_entry_company_uk
+					end
+				end
+				-- Following the mission_affectors structure to normalize usage for company name
+				if campaign.mission_affectors == nil then
+					campaign.mission_affectors = {}
+				end
+				campaign.mission_affectors[company_name_str] = company_bp_name
+				Game_StoreTableData("campaign", campaign)
+			end
+		end
+		SetupCompanyFromCommandLine("companytype", "player_company_bp_name")
+		SetupCompanyFromCommandLine("reinforcingcompanytype", "reinforcing_company_bp_name")
+	end
+	
+	-- Set the commander if there is a company sent in
+	if campaign.mission_affectors ~= nil then
+		g_currentCommanderBP = campaign.mission_affectors.player_company_bp_name
+	end
+	
+	if g_missionData == nil  then
+		g_missionData = {}
+		g_missionData.missionComplete = false
+	end
+	
+	__missionDebug = true
+	
+	MissionPrint("MissionOMatic is Initialising")
+
+	if Misc_IsCommandLineOptionSet("entry_point") then
+		g_entryPointID = Misc_GetCommandLineInt("entry_point")
+	end
+	
+	if g_entryPointID == nil then
+		local campaign = Game_RetrieveTableData("campaign", false)
+		if campaign ~= nil then 
+			g_entryPointID = campaign.entry_point_id
+		end
+	end
+	
+	-- NOTE: If there are introtype objectives, then we expect there
+	-- Must be an entry point selected. This is asserted later.
+	
+end
+
+function MissionOMatic_Preset()	-- organizes objectives
+	
+	local intro = nil
+	local objectives = nil
+	
+	g_IntroObjectives = Prefab_GetAllOfType("introtype")
+	g_PrimaryObjectives = Prefab_GetAllOfType("missionobjectives")
+	g_AllPlaybills = Prefab_GetAllOfType("playbill")
+	
+	-- if doing autotest make sure we have an entry point 
+	if g_entryPointID == nil then
+		if Misc_IsCommandLineOptionSet('autotest') then
+			for i=1, #g_IntroObjectives do
+				if g_IntroObjectives[i].entry_point_id ~= nil then
+					g_entryPointID = g_IntroObjectives[i].entry_point_id
+					break
+				end
+			end
+		else
+			for i=1, #g_IntroObjectives do
+				if g_IntroObjectives[i].entry_point_id ~= nil and g_IntroObjectives[i].is_default then
+					if g_entryPointID ~= nil then
+						error("More than one default!!!")
+					end
+					g_entryPointID = g_IntroObjectives[i].entry_point_id
+				end
+			end
+		end
+	end
+	
+	-- PICK INTRO OBJECTIVE
+	if #g_IntroObjectives > 0 then
+		
+		assert(g_entryPointID ~= nil, "No entry point selected!")
+		
+		MissionPrint("Finding Intro----------------")
+		
+		for i=1, #g_IntroObjectives do
+			if g_entryPointID == g_IntroObjectives[i].entry_point_id then
+				intro = g_IntroObjectives[i]
+				break
+			end
+		end
+		
+		-- If no intro objective is found with the current entry, default to entry point 1
+		-- which corresponds to regular land entry
+		if intro == nil then
+			for i = 1, #g_IntroObjectives do
+				if g_IntroObjectives[i].entry_point_id == 1 then
+					intro = g_IntroObjectives[i]
+					break
+				end
+			end
+		end
+		
+		assert(intro ~= nil, "No intro objective with selected entry point ID! (Entry Point ID: "..g_entryPointID..")")
+		
+		local introObjective = introtype_Initialize(intro.instanceName)
+
+		if introObjective.variantType == "None" then
+			g_noIntroObjective = true
+		end
+		
+		table.insert(g_MissionObjectives, 1, introObjective)
+		if Misc_IsDevMode() then
+			MissionDebug_Load(introObjective)
+		end
+		
+		-- calls the preset function for the chosen intro type
+		local preset = _G["introtype_".. introObjective.variantType .."_Preset"]
+		if scartype(preset) == ST_FUNCTION then
+			preset(introObjective)
+		end
+		MissionOMatic_StartCamera(introObjective)
+		MissionOMatic_StartUnits(introObjective)
+		MissionOMatic_StartOnInitBuildings(introObjective)
+		Anvil_SetPlayerResources(Game_GetLocalPlayer()) -- Set default resource income and caps for missions
+	end
+	
+	---------------------------------------------------------------------------------------
+	
+	--PRIMARY OBJECTIVES
+	-- NOTE:
+	-- Looks like currently the introtype is setting up objectives when it completes
+	-- so we don't need to initialize mission variants here anymore. But in the future
+	-- It's possible we have enough information to correctly choose missionobjectives.
+	-- Also, we may or may not want introtypes to have a 1:1 relationship with
+	-- missionobjectives.
+	-- I think the mission system is worth an audit and can likely be simplified.
+	---------------------------------------------------------------------------------------
+	
+	-- initialize all objectives
+	if Misc_IsDevMode() then
+		MissionDebug_Load()
+	end
+	if scartype(g_MissionObjectives) == ST_TABLE then
+		for k, objective in pairs(g_MissionObjectives) do 
+			MissionOMatic_InitializeObjective(objective, nil)
+		end
+	end
+end
+
+function GetPrimaryObjectiveIfAvailable(data)
+	if g_PrimaryObjectives ~= nil and next(g_PrimaryObjectives) ~= nil then
+		for i=1, #g_PrimaryObjectives do
+			MissionPrint("Finding Primary----------------")
+			if g_PrimaryObjectives[i].scenref_playbill_key ~= nil and
+				g_PrimaryObjectives[i].scenref_playbill_key ~= "" and
+				data == g_PrimaryObjectives[i].scenref_playbill_key then
+				
+				return g_PrimaryObjectives[i]
+			end
+		end
+	end
+	
+	return nil
+end
+
+-- Searches for the playbill with the given scenref playbill key.
+-- NOTE: This should have been implemented with the prefab's instanceName, not
+-- the scenref playbill key which AFAIK is not necessary. However, it is
+-- currently being used so I'm not reworking that at this point.
+function GetPlaybillFromScenrefPlaybillKey(scenref_playbill_key)
+	for i=1, #g_AllPlaybills do
+		if g_AllPlaybills[i].scenref_playbill_key ~= nil and 
+			g_AllPlaybills[i].scenref_playbill_key ~= "" and 
+			scenref_playbill_key == g_AllPlaybills[i].scenref_playbill_key then
+			
+			return g_AllPlaybills[i]
+		end
+	end
+	
+	return nil
+end
+
+-- Spawns the playbill referred to by the scenref_playbill_key passed in. OR it spawns the objective.
+-- If it spawns a playbill it returns the playbillInfo id for that running instance.
+-- NOTE: This shouldn't be one function nor one field on prefabdata, but I'm not changing it at this
+-- point.
+function StartPrimaryObjectiveOrPlaybill(data, opt_context)
+	if data ~= nil and data ~= "" then
+		local primary_objective = GetPrimaryObjectiveIfAvailable(data)
+		if primary_objective ~= nil then
+			MissionOMatic_SetupMission(primary_objective)
+		end
+	
+		if g_AllPlaybills ~= nil and next(g_AllPlaybills) ~= nil then
+			local playbill_to_start = GetPlaybillFromScenrefPlaybillKey(data)
+			if playbill_to_start ~= nil then
+				return playbill_Trigger(playbill_to_start, nil, opt_context)
+			end
+		end	
+	end
+end
+
+function MissionOMatic_SetupMission(data)
+
+	local instance = Prefab_GetInstance(data)
+	if instance.enabled == false then
+		return
+	end
+	local objectives = missionobjectives_Initialize(instance.instanceName)
+	
+	for i=1, #objectives do
+		table.insert(g_MissionObjectives, objectives[i])
+		
+		local preset = _G["objectiveutil_".. objectives[i].beatType .."_Preset"]
+		
+		if scartype(preset) == ST_FUNCTION then
+			preset(objectives[i])
+		end
+		
+		MissionOMatic_InitializeObjective(objectives[i])
+	end
+
+end
+
+--Called after all the _Init and _Preset functions
+function MissionOMatic_PreStart()
+	
+	print("PreStart")
+	
+	--intro sequence
+	local startingObj = MissionOMatic_GetCurrentPrimaryObjective()
+	
+	if scartype(startingObj) == ST_TABLE then
+		if scartype(startingObj.pre_intro_sequence) == ST_TABLE and next(startingObj.pre_intro_sequence) ~= nil then
+			Playbill_Start(startingObj.pre_intro_sequence)
+		end
+		
+		if scartype(startingObj.introSequence) == ST_TABLE and next(startingObj.introSequence) ~= nil then
+			if not Misc_IsCommandLineOptionSet("skip_intros") then
+				StartMission_Hold()
+				
+				MissionOMatic_NIS_Start(startingObj.introSequence, "MissionOMatic_TriggerStartingObjectives")
+			end
+		end
+	end
+	
+end
+
+function MissionOMatic_Start()
+
+	local titleCard = "Title Card"
+	local date = "Jul 9, 1943"
+	local location = "Gela"
+	
+	Game_SubTextFade(location or 0, date or 0, 0.5, 4, 0.5)	-- not wrapped in an event as there may be speech going on
+	
+	Rule_AddOneShot(MissionOMatic_TriggerStartingObjectives, 3.5)
+	
+	-- Start "free standing" playbills
+	for i, playbill in pairs(Prefab_GetAllOfType("playbill")) do
+		if playbill.immediate then
+			Prefab_Trigger(playbill)
+		end
+	end
+	
+	local game_event_listener = Prefab_GetAllOfType("gameeventlistener")
+	if game_event_listener ~= nil and #game_event_listener > 0 then
+		if #game_event_listener > 1 then
+			error("More than 1 game event listener prefabs found in the map")
+		else
+			game_event_listener = game_event_listener[1]
+			Prefab_Trigger(game_event_listener)
+		end
+	end
+	
+end
+
+function MissionOMatic_NIS_Start(sequencePlaybill)
+	
+	--NIS_START()
+	Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+	
+	--runs a sequence of actions
+	--this adds an action at the end to ensure all events have completed then calls a callback function
+	if scartype(sequencePlaybill) == ST_TABLE then
+		local p = {
+					actions = {
+						{action = "CallScarFunction", function_name = "MissionOMatic_NIS_Complete"},
+						{action = "CallScarFunction", function_name = "StartMission_ReleaseHold"},
+					},
+				}
+		table.insert(sequencePlaybill, p)
+		
+		Playbill_Start(sequencePlaybill)
+		
+	end
+	
+end
+
+function MissionOMatic_NIS_Complete()
+	
+	--NIS_END()
+	Util_ExitCinematicMode()
+	
+	print("Completing NIS")
+	
+end
+
+
+function MissionOMatic_PickVariant(objective)
+	
+	local variantData = {}
+	local variantType = {}
+	
+	-- grabs all the possible variant types from this prefab
+	for k, v in pairs(objective) do	
+		if String_StartsWith(k, "var_") and v == true then
+			table.insert(variantType, k:sub(5, #k))
+		end
+	end
+	
+	if #variantType == 0 then
+		error("No introtype variant was specified!")
+	end
+	
+	-- picks a variant type
+	variantType = variantType[World_GetRand(1, #variantType)]
+	
+	-- grabs associated data with picked type
+	for k, v in pairs(objective) do	
+		if k == variantType then
+			variantData = v
+			break
+		end
+	end
+	
+	variantData.variantType = variantType
+	
+	return variantData
+	
+end
+
+--
+-- Tagging units
+--
+-- Useful for getting conditions and actions to track specific units
+--
+
+function MissionOMatic_GetSGroupForTaggedUnit(tag)
+
+	if t_taggedUnits == nil then
+		t_taggedUnits = {}
+	end
+	
+	for index, entry in pairs(t_taggedUnits) do 
+			
+		if entry.tag == tag then	
+			return entry.sgroup
+		end
+		
+	end
+	
+end
+
+function MissionOMatic_GetEntryForTaggedUnit(tag)
+
+	if t_taggedUnits == nil then
+		t_taggedUnits = {}
+	end
+	
+	for index, entry in pairs(t_taggedUnits) do 
+			
+		if entry.tag == tag then	
+			return entry
+		end
+		
+	end
+	
+end
+
+function MissionOMatic_TagUnit(squad, tag)
+
+	if t_taggedUnits == nil then
+		t_taggedUnits = {}
+	end
+	
+	local entry = MissionOMatic_GetEntryForTaggedUnit(tag)
+
+	if entry == nil then
+		
+		entry = {
+			tag = tag,
+			sgroup = SGroup_CreateUnique("Tagged Unit"),
+		}
+		table.insert(t_taggedUnits, entry)
+	
+	end
+	
+	if scartype(squad) == ST_SGROUP then
+		SGroup_AddGroup(entry.sgroup, squad)
+	elseif scartype(squad) == ST_SQUAD then
+		SGroup_Add(entry.sgroup, squad)
+	end
+	
+end
+
+function MissionOMatic_UntagUnit(squad, tag)
+
+	if t_taggedUnits == nil then
+		t_taggedUnits = {}
+	end
+	
+	local entry = MissionOMatic_GetSGroupForTaggedUnit(tag)
+
+	if entry == nil then
+		
+		entry = {
+			tag = tag,
+			sgroup = SGroup_CreateUnique("Tagged Unit"),
+		}
+		table.insert(t_taggedUnits, entry)
+	
+	end
+	
+	if scartype(squad) == ST_SGROUP then
+		SGroup_RemoveGroup(entry.sgroup, squad)
+	elseif scartype(squad) == ST_SQUAD then
+		SGroup_Remove(entry.sgroup, squad)
+	end
+	
+end
+
+function MissionOMatic_ClearTag(tag)
+
+	if t_taggedUnits == nil then
+		t_taggedUnits = {}
+	end
+	
+	for index, entry in pairs(t_taggedUnits) do 
+			
+		if entry.tag == tag then	
+			SGroup_Clear(entry.sgroup)
+		end
+		
+	end
+	
+end
+
+
+--
+-- Cheat Menu
+--
+
+function MissionOMatic_SetupCheatMenu()
+
+	--CheatMenu_RegisterCheatFunction(MissionOMatic_Cheat_Win, "Mission-o-Matic Win", false)
+	--CheatMenu_RegisterCheatFunction(MissionOMatic_Cheat_Lose, "Mission-o-Matic Lose", false)
+	
+end
+
+function MissionOMatic_Cheat_Win()
+	
+	local report = {
+		winning_player = player1,
+		gameLength = World_GetGameTime(),
+		auto_resolved = false,
+	}
+	
+	local winningTeam = Player_GetTeam(player1)
+	World_SetTeamWin(winningTeam, -1)
+
+end
+
+function MissionOMatic_Cheat_Lose()
+	
+	local report = {
+		winning_player = g_enemy_team.players[1].id,
+		gameLength = World_GetGameTime(),
+		auto_resolved = false,
+	}
+	
+	local winningTeam = g_enemy_team.index
+	World_SetTeamWin(winningTeam, -1)
+
+end
+
+----------------------------
+----UTILITY FUNCTIONS--
+----------------------------
+
+function Table_GetShuffledItems(t)
+	
+	local _t = {}
+	--for i=1, #t do
+		--if #_t == 0 then 
+			--table.insert(_t, t[i])
+		--else
+			--table.insert(_t, World_GetRand(1, #_t), t[i])
+		--end
+	--end
+	local testT = Clone(t)
+	
+	while #testT >= 1 do		
+		local randSelect = World_GetRand(1, #testT)		
+		table.insert(_t, testT[randSelect])	
+		table.remove(testT, randSelect)			
+	end
+	
+	return _t
+	
+end
+
+function String_StartsWith(str, prefix)
+	
+	return str:sub(1, #prefix) == prefix
+	
+end
+
+function String_EndsWith(str, ending)
+	
+	return ending == "" or str:sub(-#ending) == ending
+	
+end
+
+function Group_Count(group)
+	
+	local count = nil
+	
+	if scartype(group) == ST_SGROUP then
+		count = SGroup_Count(group)
+	elseif scartype(group) == ST_EGROUP then
+		count = EGroup_Count(group)
+	end
+	
+	return count
+	
+end
+
+function Group_GetSpawnedItemAt(group, int)
+	
+	local item = nil
+	
+	if scartype(group) == ST_SGROUP then
+		item = SGroup_GetSpawnedSquadAt(group, int)
+	elseif scartype(group) == ST_EGROUP then
+		item = EGroup_GetSpawnedEntityAt(group, int)
+	end
+	
+	return item
+	
+end
+
+function Group_ConvertTo(item, group)
+	
+	local group = group
+	
+	if scartype(item) == ST_ENTITY and Entity_GetHealth(item) > 0 then
+		group = EGroup_CreateUnique("")
+		EGroup_Add(group, item)
+	elseif scartype(item) == ST_SQUAD and Squad_GetHealth(item) > 0 then
+		group = SGroup_CreateUnique("")
+		SGroup_Add(group, item)
+	end
+	
+	return group
+	
+end
+
+function Item_IsAlive(item)
+	
+	if scartype(item) == ST_ENTITY and Entity_GetHealth(item) > 0 then
+		return true
+	elseif scartype(item) == ST_SQUAD and Squad_IsValid(item.SquadID) then
+		return true
+	end
+	
+	return false
+	
+end
+
+function Group_IsAlive(group)
+	
+	if scartype(group) == ST_EGROUP and EGroup_GetAvgHealth(group) > 0 then
+		return true
+	elseif scartype(item) == ST_SGROUP and SGroup_IsAlive(group) then
+		return true
+	end
+	
+	return false
+	
+end
+
+function MissionOMatic_SetLedger(id, number, operator)
+	
+	g_MissionOMaticLedger = g_MissionOMaticLedger or {}
+	
+	local index = nil
+	for i=1, #g_MissionOMaticLedger do
+		
+		local key = g_MissionOMaticLedger[i].key
+		
+		if key == id then
+			
+			index = i
+			
+		end
+		
+	end
+	
+	if index == nil then
+		table.insert(g_MissionOMaticLedger, {key = id, value = 0})
+		index = #g_MissionOMaticLedger
+	end
+	
+	if operator == nil then
+		g_MissionOMaticLedger[index].value = number
+	else
+		local value = g_MissionOMaticLedger[index].value
+		g_MissionOMaticLedger[index].value = MathOperation(value, operator, number)
+	end
+	
+end
+
+function MissionPrint(info)
+	if __missionDebug then
+		print("[MISSION]: " .. info)
+	end
+end

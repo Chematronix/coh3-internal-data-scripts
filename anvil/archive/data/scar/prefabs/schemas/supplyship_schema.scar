@@ -1,0 +1,81 @@
+supplyship_schema =
+{
+    type = "Prefab",
+    name = "supplyship",
+    description = "Supply ship prefab",
+    script = "supplyship.scar",
+    compatibility = {
+        "triggerable",
+    },
+    proxy = "art/environment/objects/statues/statue_mary",
+     
+    itemSchema = {
+		{
+			type = ST_PLAYER,
+			name = "player",
+			displayName = "Player",
+			description = "The player to spawn supply ship for",
+			allowWorld = false,
+			default = "Player1",
+		},
+		{
+			type = ST_PBG,
+			name = "ship_to_spawn",
+			displayName = "Ship To Spawn",
+			blueprintType = "squad",
+		},
+		{
+			type = ST_MARKER,
+			name = "ship_spawn_pos",
+			displayName = "Ship Spawn Pos",
+			description = "Ship will spawn from here",
+			colour = "white",
+			hasRange = false,
+		},
+		{
+			type = ST_MARKER,
+			name = "ship_destination_pos",
+			displayName = "Ship Destination Pos",
+			description = "Ship will go here",
+			colour = "white",
+			hasRange = false,
+		},
+		{
+			type = ST_NUMBER,
+			name = "ship_respawn_timer",
+			displayName = "Ship Respawn Timer",
+			description = "Turns it takes for ship to respawn if killed",
+			min = 0,
+			max = 1000000,
+		},
+		{
+			type = ST_NUMBER,
+			name = "ship_return_timer",
+			displayName = "Ship Return Timer",
+			description = "Turns it take for ship to come back after leaving the map",
+			min = 0,
+			max = 1000000,
+		},
+		{
+			type = ST_NUMBER,
+			name = "manpower_amount",
+			displayName = "Manpower Delivered",
+			min = 0,
+			max = 1000000,
+		},
+		{
+			type = ST_NUMBER,
+			name = "munition_amount",
+			displayName = "Munition Delivered",
+			min = 0,
+			max = 1000000,
+		},
+		{
+			type = ST_NUMBER,
+			name = "fuel_amount",
+			displayName = "Fuel Delivered",
+			min = 0,
+			max = 1000000,
+		},
+    }
+}

@@ -1,0 +1,224 @@
+
+function SetLoyalty(character_name, influence_value)
+	
+	SetNarrativeInfluenceValueToUse(character_name, influence_value, "SET")
+
+end
+
+function GetLoyalty(character_name)
+	
+	return World_GetNarrativeInfluenceValueToUse(character_name)
+	
+end
+
+function IncreaseLoyalty(character_name, influence_value_delta)
+	
+	SetNarrativeInfluenceValueToUse(character_name, influence_value_delta, "ADD")
+
+end
+
+function DecreaseLoyalty(character_name, influence_value_delta)
+	
+	SetNarrativeInfluenceValueToUse(character_name, -influence_value_delta, "ADD")
+
+end
+
+function IsCommander(character_name)
+	
+	return (character_name == "norton" or character_name == "buckram" or character_name == "valenti")
+	
+end
+
+function IsLoyaltyLocked(character_name)
+	
+	return (character_name == "valenti" and GetNarrativeVariable("state_subcommander.valenti_loyalty_locked"))
+	
+end
+
+function DoValentiLoyaltyLock(new_influence_value)
+	
+	local loyalty_locked = GetNarrativeVariable("state_subcommander.valenti_loyalty_locked")
+	local lock_limit = GetNarrativeVariable("state_subcommander.valenti_lock_limit")
+	local current_influence = World_GetNarrativeInfluenceValueToUse("valenti")
+	
+	if (new_influence_value >= lock_limit and not loyalty_locked) then
+		
+		SetNarrativeVariable("state_subcommander.valenti_loyalty_locked", true)
+		SetNarrativeVariable("state_subcommander.valenti_loyalty_shadow", current_influence)
+		loyalty_locked = true
+		
+	end
+	
+	if (loyalty_locked) then
+		
+		-- Update the shadow influence value based on the delta between the current and new influence values
+		local shadow_influence = GetNarrativeVariable("state_subcommander.valenti_loyalty_shadow")
+		shadow_influence = shadow_influence + (new_influence_value - current_influence)		
+		SetNarrativeVariable("state_subcommander.valenti_loyalty_shadow", shadow_influence)
+		
+		-- New influence becomes lower of shadow or the lock limit
+		new_influence_value = math.min(lock_limit, shadow_influence)
+	end
+	
+	return new_influence_value
+	
+end
+	
+function UnlockValentiLoyalty(penalty)
+	
+	if (GetNarrativeVariable("state_subcommander.valenti_loyalty_locked")) then
+		SetNarrativeVariable("state_subcommander.valenti_loyalty_locked", false)
+		SetNarrativeVariable("state_subcommander.valenti_enigma_narrative", true)
+
+		-- Unlock the influence and set it to the highest of one aboe the lock limit or whatever loyalty the player has earned		
+		local lock_limit = GetNarrativeVariable("state_subcommander.valenti_lock_limit")
+		local new_influence_value = GetNarrativeVariable("state_subcommander.valenti_loyalty_shadow") - penalty
+		new_influence_value = math.max(new_influence_value, lock_limit + 1)
+		
+		SetNarrativeInfluenceValueToUse("valenti", new_influence_value, "SET")
+	end
+	
+end	
+
+function ApplyNarrativeInfluenceValue(character_name, influence_value)
+	
+	character_name = string.lower(character_name)
+	
+	influence_value = math.max(math.min(influence_value, World_GetMaxNarrativeInfluence(character_name)), 0)
+	
+	local valenti_abandoned = GetNarrativeVariable("state_subcommander.valenti_abandoned")
+	local valenti_contacted = GetNarrativeVariable("state_subcommander.valenti_contacted")
+	
+	-- Don't give Valenti loyalty if the player hasn't met her or she's abandoned them
+	if (character_name == "valenti" and (not valenti_contacted or valenti_abandoned)) then
+		return nil
+	end
+	
+	-- Loyalty Narrative
+	if (IsCommander(character_name)) then
+		-- Valenti's Enigma Storyline
+		if (character_name == "valenti" and GetNarrativeVariable("state_subcommander.valenti_enigma_narrative") ~= true) then
+			influence_value = DoValentiLoyaltyLock(influence_value)
+		end
+		
+		SetNarrativeVariable("state_subcommander." .. character_name .. "_loyalty", influence_value)
+		
+	end
+
+	local new_rewards = World_SetNarrativeInfluenceValueToUse(World_GetPlayerAt(1), character_name, influence_value)
+	
+	-- Report the new rewards with event cues:
+	if new_rewards ~= nil then
+		local new_rewards_count = #new_rewards
+		for i=1,new_rewards_count do
+			local reward = new_rewards[i]
+			if reward ~= nil then
+				local reward_ui_info = BP_GetUpgradeUIInfo(reward)
+				local reward_title = reward_ui_info.screenName
+				local reward_description = reward_ui_info.briefText
+				
+				if World_IsCampaignMetamapGame() then
+					local influence_reward = Util_BindFunction(EventCues_InfluenceRewardUnlocked, reward_title, reward_description)
+					MetaMap_HandleEventCue(influence_reward)
+				else
+					EventCues_InfluenceRewardUnlocked(reward_title, reward_description)
+				end
+			end
+		end
+	end
+	
+	return influence_value
+end
+
+function SetNarrativeInfluenceValueToUse(character_name, influence_value_param, math_operation)
+	
+	character_name = string.lower(character_name)	
+	
+	local __ApplyMathOperation = function(math_operation, new_influence_value, influence_value_param)
+		if math_operation == "SET" then
+			new_influence_value = influence_value_param
+		elseif math_operation == "ADD" then
+			new_influence_value = new_influence_value + influence_value_param
+		elseif math_operation == "MULTIPLY" then
+			new_influence_value = new_influence_value * influence_value_param
+		end
+		return new_influence_value
+	end
+	
+	local new_influence_value = nil
+	if World_IsCampaignMetamapGame() then
+
+		local current_influence = World_GetNarrativeInfluenceValueToUse(character_name)
+
+		-- If action is used in the campaign map, influence will be applied directly and purchase the rewards, if possible
+		new_influence_value = __ApplyMathOperation(math_operation, current_influence, influence_value_param)
+		
+		new_influence_value = ApplyNarrativeInfluenceValue(character_name, new_influence_value)
+
+		if (new_influence_value ~= nil) then
+			-- Send a UI event displaying the influence gained by a character
+			local delta = new_influence_value - current_influence
+			
+			if (delta ~=  0) then
+
+				local loyalty_header = ""
+				local loyalty_message = ""				
+				
+				if (delta > 0) then
+					
+					if (character_name == "buckram") then
+						loyalty_header = Loc_GetString(11234445)
+						loyalty_message = Loc_GetString(11234446)
+					end
+					
+					if (character_name == "norton") then
+						loyalty_header = Loc_GetString(11234450)
+						loyalty_message = Loc_GetString(11234451)
+					end
+					
+					if (character_name == "valenti") then
+						loyalty_header = Loc_GetString(11234454)
+						loyalty_message = Loc_GetString(11234455)
+					end
+
+				else
+
+					if (character_name == "buckram") then
+						loyalty_header = Loc_GetString(11234447)
+						loyalty_message = Loc_GetString(11234448)
+					end
+					
+					if (character_name == "norton") then
+						loyalty_header = Loc_GetString(11234452)
+						loyalty_message = Loc_GetString(11234453)
+					end
+					
+					if (character_name == "valenti") then
+						loyalty_header = Loc_GetString(11234456)
+						loyalty_message = Loc_GetString(11234457)
+					end
+					
+				end				
+								
+				local influence_gained = Util_BindFunction(EventCues_CampaignInfluenceGained, loyalty_header, loyalty_message)
+				MetaMap_HandleEventCue(influence_gained)
+			end
+		end
+				
+	else
+		-- Send a UI event displaying the influence gained by a character
+		local delta = string.format("%+d", influence_value_param)
+		EventCues_InfluenceGained("Commander "..character_name, "Influence " .. delta)
+		
+		-- If action is used in mission, influence will be read/written in the datastore and will be sent to the campaign
+		-- map when the mission ends
+		local campaign = Game_RetrieveTableData("campaign", false)
+		if campaign == nil then
+			return
+		end
+		new_influence_value = campaign.narrative_influence[character_name]
+		new_influence_value = __ApplyMathOperation(math_operation, new_influence_value, influence_value_param)
+		campaign.narrative_influence[character_name] = new_influence_value
+		Game_StoreTableData("campaign", campaign)
+	end
+end

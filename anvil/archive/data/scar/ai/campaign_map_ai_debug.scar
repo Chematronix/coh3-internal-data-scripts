@@ -1,0 +1,138 @@
+-- Copyright 2019 SEGA Corporation, Developed by Relic Entertainment
+
+local debug_drawCampaignUpdatingSquads = false
+local debug_updating_ai_entities_to_display = {}
+
+--? @shortdesc Debug print list of ai squads which have and have not been updated yet this turn
+--? @extdesc Print squads for the first ai player found
+function AI_DrawCampaignUpdatingSquads(_, ai_entities_to_display)
+	local player
+	for i = 1,World_GetPlayerCount() do
+		local current = World_GetPlayerAt(i)
+		if AI_IsAIPlayer(current) then
+			player = current
+			break
+		end
+	end
+	
+	if player == nil then
+		error("No ai player found")
+		return
+	end
+	
+	local aiplayer = AIPlayer_GetLocalFromPlayer(player)
+	local t_current_updating_squad = AIPlayer_GetStateModelAISquadListEntries(aiplayer, "ai_current_updating_squad")
+	local t_current_updating_entity = AIPlayer_GetStateModelAIEntityListEntries(aiplayer, "ai_current_updating_squad")
+		
+	local string = "AISquads" .. 
+		"\nCurrent Updating: "
+	if #t_current_updating_squad > 0 then
+		local squadid = t_current_updating_squad[1]
+		string = string .. squadid
+		local squad = Squad_FromID(squadid)
+		local sbp = Squad_GetBlueprint(squad)
+		local bpname = BP_GetName(sbp)
+		string = string .. " " .. bpname
+	elseif #t_current_updating_entity > 0 then
+		local entityid = t_current_updating_entity[1]
+		string = string .. entityid
+		local entity = Entity_FromID(entityid)
+		local ebp = Entity_GetBlueprint(entity)
+		local bpname = BP_GetName(ebp)
+		string = string .. " " .. bpname
+	end
+		
+	local squads = Player_GetSquads(player)
+	local entities = Player_GetEntities(player)
+	local updating_squads = {}
+	local done_squads = {}
+	local locked_squads = {}
+	
+	SGroup_ForEach(squads,
+		function(sgroupid, itemindex, squad)
+			local squadID = Squad_GetID(squad)
+			local aiSquad = AI_FindAISquadByID(player, squadID)
+			local sbp = Squad_GetBlueprint(squad)
+			local bpname = BP_GetName(sbp)
+			if aiSquad == nil then
+				return
+			end
+			
+			local locked = AI_IsSquadLocked(player, squad)
+			if locked then 
+				table.insert(locked_squads, {id = squadID, bp = bpname})
+				return
+			end
+			
+			local updating = AISquad_GetStateModelBool(aiSquad, "campaign_updating")
+			if updating then
+				table.insert(updating_squads, {id = squadID, bp = bpname})
+			else
+				table.insert(done_squads, {id = squadID, bp = bpname})
+			end
+		end)
+	
+	EGroup_ForEach(entities,
+		function(egroupid, itemindex, entity)
+			local entityID = Entity_GetID(entity)
+			local aiEntity = AI_FindAIEntityByID(player, entityID)
+			local ebp = Entity_GetBlueprint(entity)
+			local bpname = BP_GetName(ebp)
+			if aiEntity == nil then
+				return
+			end
+			
+			local updating = AIEntity_GetStateModelBool(aiEntity, "campaign_updating")
+			if updating then
+				if not Table_Contains(ai_entities_to_display, aiEntity) then
+					table.insert(ai_entities_to_display, aiEntity)
+				end
+				table.insert(updating_squads, {id = entityID, bp = bpname})
+			elseif Table_Contains(ai_entities_to_display, aiEntity) then
+				-- only display ai entities that have ever been updating, so we don't flood the display with buildings that don't act
+				table.insert(done_squads, {id = entityID, bp = bpname})
+			end
+		end)
+	
+	string = string .. "\nWaiting for Update:"
+	for i, squadinfo in ipairs(updating_squads) do
+		string = string .. "\n\t" .. squadinfo.id .. " " .. squadinfo.bp
+	end
+	
+	string = string .. "\nDone:"
+	for i, squadinfo in ipairs(done_squads) do
+		string = string .. "\n\t" .. squadinfo.id .. " " .. squadinfo.bp
+	end 
+	
+	string = string .. "\nLocked::"
+	for i, squadinfo in ipairs(locked_squads) do
+		string = string .. "\n\t" .. squadinfo.id .. " " .. squadinfo.bp
+	end
+	
+	dr_setautoclear("CampaignAIPlayerDebug", false)
+	dr_clear("CampaignAIPlayerDebug")
+	local normalizedScreenPosX = 0.8
+	local normalizedScreenPosY = 0.2
+	local r = 255
+	local g = 255
+	local b = 255
+	dr_text2d("CampaignAIPlayerDebug", 
+		normalizedScreenPosX,normalizedScreenPosY, 
+		string, 
+		r,g,b
+		)
+end
+
+function AI_GetDrawCampaignUpdatingSquads()
+	return debug_drawCampaignUpdatingSquads
+end
+
+function AI_ToggleDrawCampaignUpdatingSquads()
+	debug_drawCampaignUpdatingSquads = not debug_drawCampaignUpdatingSquads
+	if debug_drawCampaignUpdatingSquads then
+		Rule_AddInterval(AI_DrawCampaignUpdatingSquads, 0.125, debug_updating_ai_entities_to_display)
+	else
+		Rule_Remove(AI_DrawCampaignUpdatingSquads)
+		dr_setautoclear("CampaignAIPlayerDebug", true)
+	end
+end

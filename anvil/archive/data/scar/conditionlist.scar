@@ -1,0 +1,1876 @@
+--
+-- Mission-o-Matic - Condition Lists
+--
+-- Check to see if a list of conditions is true or false 
+--
+
+--
+-- See: Mission-o-Matic: Conditions and Actions
+--      http://relicwiki/display/CARD/Mission-o-Matic%3A+Conditions+and+Actions	(in the EE, you can Control-click on this link to go there)
+--
+
+import("anvil.scar")
+import("team.scar")
+import("playbills.scar")
+
+CONDITION_LIST_ALL = "ALL"
+CONDITION_LIST_ANY = "ANY"
+CONDITION_LIST_NONE = "NONE"
+
+function ConditionList_Init(list)
+	
+	for index, condition in pairs(list) do
+		
+		-- resolve check function reference
+		if scartype(_G["Condition_"..condition.conditionName.."_Check"]) == ST_FUNCTION then
+			condition.conditionFunction = _G["Condition_"..condition.conditionName.."_Check"]
+		end
+		
+		MissionPrint("Initializing Conditions List")
+		
+		if scartype(condition.conditionList) == ST_TABLE then	-- if the condition has sub-conditions (as boolean conditions do), then init that list as well
+			ConditionList_Init(condition.conditionList)
+		end
+		
+	end
+
+end
+
+function ConditionList_CheckList(list, context)
+	
+	context = context or {}
+	
+	if list[1] == nil then
+		list = {list}
+	end
+	
+	if #list == 1 then
+		
+		-- single item, so just check that item
+		return ConditionList_CheckItem(list[1], context)
+		
+	else
+		
+		-- multiple items, so generate a parent ALL boolean item to encompass them all
+		local data = {
+			condition = Condition_Boolean_Check,
+			boolean = CONDITION_LIST_ALL,
+			subconditions = list,
+		}
+
+		return ConditionList_CheckItem(data, context)
+		
+	end
+	
+end
+
+function ProcessAllConditions(list, context, playbillData)
+	context = context or {}
+	
+	local boolean
+	if playbillData ~= nil then
+		boolean = playbillData.playbill[playbillData.currentStage].boolean
+	else
+		boolean = CONDITION_LIST_ALL
+	end
+	
+	if list[1] == nil then
+		list = {list}
+	end
+	
+	if #list == 1 then
+		
+		-- single item, so just check that item
+		return ConditionList_CheckItem(list[1], context)
+		
+	else
+		
+		-- multiple items, so generate a parent boolean defined by the user (default is ALL)
+		local data = {
+			condition = Condition_ProcessInternal_Check,
+			boolean = boolean,
+			subconditions = list,
+			playbillData = playbillData,
+		}
+
+		return ProcessItems(data, context)
+		
+	end
+	
+end
+
+-- find and call the function for a particular condition
+function ConditionList_CheckItem(item, context)
+
+	-- if the function reference is a string, try to replace the string with a function
+	if scartype(item.condition) == ST_STRING then
+		
+		local func = _G["Condition_"..item.condition.."_Check"]
+		
+		if scartype(func) == ST_FUNCTION then
+			item.conditionName = item.condition
+			item.condition = func
+		end
+		
+	end
+
+	-- call the check function
+	if scartype(item.condition) == ST_FUNCTION then
+		
+		local result = item.condition(item, context)
+		
+		if result == true then
+			return true
+		else
+			return false -- this makes it so that a check returning nothing is the same as returning false
+		end
+		
+	end
+	
+end
+
+-- Gets the count for a condition, or gracefully defaults to boolean
+function ConditionList_CountItem(condition, context)
+	local condition_name = condition.condition
+	if scartype(condition_name) ~= ST_STRING then
+		condition_name = condition.conditionName
+	end
+	local count_fn = _G["Condition_"..condition_name.."_GetCount"]
+	-- call the count function
+	if scartype(count_fn) == ST_FUNCTION then
+		return count_fn(condition, context)
+	end
+	if ConditionList_CheckItem(condition, context) then
+		return {current = 0, max = 1}
+	else
+		return {current = 1, max = 1}
+	end
+end
+
+function ProcessItems(condition, context)
+	
+	-- Rather than returning from the function immediately, checking all conditions allows us to debug them effectively
+	-- Otherwise, some conditions may arbitrarily never be checked until others succeed or fail, and they won't print() or view() their data
+	local amountTrue = 0
+	local minRequired = 1
+	
+	local currentPlaybill = condition.playbillData.playbill[condition.playbillData.currentStage]
+	
+	-- If using ANY or NONE then make sure the minRequired is set
+	if condition.boolean == CONDITION_LIST_ANY or condition.boolean == CONDITION_LIST_NONE then
+		if currentPlaybill.minRequired ~= nil and currentPlaybill.minRequired >= 1 then
+			minRequired = currentPlaybill.minRequired
+		end
+	end
+	
+	-- If minRequired is 0 or less and condition.boolean is NONE, then set to require all the subconditions to be the NONE
+	if condition.boolean == CONDITION_LIST_NONE and currentPlaybill.minRequired ~= nil and currentPlaybill.minRequired < 1 then
+		minRequired = #condition.subconditions
+	end
+	
+	-- run checks oneach item in the list
+	for index, item in pairs(condition.subconditions) do
+		
+		local result = ConditionList_CheckItem(item, context)
+		
+		item.hasMetCondition = result
+		
+		if result == true then
+			amountTrue = amountTrue + 1
+		
+		end
+		
+	end
+	
+	for index, item in pairs(condition.subconditions) do
+		--Checks if the boolean is set to ANY or NONE, check the minimum required, then run dedicated actions, if any
+		
+		if scartype(item.optional_dedicated_actions) == ST_TABLE and next(item.optional_dedicated_actions) ~= nil then
+			if condition.boolean == CONDITION_LIST_ANY and (minRequired == 1 and amountTrue >= minRequired) or 
+				condition.boolean == CONDITION_LIST_NONE and (minRequired == 0 or (#condition.subconditions - amountTrue) >= minRequired) then
+				if item.hasMetCondition == true then
+					Playbill_RegisterAndPlayActions(condition.playbillData, item.optional_dedicated_actions)
+				end
+			end
+		end
+		
+	end
+	
+	-- return the result
+	if condition.boolean == CONDITION_LIST_ANY and amountTrue >= minRequired then
+		return true
+	elseif condition.boolean == CONDITION_LIST_ALL and amountTrue == #condition.subconditions then
+		return true
+	elseif condition.boolean == CONDITION_LIST_NONE and (#condition.subconditions - amountTrue) >= minRequired then
+		return true
+	end
+	
+	return false
+	
+end
+
+
+
+--------------------------------------------------------------------
+--------------------------------------------------------------------
+--------------------------------------------------------------------
+--GENERAL--
+
+--
+-- NONE condition
+--
+function Condition_None_Check(condition, context)
+	
+	-- immediately passes the check
+	
+	return true
+	
+end
+
+--
+-- BOOLEAN condition 
+--
+function Condition_Boolean_Check(condition, context)
+	local acc = function(item, amount_so_far)
+		if amount_so_far == nil then
+			amount_so_far = 0
+		end
+		local result = ConditionList_CheckItem(item, context)
+		
+		if result == true then
+			return amount_so_far + 1
+		end
+		return amount_so_far
+	end
+	-- The default value in the template is 1, but
+	-- this is here to say that any non-positive value is just 0
+	local minRequired = 0
+	
+	
+	-- If using ANY or NONE then make sure the minRequired is set
+	if condition.minRequired ~= nil and condition.minRequired >= 1 then
+		minRequired = condition.minRequired
+	end
+	
+	-- Default Behaviour: If minRequired is 0 or less then set to require all the subconditions to be NONE
+	if condition.boolean == CONDITION_LIST_ALL or
+		(condition.boolean == CONDITION_LIST_NONE and condition.minRequired ~= nil and condition.minRequired < 1) then
+		minRequired = #condition.subconditions
+	end
+	
+	local result = _Condition_Aggregated(condition, context, acc) or 0
+	if condition.boolean == CONDITION_LIST_NONE then
+		result = #condition.subconditions - result
+	end
+	return NumberComparison(result, IS_GREATER_THAN_OR_EQUAL, minRequired)
+end
+
+function Condition_AggregatedCount_Get(condition, context)
+	local acc = function(item, amount_so_far)
+		local curr_amount = ConditionList_CountItem(item, context).current
+		if condition.accumulator == "MAX" then
+			if amount_so_far == nil then
+				return curr_amount
+			end
+			return math.max(amount_so_far, curr_amount)
+		elseif condition.accumulator == "MIN" then
+			if amount_so_far == nil then
+				return curr_amount
+			end
+			return math.min(amount_so_far, curr_amount)
+		else -- SUM is default
+			if amount_so_far == nil then
+				amount_so_far = 0
+			end
+			return amount_so_far + curr_amount
+		end
+	end
+	local result = _Condition_Aggregated(condition, context, acc)
+	if condition.starting_amount == nil then
+		condition.starting_amount = result or 0
+	end
+	return {result = result or 0}
+end
+
+function Condition_AggregatedCount_Check(condition, context)
+	local result = Condition_AggregatedCount_Get(condition, context).result
+	return NumberComparison(result, condition.comparison, condition.number)
+end
+
+function Condition_AggregatedCount_GetCount(condition, context)
+	local result = Condition_AggregatedCount_Get(condition, context).result
+	local max = condition.starting_amount
+	if condition.comparison == IS_LESS_THAN or condition.comparison == IS_LESS_THAN_OR_EQUAL then
+		result = condition.starting_amount - result
+		max = math.abs(condition.starting_amount - condition.number)
+	end
+	return {
+		current = result,
+		max = max
+	}
+end
+
+function _Condition_Aggregated(condition, context, AccumulatorFunction)
+	-- Rather than returning from the function immediately, checking all conditions allows us to debug them effectively
+	-- Otherwise, some conditions may arbitrarily never be checked until others succeed or fail, and they won't print() or view() their data
+	local aggregated_value = nil
+	
+	-- run checks on each item in the list
+	for index, item in pairs(condition.subconditions) do
+		aggregated_value = AccumulatorFunction(item, aggregated_value)
+	end
+	
+	return aggregated_value
+end
+
+--
+-- ASK SCAR FUNCTION check type
+--
+function Condition_AskScarFunction_Check(condition, context)
+	
+	local func = _G[condition.functionName]
+	
+	if scartype(func) ~= ST_FUNCTION then
+		fatal("Objective AskScarFunction Condition - function "..tostring(condition.functionName).." not found")
+	end
+	
+	return func(context)
+	
+end
+
+--
+-- GAME TIME condition
+--
+function Condition_GameTime_Check(condition, context) --timeStamp, seconds, comparison
+
+	local gameTime = World_GetGameTime()
+	local comparison = condition.comparison or IS_GREATER_THAN_OR_EQUAL
+	
+	if condition.id ~= nil and condition.id ~= '' then
+		
+		if g_timeStamps == nil then
+			g_timeStamps = {}
+		end
+		
+		local timeStamp = 0
+		
+		for index = #g_timeStamps, 1, -1 do 
+			local bookmark = g_timeStamps[index]
+			if bookmark.id == condition.id then
+				if scartype(bookmark.timeStamp) == ST_NUMBER then
+					timeStamp = bookmark.timeStamp
+					break
+				end
+			end
+		end
+		
+		if timeStamp == 0 then
+			return
+		end
+		
+		gameTime = gameTime - timeStamp
+		
+	end
+	
+	return NumberComparison(gameTime, comparison, condition.seconds)
+	
+end
+
+--
+-- TURN DURATION condition
+--
+function Condition_TurnDuration_Check(condition, context) -- condition.firstTurn, turnDuration, comparison
+	
+	if condition.checkFromCurrentTurn == true and context.firstTurn == nil and 
+		(scartype(context) == ST_TABLE and context.isDebug == nil) then
+		context.firstTurn = World_GetCurrentTurn()
+	end
+	local currentTurn = World_GetCurrentTurn() - (context.firstTurn or 0)
+	
+	local comparison = condition.comparison or "IS_GREATER_THAN_OR_EQUAL"
+	
+	return NumberComparison(currentTurn, comparison, condition.turnDuration)
+	
+end
+
+function Condition_CheckLedgerValue_Check(condition, context) --id, number
+	
+	local id = condition.id
+	local number = condition.number
+	g_MissionOMaticLedger = g_MissionOMaticLedger or {}
+	
+	for i=1, #g_MissionOMaticLedger do
+	
+		local key = g_MissionOMaticLedger[i].key
+		local value = g_MissionOMaticLedger[i].value
+		local comparison = condition.comparison or IS_GREATER_THAN_OR_EQUAL 
+	
+		if key == id then	
+			
+			return NumberComparison(value, comparison, number)
+		end
+		
+	end
+		
+	return nil
+	
+end
+
+-- CHECK DIFFICULTY SETTING check type
+--
+function Condition_CheckDifficultySetting_Check(condition, context) --difficulty, comparison
+	
+	local difficulty = string.sub(condition.difficulty, 1,1)
+	
+	local setting = Game_GetSPDifficulty()
+
+	local comparison = condition.comparison or IS_GREATER_THAN_OR_EQUAL 
+
+	return NumberComparison(setting, comparison, tonumber(difficulty))
+	
+end
+
+--
+-- CHECK PREFAB condition
+--
+function Condition_PrefabIsActive_Check(condition)
+	return Prefab_DoAction(condition.prefab, "IsActive")
+end
+
+
+--
+-- CHECK STATEMODEL condition
+--
+function Condition_CheckPlayerStateModelInt_Check(condition, context) -- statemodel_key, statemodel_value, comparison
+	
+	local key = condition.statemodel_key
+	local value = condition.statemodel_value
+	local comparison = condition.comparison or IS_GREATER_THAN_OR_EQUAL
+	
+	local statemodelInt = Player_GetStateModelInt(condition.player, key)
+	
+	return NumberComparison(statemodelInt, comparison, value)
+	
+end
+
+function Condition_CheckEntityStateModelTargetPlayer_Check(condition, context) -- statemodel_key, statemodel_value, statemodel_owner
+	
+	local key = condition.statemodel_key
+	local value = condition.statemodel_value
+	local statemodel_owner = condition.statemodel_owner
+	
+	if scartype(statemodel_owner) == ST_ENTITY and Entity_IsAlive(statemodel_owner) then
+		
+		local statemodelTarget = Entity_GetStateModelPlayerTarget(statemodel_owner, key)
+		return statemodelTarget == value
+		
+	else
+		return false
+	end
+	
+end
+
+--------------------------------------------------------------------
+--PLAYER--
+
+-- PLAYER OWNER check types
+--
+function Condition_PlayerOwner_Get(condition, context) --player, item, target, sgroup, egroup
+	
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	
+	local item = condition.item
+	if item == nil then
+		
+		if condition.use_context_as_target then
+			
+			item = Context_ExtractTargetFromContext(context)
+			context_target_type = scartype(item)
+			if context_target_type ~= ST_ENTITY and context_target_type ~= ST_SQUAD then
+				error("Expected an entity or a squad context type for this condition but received type: "..tostring(context_target_type))
+			end
+			
+		else
+			if condition.target == "EGROUP" then
+				item = condition.egroup
+			elseif condition.target == "SGROUP" then
+				item = condition.sgroup
+			end
+		end
+		
+	end
+	
+	return {target = item, player = player}
+	
+end
+function Condition_PlayerOwner_Check(condition, context) --player, item, target, sgroup, egroup
+	
+	local table = Condition_PlayerOwner_Get(condition, context)
+	if condition.opt_useTeam then
+		local owner = Util_GetPlayerOwner(table.target)
+		if owner == nil then
+			return table.player == nil
+		end
+		
+		return Player_GetTeam(owner) == Player_GetTeam(table.player)
+	end
+	
+	return Util_GetPlayerOwner(table.target) == table.player
+end
+
+
+-- HAS UNITS condition
+--
+function Condition_HasUnits_Get(condition, context) -- player, opt_useTeam, unitType, comparison, number
+	
+	-- looking up units by player and type
+	
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	
+	local sg_hasunits = SGroup_CreateIfNotFound("sg_hasunits")
+	if condition.opt_useTeam then
+		Team_GetAll(Team_ConvertTableToTeamID(Core_GetPlayerTeamsEntry(player)), sg_hasunits)
+	else
+		Player_GetAll(player, sg_hasunits)
+	end
+	
+	if condition.unitType ~= nil then
+		SGroup_Filter(sg_hasunits, condition.unitType, FILTER_KEEP)
+	end
+	
+	-- Adding nil check for cases when the condition is dynamically created and didn't get the parameter explicitly passed
+	if condition.opt_ignore_withdraw_towards_edge_squads == nil or condition.opt_ignore_withdraw_towards_edge_squads == true then
+		-- Remove edge withdrawing squads as they are not considered part of sgroups
+		SGroup_RemoveWithdrawTowardsEdgeSquads(sg_hasunits)
+	end
+	
+	--Filter airplane, casualty, auto-builder, emplacement, medic squads from the sgroup
+	local types_to_filter_out =
+	{
+		ignore_type_airplane = condition.ignore_type_airplane,
+		ignore_bp_casualty = condition.ignore_bp_casualty,
+		ignore_type_auto_builder = condition.ignore_type_auto_builder,
+		ignore_type_building = condition.ignore_type_building,
+		ignore_type_medic_na = condition.ignore_type_medic_na
+	}
+	Anvil_FilterOutForbiddenSquadTypes(sg_hasunits, types_to_filter_out)
+	
+	return {
+		result = SGroup_Count(sg_hasunits),
+		group = sg_hasunits
+	}
+end
+
+function Condition_HasUnits_Check(condition, context)
+	local result = Condition_HasUnits_Get(condition, context).result
+	return NumberComparison(result, condition.comparison, condition.number)
+end
+
+
+-- HAS BUILDINGS condition
+--
+function Condition_HasBuildings_Get(condition, context) -- player, buildingTypes, countBuildingsUnderConstruction, comparison, number
+
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	
+	local eg_hasbuildings = EGroup_CreateIfNotFound("eg_hasbuildings")
+	if condition.opt_useTeam then
+		Team_GetAll(Team_ConvertTableToTeamID(Core_GetPlayerTeamsEntry(player)), eg_hasbuildings)
+	else
+		Player_GetAll(player, eg_hasbuildings)
+	end
+	
+	EGroup_Filter(eg_hasbuildings, condition.buildingTypes, FILTER_KEEP)
+	
+	if condition.countBuildingsUnderConstruction == true then
+		EGroup_FilterUnderConstruction(eg_hasbuildings, FILTER_REMOVE)
+	end
+	
+	return {
+		result = EGroup_Count(eg_hasbuildings),
+		group = eg_hasbuildings
+	}
+end
+
+function Condition_HasBuildings_Check(condition, context)
+	local result = Condition_HasBuildings_Get(condition, context).result
+	return NumberComparison(result, condition.comparison, condition.number)
+end
+
+--
+-- HAS RESOURCES condition
+--
+function Condition_HasResources_Check(condition, context) --player, resourceType, comparison, number
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then
+		player = condition.player
+	end
+	local resourceType = condition.resourceType
+	local comparison = condition.comparison or IS_GREATER_THAN_OR_EQUAL
+	
+	if resourceType == "Manpower" then
+		resourceType = RT_Manpower
+	elseif resourceType == "Fuel" then
+		resourceType = RT_Fuel
+	elseif resourceType == "Munition" then
+		resourceType = RT_Munition
+	elseif resourceType == "Command" then
+		resourceType = RT_Command
+	else
+		error("Resource type is not supported: "..resourceType)
+	end
+	local resourceAmount = Player_GetResource(player, resourceType)
+	
+	return NumberComparison(resourceAmount, comparison, condition.number)
+end
+
+
+--------------------------------------------------------------------
+--LOCATIONS--
+
+
+-- Helper to extract location from various location types
+-- Requires that the condition has location_target_type
+-- and necessary data for each location type filled in.
+-- Returns the position and range for the location
+-- The range will be nil in the case that we want to use
+-- a rectangular area to check with.
+function Condition_ExtractLocation(condition, context)
+	
+	--get position
+	local location_target_type = condition.location_target_type
+	local range = condition.range or 30
+	local pos = nil
+	
+	if location_target_type == "MARKER" then
+		
+		pos = condition.position
+		
+	elseif location_target_type == "EGROUP" then
+		if condition.egroup ~= nil and EGroup_CountSpawned(condition.egroup) > 0 then
+			pos = Util_GetPosition(condition.egroup)
+		end
+	elseif location_target_type == "SGROUP" then
+		if condition.sgroup ~= nil and SGroup_CountSpawned(condition.sgroup) > 0 then
+			pos = Util_GetPosition(condition.sgroup)
+		end
+	elseif location_target_type == "CONTEXT" then
+		local context_pos, _, context_range = Context_ExtractInfoFromContext(context)
+		if context_pos ~= nil then
+			pos = context_pos
+		else
+			error("Couldn't find a marker on the context, yet context was selected as desired location!")
+		end
+		
+		if (not condition.override_marker_range) and context_range ~= nil and context_range > 1 then
+			range = context_range
+		end
+	end
+	
+	if (not condition.override_marker_range) and scartype(pos) == ST_MARKER then
+		if Marker_GetProximityRadiusOrDefault(pos, 1) > 1 then 
+			range = Marker_GetProximityRadiusOrDefault(pos, 30)
+		elseif Marker_GetProximityDimensionsOrDefault(pos, 0, 0).x > 1 then
+			range = nil -- nil indicates rectangular proximity shape.
+		end
+	end
+	
+	return pos, range
+end
+
+--
+-- UNIT AT LOCATION
+--
+function Condition_UnitAtLocation_Check(condition, context) --player, opt_useTeam, opt_sgroup, position, unitType, range, amount, comparison, ignore_airplanes, location_target_type, sgroup, egroup, range
+	
+	local data = Condition_UnitAtLocation_Get(condition, context)
+	if data == nil then
+		-- The location did not exist
+		return false
+	end
+	sg_SquadsNearMarker = data.sg_SquadsNearMarker
+	sg_UnitsToCheck = data.sg_UnitsToCheck
+	
+	local result = 0
+	
+	--compare units in filtered sgroup to the units in the area
+	for i=1, SGroup_CountSpawned(sg_SquadsNearMarker) do
+		for ii=1, SGroup_CountSpawned(sg_UnitsToCheck) do
+			
+			if SGroup_GetSpawnedSquadAt(sg_SquadsNearMarker, i) == SGroup_GetSpawnedSquadAt(sg_UnitsToCheck, ii) then
+				result = result + 1
+				break
+			end
+			
+		end
+	end
+	SGroup_Clear(sg_SquadsNearMarker)
+	return NumberComparison(result, condition.comparison, condition.amount)
+	
+end
+
+function Condition_UnitAtLocation_Get(condition, context)
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	local team = nil
+	
+	local comparison = condition.comparison
+	
+	--get position
+	local pos, range = Condition_ExtractLocation(condition, context)
+	
+	if pos == nil then
+		return nil
+	end
+
+	local amount = condition.amount or 1
+	
+	--Filter units
+	local sg_UnitsToCheck = SGroup_CreateIfNotFound("sg_UnitsToCheck")
+	SGroup_Clear(sg_UnitsToCheck)
+	
+	if condition.opt_sgroup == nil or condition.opt_sgroup == "" then --uses any unit
+		if condition.opt_useTeam then
+			team = team or Team_ConvertTableToTeamID(Core_GetPlayerTeamsEntry(player))
+			Team_GetAll(team, sg_UnitsToCheck)
+		else
+			Player_GetAll(player, sg_UnitsToCheck)
+		end
+	else
+		SGroup_AddGroup(sg_UnitsToCheck, condition.opt_sgroup) --uses specific sgroup
+	end
+	
+	if not condition.use_squad_type_to_filter then
+		if condition.unitType ~= nil then --filters for a specific unit BP
+			SGroup_Filter(sg_UnitsToCheck, condition.unitType, FILTER_KEEP)
+		end
+	else
+		Condition_FilterSGroupBySquadType(condition, sg_UnitsToCheck)
+	end
+	
+	--Count the units in the area
+	local sg_SquadsNearMarker = SGroup_CreateIfNotFound("sg_SquadsNearMarker")
+	if condition.opt_useTeam then
+		team = team or Team_ConvertTableToTeamID(Core_GetPlayerTeamsEntry(player))
+		Team_GetAllSquadsNearMarker(team, sg_SquadsNearMarker, pos, range)
+	else
+		Player_GetAllSquadsNearMarker(player, sg_SquadsNearMarker, pos, range)
+	end
+	
+	-- Adding nil check for cases when the condition is dynamically created and didn't get the parameter explicitly passed
+	if condition.opt_ignore_withdraw_towards_edge_squads == nil or condition.opt_ignore_withdraw_towards_edge_squads == true then
+		-- Remove edge withdrawing squads as they are not considered part of sgroups
+		SGroup_RemoveWithdrawTowardsEdgeSquads(sg_SquadsNearMarker)
+	end
+	
+	--Filter airplane, casualty, auto-builder, emplacement, medic squads from the sgroup
+	local types_to_filter_out =
+	{
+		ignore_type_airplane = condition.ignore_type_airplane,
+		ignore_bp_casualty = condition.ignore_bp_casualty,
+		ignore_type_auto_builder = condition.ignore_type_auto_builder,
+		ignore_type_building = condition.ignore_type_building,
+		ignore_type_medic_na = condition.ignore_type_medic_na
+	}
+	Anvil_FilterOutForbiddenSquadTypes(sg_SquadsNearMarker, types_to_filter_out)
+	
+	--Filtering out any other BPs
+	if condition.exclude_bps ~= nil then
+		for i = 1, #condition.exclude_bps do
+			SGroup_Filter(sg_SquadsNearMarker, condition.exclude_bps[i].bp_name, FILTER_REMOVE)
+		end
+	end
+	
+	return {
+		sg_SquadsNearMarker = sg_SquadsNearMarker,
+		sg_UnitsToCheck = sg_UnitsToCheck,
+		position = pos
+	}
+end
+
+--
+-- ENTITY AT LOCATION
+--
+function Condition_EntityAtLocation_Check(condition, context) --player, egroup, position, entityType
+	local egroup = Condition_EntityAtLocation_Get(condition, context).entity_egroup
+	
+	local pos, range = Condition_ExtractLocation(condition, context)
+
+	
+	if EGroup_Count(egroup) >= 1 then --checks group
+		
+		if Prox_AreEntitiesNearMarker(egroup, pos, ANY, range) then
+			return true
+		end
+		
+	end
+	return false
+end
+
+function Condition_EntityAtLocation_Get(condition, context)
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	
+	local egroup = EGroup_CreateIfNotFound("eg_EntityAtLocationCheck")
+	EGroup_Clear(egroup)
+	
+	if condition.entity_egroup == nil then			 --uses any unit
+		Player_GetAll(player, egroup)
+	else
+		EGroup_AddEGroup(egroup, condition.entity_egroup)  --uses specific egroup
+	end
+	
+	if condition.entityType ~= nil then  --filters for a specific unit type
+		EGroup_Filter(egroup, condition.entityType, FILTER_KEEP)
+	end
+	local FilterSpawned = function(group, index, entity)
+		EGroup_Remove(group, entity)
+	end
+	if condition.spawned_only then
+		EGroup_ForEachEx(egroup, FilterSpawned, false, true)
+	end
+	return {
+		entity_egroup = egroup
+	}
+end
+
+function Condition_UpgradedEntityAtLocation_Check(condition, context) --player, egroup, position, entityType, upgrade
+	
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+		
+	if condition.upgrade_pbg ~= nil then
+		upgrade_pbg = condition.upgrade_pbg
+	end
+	
+	local egroup = EGroup_CreateIfNotFound("eg_EntityAtLocationCheck")
+	
+	if condition.egroup == nil then			 --uses any unit
+		Player_GetAll(player, egroup)
+	else
+		EGroup_AddEGroup(egroup, condition.egroup)  --uses specific egroup
+	end
+	
+	if condition.entityType ~= nil then  --filters for a specific unit type
+		EGroup_Filter(egroup, condition.entityType, FILTER_KEEP)
+	end
+	
+	if EGroup_CountSpawned(egroup) >= 1 then --checks group
+		
+		if Prox_AreEntitiesNearMarker(egroup, condition.position, ANY, Marker_GetProximityRadiusOrDefault(condition.position, 0)) then
+			-- check for specified upgrade for egroup if it's not nil
+			if upgrade_pbg ~= nil and EGroup_HasBlueprint(egroup, upgrade_pbg, ANY) then
+				EGroup_Clear(egroup)
+				return true
+			end
+		end
+		
+	end
+	
+	EGroup_Clear(egroup)
+	return false
+	
+end
+
+--------------------------------------------------------------------
+--UNITS--
+
+--
+-- HEALTH
+--
+function Condition_HealthPercentage_Get(condition, context) -- comparison, percentage, target, sgroup, egroup
+	
+	local percentage = condition.percentage
+	local comparison = condition.comparison
+	local target = condition.target
+	local sgroup = condition.sgroup
+	local egroup = condition.egroup
+	local currentHealth = nil
+	
+	if percentage > 1 then
+		percentage = 1
+	elseif percentage < 0 then
+		percentage = 0
+	end
+	local group = nil
+	if condition.use_context_as_target == true then
+		local target = Context_ExtractTargetFromContext(context)
+		if scartype(target) == ST_SQUAD and Squad_IsAlive(target) then
+			currentHealth = Squad_GetHealthPercentage(target, true)
+		elseif scartype(target) == ST_ENTITY and Entity_IsAlive(target) then
+			currentHealth = Entity_GetHealthPercentage(target)
+		else
+			currentHealth = 0
+		end
+	elseif target == "SGROUP" and sgroup ~= nil then
+		currentHealth = Util_GetHealth(sgroup)
+		group = sgroup
+	elseif target == "EGROUP" and egroup ~= nil then
+		currentHealth = Util_GetHealth(egroup)
+		group = egroup
+	end
+	return {
+		result = currentHealth,
+		percentage = percentage,
+		target = group
+	}
+end
+
+function Condition_HealthPercentage_Check(condition, context) -- comparison, percentage, target, sgroup, egroup
+	local table = Condition_HealthPercentage_Get(condition, context)
+	return NumberComparison(table.result, condition.comparison, table.percentage)
+end
+
+--
+-- Is under attack?
+--
+function Condition_IsUnderAttack_Check(condition, context) -- sgroup, all, time_since_last_attack
+	
+	local sgroup = condition.sgroup
+	local all = condition.all
+	local duration = condition.time_since_last_attack
+	
+	return SGroup_IsUnderAttack(sgroup, all, duration)
+	
+end
+
+--
+-- CAN SEE
+--
+function Condition_PlayerCanSee_Check(condition, context) -- player, target_type, sgroup, egroup, position, all
+
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	local target_type = condition.target_type
+	local all = condition.all
+	
+	local result = false
+	if target_type == "SGROUP" then
+		result = Player_CanSeeSGroup(player, condition.sgroup, all)
+	elseif target_type == "EGROUP" then
+		result = Player_CanSeeEGroup(player, condition.egroup, all)
+	elseif target_type == "POSITION" then
+		result = Player_CanSeePosition(player, Marker_GetPosition(condition.position))
+	elseif target_type == "ENEMY" then
+		local sg_playercansee = SGroup_CreateIfNotFound("sg_playercansee")
+		if Player_GetTeam(player) == 2 then
+			Team_GetAll(Team_ConvertTableToTeamID(Core_GetTeamsEntryFromIndex(1)), sg_playercansee)
+		else
+			Team_GetAll(Team_ConvertTableToTeamID(Core_GetTeamsEntryFromIndex(2)), sg_playercansee)
+		end
+		result = Player_CanSeeSGroup(player, sg_playercansee, all)
+		SGroup_Clear(sg_playercansee)
+	elseif target_type == "CONTEXT" then
+
+		local context_pos, _, _ = Context_ExtractInfoFromContext(context)
+		if context_pos == nil then
+			error("Checking if player can see the context position, but no valid context was given!")
+		end
+		result = Player_CanSeePosition(player, context_pos)
+	end
+	return result
+	
+end
+
+function Condition_SGroupCanSee_Check(condition, context) -- player, target_all, sgroupA, sgroupB, all
+	
+	local all = condition.all
+	local target_all = condition.target_all
+	local sgroupB = condition.sgroupB
+	
+	if target_all ~= nil and target_all == true then
+		sgroupB = SGroup_CreateIfNotFound("sg_SGroupCanSeeCheck")
+		Player_GetAll(condition.player, sgroupB)
+	end
+	
+	return SGroup_CanSeeSGroup(condition.sgroupA, sgroupB, all)
+	
+end
+
+function Condition_SGroupCanSeeSGroup_Check(condition, context) -- player, target_all, sgroupA, sgroupB, all
+	
+	local all = condition.all
+	if condition.sgroupA_source ~= nil and condition.sgroupB_target ~= nil then
+		return SGroup_CanSeeSGroup(condition.sgroupA_source, condition.sgroupB_target, all)
+	end
+
+end
+
+--
+-- COUNT
+--
+function Condition_GroupCount_Get(condition, context) -- comparison, number, spawned_only
+	
+	local comparison = condition.comparison
+	local target = condition.target
+	local sgroup = condition.sgroup
+	local egroup = condition.egroup
+	local currentCount = nil
+	local group = nil
+	
+	if target == "SGROUP" and sgroup ~= nil then
+		group = sgroup
+		
+		-- Adding nil check for cases when the condition is dynamically created and didn't get the parameter explicitly passed
+		if condition.opt_ignore_withdraw_towards_edge_squads == nil or condition.opt_ignore_withdraw_towards_edge_squads == true then
+			-- Remove edge withdrawing squads as they are not considered part of sgroups
+			SGroup_RemoveWithdrawTowardsEdgeSquads(group)
+		end
+		
+		if condition.spawned_only then
+			currentCount = SGroup_CountSpawned(sgroup)
+		else
+			currentCount = SGroup_Count(sgroup)
+		end
+	elseif target == "EGROUP" and egroup ~= nil then
+		group = egroup
+		if condition.spawned_only then
+			currentCount = EGroup_CountSpawned(egroup)
+		else
+			currentCount = EGroup_CountAlive(egroup)
+		end
+	end
+	
+	return {
+		result = currentCount,
+		group = group
+	}
+end
+	
+function Condition_GroupCount_Check(condition, context) -- comparison, number, spawned_only
+	
+	local currentCount = Condition_GroupCount_Get(condition).result
+	
+	return NumberComparison(currentCount, condition.comparison, condition.number)
+	
+end
+
+function Condition_GroupCount_GetCount(condition)
+	local result = Condition_GroupCount_Get(condition).result
+	if condition.starting_amount == nil then
+		condition.starting_amount = result
+	end
+	local max = condition.number
+	
+	if condition.comparison == IS_LESS_THAN or condition.comparison == IS_LESS_THAN_OR_EQUAL then
+		result = condition.starting_amount - result
+		max = math.abs(condition.starting_amount - max)
+	end
+	
+	return {
+		current = result,
+		max = max
+	}
+end
+
+
+-- KILLED check type
+--
+function Condition_GroupKilled_Check(condition, context) -- group, location TODO: depricate and use count check instead
+	
+	local desiredResult = condition.desiredResult
+	if desiredResult == nil then
+		desiredResult = true
+	end
+	local result = nil
+	local group = condition.group
+	
+	if scartype(group) == ST_EGROUP then
+		result = (EGroup_Count(group) == 0) or (EGroup_GetAvgHealth(group) == 0)
+	elseif scartype(group) == ST_SGROUP then
+		result = SGroup_Count(group) == 0 or (SGroup_GetAvgHealth(group) == 0)
+	else
+		fatal("Conditionlist GroupKilled function - group variable was not an SGroup or EGroup")
+	end
+	
+	return desiredResult == result
+	
+end
+
+--
+-- COMPARE UNIT COUNTS condition
+--
+function Condition_CompareUnitCounts_Check(condition, context) -- playerA, playerB, sgroupA, sgroupB, position, comparison
+	local table = Condition_CompareUnitCounts_Get(condition, context)
+	local result = NumberComparison(
+		SGroup_Count(table.sgroupA),
+		condition.comparison,
+		SGroup_Count(table.sgroupB)
+		)
+	table.cleanup(table)
+	return result
+end
+function Condition_CompareUnitCounts_Get(condition, context) -- playerA, playerB, sgroupA, sgroupB, position, comparison
+	
+	local position = condition.position
+	local hasShape = Marker_HasProximityRange(position)
+	
+	local sgroupA = condition.sgroupA
+	local sgroupB = condition.sgroupB
+	local sgroupA_is_temp = false
+	local sgroupB_is_temp = false
+	
+	
+	local playerA = World_GetPlayerAt(1)
+	local playerB = World_GetPlayerAt(2)
+	
+	if condition.playerA ~= nil then 
+		playerA = condition.playerA
+	end
+	if condition.playerB ~= nil then 
+		playerB = condition.playerB
+	end
+	
+	--playerA
+	if sgroupA == nil then
+		sgroupA = SGroup_CreateUnique("")
+		sgroupA_is_temp = true
+		if position ~= nil and hasShape then 
+			Player_GetAllSquadsNearMarker(playerA, sgroupA, position)
+		else --use all player units
+			Player_GetAll(playerA, sgroupA)
+		end
+	end
+	
+	--playerB
+	if sgroupB == nil then
+		sgroupB = SGroup_CreateUnique("")
+		sgroupB_is_temp = true
+		if position ~= nil and hasShape then 
+			Player_GetAllSquadsNearMarker(playerB, sgroupB, position)
+			unitAmountB = SGroup_Count(sgroup)
+		else --use all player units
+			Player_GetAll(playerB, sgroupB)
+		end
+	end
+	
+	local cleanup = function(table)
+		if table.sgroupA_is_temp then 
+			SGroup_Destroy(table.sgroupA)
+		end
+		if table.sgroupB_is_temp then 
+			SGroup_Destroy(table.sgroupB)
+		end
+	end
+	
+	return {
+		sgroupA = sgroupA,
+		sgroupB = sgroupB,
+		cleanup = cleanup
+	}
+end
+
+
+--------------------------------------------------------------------
+--OBJECTIVES--
+
+--
+-- OBJECTIVE IS COMPLETE
+--
+function Condition_ObjectiveIsComplete_Check(condition, context)
+	
+	local objective = MissionOMatic_FindObjective(condition.id, true)
+	
+	if objective == nil then
+		return false
+	end
+	
+	if context ~= nil and context.allowPartialObjectiveCompletion == true then
+		return Objective_IsComplete(objective.objectiveData)
+	else
+		
+		-- Check internal status of objective, without using Objective_IsComplete
+		-- because we want to wait until the objective is actually done playing Intel
+		return Obj_GetState(objective.objectiveData.ID) == OS_Complete
+	end
+	
+end
+
+--
+-- OBJECTIVE IS FAILED
+--
+function Condition_ObjectiveIsFailed_Check(condition, context)
+	
+	local objective = MissionOMatic_FindObjective(condition.id)
+	
+	if objective == nil then
+		return nil
+	end
+	
+	return Objective_IsFailed(objective.objectiveData)
+	
+end
+
+--
+-- OBJECTIVE IS STARTED
+--
+function Condition_ObjectiveIsStarted_Check(condition, context)
+	
+	local objective = MissionOMatic_FindObjective(condition.id)
+	
+	if objective == nil then
+		return nil
+	end
+	
+	return Objective_IsStarted(objective.objectiveData)
+	
+end
+
+--
+-- OBJECTIVE COUNTER
+--
+function Condition_ObjectiveCounter_Get(condition, context) -- comparison, number, id
+	
+	local objective = MissionOMatic_FindObjective(condition.id) or MissionOMatic_GetCurrentPrimaryObjective()
+	local objectiveData = objective.objectiveData
+	
+	local currentCounter = nil
+	if Objective_IsCounterSet(objectiveData) then
+		currentCounter = Objective_GetCounter(objectiveData)
+	end
+	
+	return {objective = objective, currentCounter = currentCounter}
+end
+
+function Condition_ObjectiveCounter_Check(condition, context) -- comparison, number, id
+	local table = Condition_ObjectiveCounter_Get(condition, context)
+	if table.currentCounter ~= nil then
+		return NumberComparison(table.currentCounter, condition.comparison, condition.number)
+	else
+		return false
+	end
+end
+
+--
+-- OBJECTIVE TIMER
+--
+function Condition_ObjectiveTimer_Get(condition, context) -- comparison, number, id
+	
+	local objective = MissionOMatic_FindObjective(condition.id) or MissionOMatic_GetCurrentPrimaryObjective()
+	local objectiveData = objective.objectiveData
+	
+	local currentTime = nil
+	if Objective_IsTimerSet(objectiveData) then
+		currentTime = Objective_GetTimerSeconds(objectiveData)
+	end
+	
+	return {objective = objective, currentTime = currentTime}
+end
+function Condition_ObjectiveTimer_Check(condition, context) -- comparison, number, id
+	local table = Condition_ObjectiveTimer_Get(condition, context)
+	local number = condition.number
+	local comparison = condition.comparison or IS_LESS_THAN_OR_EQUAL
+	
+	if table.currentTime ~= nil then
+		return NumberComparison(table.currentTime, comparison, number)
+	else
+		return false
+	end
+end
+
+
+--
+-- OBJECTIVE INTRO CHECK
+--
+function Condition_ObjectiveIntroCheck_Check(condition, context) -- name
+	
+	for i=1, #g_MissionObjectives do
+		
+		return g_MissionObjectives[i].instanceName == condition.name
+		
+	end
+	
+	return nil
+	
+end
+--
+-- OBJECTIVE INTRO CHECK
+--
+
+function Condition_CheckAffectorTable_Check(condition, context) -- affector, company_blueprint, number
+	
+	if condition.affector == "EntryPoint" then
+		return g_entryPointID == condition.number
+	end
+	local affectorsTable = Affectors_GetTable()
+	if affectorsTable == nil then
+		return nil
+	end
+	
+	if scartype(condition.company_blueprint) == ST_PBG then
+		local company_name = BP_GetName(condition.company_blueprint)
+		if condition.affector == "CompanyBlueprint" then
+			return affectorsTable.player_company_bp_name == company_name
+		elseif condition.affector == "EnemyCompanyBlueprint" then
+			return affectorsTable.enemy_company_bp_name == company_name
+		elseif condition.affector == "ReinforcingCompanyBlueprint" then
+			return affectorsTable.reinforcing_company_bp_name == company_name
+		end
+	end
+	
+end
+
+------
+-- PlayerHasAbilityOrUpgrade
+------
+-- Checks to see if a player has an upgrade.  Filters to ensure the ability is not on an SGroup or an EGroup first.
+function Condition_PlayerHasAbilityOrUpgrade_Check(condition, context) -- player, abilityOrUpgrade, ability_pbg, upgrade_pbg
+	local abilityOrUpgrade = condition.abilityOrUpgrade
+	local ability = condition.ability_pbg
+	local upgrade = condition.upgrade_pbg
+	local result = false
+		
+	local player = World_GetPlayerAt(1)
+	
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	
+	local eg_playerhasability = EGroup_CreateIfNotFound("eg_playerhasability")
+	local sg_playerhasability = SGroup_CreateIfNotFound("sg_playerhasability")
+	Player_GetAll(player, sg_playerhasability, eg_playerhasability)
+	
+	EGroup_FilterUnderConstruction(eg_playerhasability, FILTER_REMOVE)
+		
+	if abilityOrUpgrade == "Ability" and ability ~= nil then
+		local squadAbility = nil		
+		local entityAbility = nil
+
+		if SGroup_CountSpawned(sg_playerhasability) >= 1 then
+			squadAbility = SGroup_HasAbility(sg_playerhasability, ability, ANY)
+		end
+		
+		if EGroup_CountSpawned(eg_playerhasability) >= 1 then
+			entityAbility = EGroup_HasAbility(eg_playerhasability, ability, ANY)
+		end
+		
+		if (squadAbility == nil and entityAbility == nil) or (squadAbility == false and entityAbility == false) then
+			
+			result = Player_HasAbility(player, condition.ability_pbg)
+			
+		else
+			
+			result = false
+			
+		end
+		
+	elseif abilityOrUpgrade ~= "Upgrade" and upgrade ~= nil then
+		
+		local squadUpgrade = nil
+		local entityUpgrade = nil
+		if SGroup_CountSpawned(sg_playerhasability) >= 1 then
+			squadUpgrade = SGroup_HasUpgrade(sg_playerhasability, upgrade, ANY)
+		end
+		
+		if EGroup_CountSpawned(eg_playerhasability) >= 1 then
+			entityUpgrade = EGroup_HasUpgrade(eg_playerhasability, upgrade, ANY)
+		end
+		
+		if (squadUpgrade == nil and entityUpgrade == nil) or (squadUpgrade == false and entityUpgrade == false) then
+			result = Player_HasUpgrade(player, condition.upgrade_pbg)
+		else
+			result = false
+		end
+		
+	else
+		result = false
+	end
+	
+	EGroup_Clear(eg_playerhasability)
+	SGroup_Clear(sg_playerhasability)
+	return result
+	
+end
+
+-- Check Player race
+-- Return true if the player race matches to the one passed in
+function Condition_CheckRace_Check(condition, context)
+	if condition.race == nil or condition.race == "" then
+		error("A valid race was not used in the condition CheckRace")
+	end
+	
+	if Player_GetRace(condition.player) == condition.race then
+		return true
+	end
+	return false
+end
+
+-- Has constructed x entities with a certain blueprint
+-- Return true once enough entities have been constructed
+function Condition_CountConstructedEntities_Check(condition, context)
+	if condition.count_so_far == nil then -- Set default values, handle include_existing
+		condition.tracker_egroup = EGroup_CreateUnique("construct")
+		condition.player = condition.player or World_GetPlayerAt(1)
+		if not condition.include_existing then
+			condition.count_so_far = 0
+			CountNewEGroups(condition.ebp, condition)
+			if condition.opt_dest_egroup ~= nil then
+				EGroup_Clear(condition.opt_dest_egroup)
+			end
+		end
+		condition.count_so_far = 0
+	end
+	-- this pre-check is here because once the condition is met we clean up
+	-- the tracker egroup, and so CountNewEGroups would hit a nil
+	if NumberComparison(condition.count_so_far, condition.comparison, condition.count) then
+		return true
+	end
+	CountNewEGroups(condition.ebp, condition)
+	if NumberComparison(condition.count_so_far, condition.comparison, condition.count) then
+		EGroup_Destroy(condition.tracker_egroup)
+		return true
+	end
+	return false
+end
+
+function Condition_CountConstructedEntities_GetCount(condition, context)
+	return __CountConstructed_GetCount(condition, context)
+end
+
+-- Has constructed x squads with a certain blueprint
+-- Return true once enough squads have been constructed
+function Condition_CountConstructedSquads_Check(condition, context)
+	if condition.count_so_far == nil then -- Set default values, handle include_existing
+		condition.tracker_sgroup = SGroup_CreateUnique("construct")
+		condition.player = condition.player or World_GetPlayerAt(1)
+		if not condition.include_existing then
+			condition.count_so_far = 0
+			CountNewSGroups(condition.sbp, condition, false)
+			if condition.opt_dest_sgroup ~= nil then
+				SGroup_Clear(condition.opt_dest_sgroup)
+			end
+		end
+		condition.count_so_far = 0
+	end
+	-- this pre-check is here because once the condition is met we clean up
+	-- the tracker sgroup, and so CountNewSGroups would hit a nil
+	if NumberComparison(condition.count_so_far, condition.comparison, condition.count) then
+		return true
+	end
+	CountNewSGroups(condition.sbp, condition, false)
+	if NumberComparison(condition.count_so_far, condition.comparison, condition.count) then
+		SGroup_Destroy(condition.tracker_sgroup)
+		return true
+	end
+	return false
+end
+
+function Condition_CountConstructedSquads_GetCount(condition, context)
+	return __CountConstructed_GetCount(condition, context)
+end
+
+-- Has constructed x instances of a certain upgrade blueprint
+-- Return true once enough such instances have been constructed
+function Condition_CountConstructedUpgrades_Check(condition, context)
+	if condition.count_so_far == nil then -- Set default values, handle include_existing
+		if condition.opt_dest_sgroup ~= nil and condition.opt_dest_egroup ~= nil then
+			error("Cannot have dest sgroup and egroup")
+		end
+		condition.tracker_egroup = EGroup_CreateUnique("construct")
+		condition.tracker_sgroup = SGroup_CreateUnique("construct")
+		if not condition.include_existing then
+			condition.count_so_far = 0
+			CountNewEGroups(condition.upgrade_pbg, condition)
+			CountNewSGroups(condition.upgrade_pbg, condition, true)
+			if condition.opt_dest_egroup ~= nil then
+				EGroup_Clear(condition.opt_dest_egroup)
+			end
+			if condition.opt_dest_sgroup ~= nil then
+				SGroup_Clear(condition.opt_dest_sgroup)
+			end
+		end
+		condition.count_so_far = 0
+	end
+	local playerHas = Player_HasUpgrade(condition.player, condition.upgrade_pbg)
+	if playerHas then
+		return true -- Count and Location don't make sense here, so we ignore them
+	end
+	-- this pre-check is here because once the condition is met we clean up
+	-- the tracker groups, and so CountNew... would hit a nil
+	if NumberComparison(condition.count_so_far, condition.comparison, condition.count) then
+		return true -- No need to do more counting
+	end
+	CountNewEGroups(condition.upgrade_pbg, condition)
+	CountNewSGroups(condition.upgrade_pbg, condition, true)
+	if NumberComparison(condition.count_so_far, condition.comparison, condition.count) then
+		EGroup_Destroy(condition.tracker_egroup)
+		SGroup_Destroy(condition.tracker_sgroup)
+		return true
+	end
+	return false
+end
+
+function Condition_CountConstructedUpgrades_GetCount(condition, context)
+	return __CountConstructed_GetCount(condition, context)
+end
+
+function __CountConstructed_GetCount(condition)
+	return {
+		current = condition.count_so_far or 0,
+		max = condition.count,
+	}
+end
+
+function Condition_IsOnScreen_Check(condition, context)
+	if condition.is_on_screen_target_type == "SGROUP" then
+		return SGroup_IsOnScreen(condition.sgroup, condition.all, condition.percentage)
+	elseif condition.is_on_screen_target_type == "EGROUP" then
+		return EGroup_IsOnScreen(condition.egroup, condition.all, condition.percentage)
+	elseif condition.is_on_screen_target_type == "MARKER" then
+		return Misc_IsPosOnScreen(Marker_GetPosition(condition.position), condition.percentage)
+	else
+		error("Incorrect target type: "..condition.is_on_screen_target_type)
+	end
+end
+
+function Condition_IsSuppressedOrPinned_Check(condition, context)
+	if condition.suppressed_pinned_check_option == "IsSuppressed" then
+		return SGroup_IsSuppressed(condition.sgroup, condition.all)
+	elseif condition.suppressed_pinned_check_option == "IsPinned" then
+		return SGroup_IsPinned(condition.sgroup, condition.all)
+	elseif condition.suppressed_pinned_check_option == "Either" then
+		return SGroup_IsPinnedOrSuppressed(condition.sgroup, condition.all)
+	else
+		error("Incorrect check option type: "..condition.suppressed_pinned_check_option)
+	end
+end
+
+function Condition_PlayerPopulation_Check(condition, context)
+	local cap_type = _G[condition.population_cap_type] or CT_Invalid
+	local player_current_population = Player_GetCurrentPopulation(condition.player, cap_type)
+	return NumberComparison(player_current_population, condition.comparison, condition.number)
+end
+
+function Condition_SGroupCanSeeSGroup_Check(condition, context) -- player, target_all, sgroupA, sgroupB, all
+	
+	local all = condition.all
+	if condition.sgroupA_source ~= nil and condition.sgroupB_target ~= nil then
+		return SGroup_CanSeeSGroup(condition.sgroupA_source, condition.sgroupB_target, all)
+	end
+
+end
+
+--
+-- COUNT
+--
+function Condition_IsGarrisoned_Get(condition, context)
+	local total_count = nil -- Total holds we're checking (count of the group, or 1 if we're only checking the context)
+	local target_is_entity = nil -- Specifies the type of the holds that we will be checking (holds can be squads too)
+	local context_target = nil -- Non-nil in the case of grabbing the target from the context
+	local garrisoned_count = 0 -- Number of holds we find that have at least one matching unit
+	
+	-- Initialize the above:
+	if condition.garrison_target_type == "EGROUP" then
+		total_count = EGroup_Count(condition.egroup)
+		target_is_entity = true
+	elseif condition.garrison_target_type == "SGROUP" then
+		total_count = SGroup_Count(condition.sgroup)
+		target_is_entity = false
+	else
+		-- The target type is context, and there can only be one context
+		-- garrison.
+		total_count = 1
+		context_target = Context_ExtractTargetFromContext(context)
+		context_target_type = scartype(context_target)
+		if context_target_type == ST_ENTITY then
+			target_is_entity = true
+		elseif context_target_type == ST_SQUAD then
+			target_is_entity = false
+		else
+			error("Expected an entity or a squad context type for this condition but received type: "..tostring(context_target_type))
+		end
+	end
+	
+	-- This is called on each target and is responsible for counting how many garrisons have
+	-- matching units held within them. Returns true (to early exit from Group_ForEach) only
+	-- if a populated garrison was found and there is no need to continue searching for one.
+	local collectHeldSquads = function(_gid, _idx, target)
+		local result = false
+		local heldSquads = SGroup_CreateUnique()
+		
+		if target_is_entity then
+			Entity_GetSquadsHeld(target, heldSquads)
+		else
+			Squad_GetSquadsHeld(target, heldSquads)
+		end
+
+		if not condition.use_squad_type_to_filter then
+			if condition.unitType ~= nil then --filters for a specific unit BP
+				SGroup_Filter(heldSquads, condition.unitType, FILTER_KEEP)
+			end
+		else
+			Condition_FilterSGroupBySquadType(condition, heldSquads)
+		end
+		
+		if SGroup_Count(heldSquads) > 0 then
+			garrisoned_count = garrisoned_count + 1
+			if not match_all then
+				-- Return true for an early exit from Group_ForEach
+				result = true
+			end
+		end
+		
+		SGroup_Destroy(heldSquads)
+		
+		return result
+	end
+	
+	-- Call the helper on every input target to count garrisoned_count:
+	if condition.garrison_target_type == "EGROUP" then
+			EGroup_ForEach(condition.egroup, collectHeldSquads)
+	elseif condition.garrison_target_type == "SGROUP" then
+			SGroup_ForEach(condition.sgroup, collectHeldSquads)
+	else
+		-- Garrison target type is CONTEXT
+		collectHeldSquads(nil, nil, context_target)
+	end
+	
+	return {
+		total_count = total_count,
+		garrisoned_count = garrisoned_count,
+	}
+end
+
+function Condition_IsGarrisoned_Check(condition, context)
+	local table = Condition_IsGarrisoned_Get(condition, context)
+
+	local match_all = condition.garrison_match_type == "ALL"
+	local match_none = condition.garrison_match_type == "NONE"
+	local match_any = condition.garrison_match_type == "ANY"
+	
+	if match_any then
+		return table.garrisoned_count > 0
+	elseif match_all then
+		return table.garrisoned_count == table.total_count
+	else
+		return table.garrisoned_count == 0
+	end
+end
+
+function Condition_CheckTerritoryOwnedBy_Check(condition, context)
+	local location = Condition_ExtractLocation(condition, context)
+	local territory_sector = Territory_GetSectorContainingPoint(location)
+	return Territory_GetSectorOwnerID(territory_sector) == Player_GetID(condition.player)
+end
+
+function Condition_CheckTerritoryFrontlineDistance_Check(condition, context)
+	local location = Condition_ExtractLocation(condition, context)
+	local territory_sector = Territory_GetSectorContainingPoint(location)
+	return Territory_IsSectorWithinDistanceOfFrontLine(territory_sector, condition.sector_distance)
+end
+
+function Condition_AskScarFunctionWithDataInternal_Check(condition, context)
+	local func = _G[condition.functionName]
+	if scartype(func) ~= ST_FUNCTION then
+		fatal("Objective AskScarFunctionWithDataInternal Condition - function "..tostring(condition.functionName).." not found")
+	end
+	return func(condition.data)
+end
+
+function Condition_CheckNarrativeVariable_Check(condition, context)
+	
+	local variableName = condition.narrative_variableset .. "." .. condition["narrative_variable_" .. condition.narrative_variableset]
+	
+	local value = string.lower(condition.narrative_condition_value)
+	
+	if (value == "true") then
+		value = true
+	else
+		if (value == "false") then
+			value = false
+		else
+			value = tonumber(value)
+		end
+	end
+	
+	local number = GetNarrativeVariable(variableName)
+	
+	return NumberComparison(number, condition.narrative_comparison, value)
+end
+
+function Condition_NoEventRunning_Check(condition, context)
+	return Event_IsAnyRunning() == false
+end
+
+function Condition_TrueForTurns_Check(condition, context)
+	
+	for index, item in pairs(condition.subconditions) do
+		local result = ConditionList_CheckItem(item, context)
+		if result == false then
+			if condition.trueSinceTurn ~= nil then
+				condition.trueSinceTurn = nil
+			end
+			return false
+		end
+	end
+	
+	if condition.trueSinceTurn == nil then
+		condition.trueSinceTurn = World_GetCurrentTurn()
+	end
+	
+	return (World_GetCurrentTurn() - condition.trueSinceTurn) >= condition.turn_count;
+end
+
+--------------------------------------------------------------------
+--------------------------------------------------------------------
+--------------------------------------------------------------------
+
+function Condition_FilterSGroupBySquadType(condition, sgroup)
+	if condition.squad_types_to_filter ~= nil and next(condition.squad_types_to_filter) ~= nil then
+		local formatted_squad_types_to_filter = {}
+		for i, squad_type in ipairs(condition.squad_types_to_filter) do
+			table.insert(formatted_squad_types_to_filter, squad_type.squad_type)
+		end
+		SGroup_Filter(sgroup, formatted_squad_types_to_filter, FILTER_KEEP)
+	end
+end
+
+--UTILITY--
+function NumberComparison(number, comparison, value)
+	
+	if scartype(comparison) == ST_STRING then
+		comparison = _G[comparison]	
+	end
+	
+	if comparison == IS_EQUAL then
+		if number == value then
+			return true
+		end
+	elseif comparison == IS_LESS_THAN then
+		if number < value then
+			return true
+		end
+	elseif comparison == IS_GREATER_THAN then
+		if number > value then
+			return true
+		end
+	elseif comparison == IS_LESS_THAN_OR_EQUAL then
+		if number <= value then
+			return true
+		end
+	elseif comparison == IS_GREATER_THAN_OR_EQUAL then
+		if number >= value then
+			return true
+		end
+	elseif comparison == IS_NOT_EQUAL then
+		if number ~= value then
+			return true
+		end
+	end
+	
+	-- fall through - so NOT what was asked
+	return false
+	
+end
+
+-- Utility function for CountConstructedSquads and CountConstructedUpgrades to
+-- keep track of already counted constructions, and count all new constructions
+function CountNewSGroups(pbg, condition, isUpgradeCheck)
+	local current_sgroup = SGroup_CreateUnique("count_sgroups")
+	if condition.opt_source_sgroup == nil then
+		Player_GetAll(condition.player, current_sgroup)
+	else
+		SGroup_AddGroup(current_sgroup, condition.opt_source_sgroup)
+	end
+	local prox_sgroup = nil
+	if condition.require_location then
+	   prox_sgroup = SGroup_CreateUnique("construct_loc")
+	end
+	if isUpgradeCheck then
+		local remove_if_not_upgraded = function(group_id, _, squad)
+			if not Squad_HasUpgrade(squad, pbg) then
+				SGroup_Remove(current_sgroup, squad)
+			end
+		end
+		SGroup_ForEach(current_sgroup, remove_if_not_upgraded)
+	else
+		SGroup_Filter(current_sgroup, pbg, FILTER_KEEP)
+	end
+	local check_added = function(group_id, _, squad)
+		if not SGroup_ContainsSquad(condition.tracker_sgroup, squad.SquadID, true) and Squad_IsAlive(squad) then
+			SGroup_Add(condition.tracker_sgroup, squad)
+			if condition.require_location then
+				SGroup_Clear(prox_sgroup)
+				SGroup_Add(prox_sgroup, squad)
+				if Prox_AreSquadMembersNearMarker(prox_sgroup, condition.position, false) then
+					condition.count_so_far = condition.count_so_far + 1
+					if condition.opt_dest_sgroup ~= nil then 
+						SGroup_Add(condition.opt_dest_sgroup, squad)
+					end
+				end
+			else
+				condition.count_so_far = condition.count_so_far + 1
+				if condition.opt_dest_sgroup ~= nil then 
+					SGroup_Add(condition.opt_dest_sgroup, squad)
+				end
+			end
+		end
+	end
+	SGroup_ForEach(current_sgroup, check_added)
+	if prox_sgroup then
+		SGroup_Destroy(prox_sgroup)
+	end
+
+	SGroup_Destroy(current_sgroup)
+
+end
+
+-- Utility function for CountConstructedEntities and CountConstructedUpgrades to
+-- keep track of already counted constructions, and count all new constructions
+function CountNewEGroups(pbg, condition)
+	local current_egroup = EGroup_CreateUnique("count_egroups")
+	if condition.opt_source_egroup == nil then
+		Player_GetAll(condition.player, current_egroup)
+	else
+		EGroup_AddEGroup(current_egroup, condition.opt_source_egroup)
+	end
+	EGroup_Filter(current_egroup, pbg, FILTER_KEEP)
+	EGroup_FilterUnderConstruction(current_egroup, FILTER_REMOVE)
+	local check_added = function(group_id, _, entity)
+		if not EGroup_ContainsEntity(condition.tracker_egroup, entity, true) and Entity_IsSpawned(entity) then
+			if condition.count_so_far < condition.count then
+				EGroup_Add(condition.tracker_egroup, entity)
+				if condition.require_location then
+					if not Marker_InProximity(condition.position, Util_GetPosition(entity)) then
+						return
+					end
+				end
+				if condition.require_facing then
+					local facing = Util_GetPosition(condition.facing)
+					local position = Util_GetPosition(condition.position)
+					local offset = World_Pos(facing.x - position.x,
+						facing.y - position.y,
+						facing.z - position.z)
+					if Util_GetAngleDifference(offset, entity)
+						> condition.facing_tolerance_deg then
+						return
+					end
+				end
+				condition.count_so_far = condition.count_so_far + 1
+				if condition.opt_dest_egroup ~= nil then 
+					EGroup_Add(condition.opt_dest_egroup, entity)
+				end
+			end
+		end
+	end
+	EGroup_ForEach(current_egroup, check_added)
+
+	EGroup_Destroy(current_egroup)
+end

@@ -1,0 +1,44 @@
+import("rulesystem.scar")
+
+function AI_DebugLogProgress()
+	local player = AI_GetPlayer()
+	
+	local fuel = Player_GetResource(player, RT_Fuel)
+	local munition = Player_GetResource(player, RT_Munition)
+	local manpower = Player_GetResource(player, RT_Manpower)
+	
+	-- Resource rate per minute
+	local fuelRate = Player_GetResourceRate(player, RT_Fuel) * 60
+	local munitionRate = Player_GetResourceRate(player, RT_Munition) * 60
+	local manpowerRate = Player_GetResourceRate(player, RT_Manpower) * 60
+	
+	local values =
+	{
+		t_ai_blackboard.tickets,
+		fuel,
+		munition,
+		manpower,
+		fuelRate,
+		munitionRate,
+		manpowerRate
+	}
+	
+	AI_LogProgress(player, values)
+end
+
+function InitializeAIStrategy()
+	local player = AI_GetPlayer()
+	local labels =
+	{
+		"tickets",
+		"fuel",
+		"munition",
+		"manpower",
+		"fuel_rate",
+		"munition_rate",
+		"manpower_rate"
+	}
+	
+	AI_CreateProgressLog(player, labels)
+	Rule_AddInterval(AI_DebugLogProgress, 15)
+end

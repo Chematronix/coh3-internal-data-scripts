@@ -1,0 +1,66 @@
+--
+-- WorldBuilder prefab
+-- "Pre-roll Destruction"
+--
+
+
+-- Schema
+
+prerolldestruction_schema = {
+	
+	type = "Prefab",
+	name = "prerolldestruction",
+	description = "prerolldestruction",
+	script = "prerolldestruction.scar",
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",
+	itemSchema = {
+		{
+			type = ST_TABLE,
+			name = "bombing_locations",
+			description = "Locations to bomb during the preroll",
+			multiplicity = "multiple",
+			itemSchema = {
+				{
+					type = ST_MARKER,
+					name = "position",
+					description = "Where to check. May take into account range.",							
+					hasDirection = true,
+					category = "Options",
+				},
+				{
+					type = ST_PBG,
+					name = "weapon",
+					blueprintType = "weapon",
+					description = "The weapon to use for bombing this position. Falls back on the group's default weapon if left empty.",
+					lockedTo = "position",
+					category = "Options",
+				},
+			},
+		},
+		{
+			type = ST_PBG,
+			name = "weapon",
+			blueprintType = "weapon",
+			description = "The default weapon to use for each marker.",
+			lockedTo = "position",
+			category = "Options",
+		},
+		{
+			type = ST_NUMBER,
+			name = "duration",
+			description = "The number of simulation ticks to wait in preroll for the effects to settle",
+			category = "Options",
+			default = 0,
+		},
+		{
+			type = ST_STRING,
+			name = "layer_set_tags",
+			description = "A space-delimited list of tags used to identify whether this prefab should be used when loading a layer-set variant of the map. If left empty, this prefab will always be loaded for all variants.",
+			category = "Options",
+			default = "destroyed",
+		},
+	},
+}

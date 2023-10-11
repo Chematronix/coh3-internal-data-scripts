@@ -1,0 +1,112 @@
+-----------------------------------------------------------------------
+-- Victory Point game mode
+--
+-- Classic competitive game mode in which team's capture victory points to reduce the 
+-- opposing team's ticket count. A team wins by either exhausting the oppposing team's
+-- ticket count, destroying their base, or forcing them to surrender.
+--
+-- (c) Relic Entertainment 2020
+--
+-----------------------------------------------------------------------
+
+import("scarutil.scar")
+import("game_modifiers.scar")
+import("core.scar")
+
+import("ui/ticket_ui.scar")
+import("ui/outcome_ui.scar")
+
+import("audio/audio.scar")
+
+import("ai/ai_match_observer.scar")
+import("winconditions/options.scar")
+
+import("winconditions/ticket_vp.scar")
+
+import("winconditions/win_tickets.scar")
+import("winconditions/win_disconnect.scar")
+import("winconditions/win_destroy_base.scar")
+import("winconditions/win_surrender.scar")
+
+import("challenge/challenge_mp.scar")
+
+-----------------------------------------------------------------------
+-- Script framework (see  http://relicwiki/display/EE/Core+SCAR+Initialization+Framework)
+-----------------------------------------------------------------------
+
+Core_RegisterModule("VictoryPointMode")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function VictoryPointMode_OnInit()
+	print("Game mode: Victory Point")
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function VictoryPointMode_Start()
+
+	-- Sort players into teams
+	local teams = {}
+	for i = 1, World_GetPlayerCount() do
+		local team
+		for _, t in pairs(teams) do
+			if Player_ObserveRelationship(World_GetPlayerAt(t[1]), World_GetPlayerAt(i)) == R_ALLY then
+				team = t
+				break
+			end
+		end
+		team = team or {}
+		table.insert(team, i)
+		if not Table_Contains(teams, team) then 
+			table.insert(teams, team)
+		end
+	end
+
+	-- Verify at least one team and VP exist
+	local eg = EGroup_CreateUnique()
+	World_GetStrategyPoints(eg, true)
+	if #teams > 1 and EGroup_CountSpawned(eg) > 0 then
+		TicketUI_SetVisibility(true)
+	else
+		TicketUI_SetVisibility(false)
+		Core_UnregisterModule("Tickets")
+		Core_UnregisterModule("VictoryPoint")
+
+		-- Remove any victory points
+		local pos = {}
+		EGroup_ForEach(eg, function(egroup, index, entity)
+			if Entity_IsVictoryPoint(entity) then
+				table.insert(pos, Entity_GetPosition(entity))
+				Entity_Destroy(entity)
+			end
+		end)
+
+		-- Remove ghost image
+		for _, p in pairs(pos) do
+			FOW_RevealArea(p, 2.0, 1.0)
+		end
+	end
+	EGroup_Destroy(eg)
+
+	-- Show the ticket UI (and any other scripted UI elements)
+	Core_CallDelegateFunctions("ShowUI", true)
+end
+
+
+-- Called by core.scar when save game is loaded.
+function VictoryPointMode_OnGameRestore()
+	-- Show the ticket UI (and any other scripted UI elements)
+	Core_CallDelegateFunctions("ShowUI", true)
+end
+
+
+-- Called when any win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module and end the match.
+function VictoryPointMode_OnWinConditionTriggered(match_result)
+	Core_CallDelegateFunctions("OnGameOver", match_result)
+end	

@@ -1,0 +1,183 @@
+--? @group scardoc;Encounter
+
+import("aimanager/Goals/BaseGoal.scar")
+
+Ai = Ai or fatal("Ai not loaded properly")
+Ai.goals = Ai.goals or {}
+Ai.goals.FormationDefendAreaGoal = Clone(Ai.goals.BaseGoal)
+Ai.goals.DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData or {} -- preserve data on soft-reload
+
+local FormationDefendAreaGoal = Ai.goals.FormationDefendAreaGoal
+
+FormationDefendAreaGoal._BaseCreate = FormationDefendAreaGoal.Create
+FormationDefendAreaGoal._BaseSetupSkirmishAI = FormationDefendAreaGoal.SetupSkirmishAI
+FormationDefendAreaGoal._BaseUpdateGoalData = FormationDefendAreaGoal.UpdateGoalData
+FormationDefendAreaGoal._UpdateResourceGuidance = FormationDefendAreaGoal.UpdateResourceGuidance
+
+
+function FormationDefendAreaGoal:Create(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData, previousEncounterID)
+	local DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData
+	defaultGoalData = defaultGoalData or DefaultFormationDefendAreaGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultFormationDefendAreaGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultFormationDefendAreaGoalData.modifyGoalData
+	
+	local goal = self:_BaseCreate(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	
+	if(not goal.data.target) then fatal("ERROR: No DefendArea target defined for encounter "  .. encounter.data.name) end
+	if(goal.internalAIEncounterPtr) then fatal("ERROR: Objective object already defined for encounter "  .. encounter.data.name) end
+	
+	goal:CreateSkirmishAI(previousEncounterID)
+	
+	return goal
+end
+
+function FormationDefendAreaGoal:UpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	local DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData
+	defaultGoalData = defaultGoalData or DefaultFormationDefendAreaGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultFormationDefendAreaGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultDefendAreaGoalData.modifyGoalData
+
+	self:_BaseUpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+end
+
+--Create and Setup DefendArea based on skirmish AI
+function FormationDefendAreaGoal:CreateSkirmishAI(previousEncounterID)
+	if (not AI_IsLocalAIPlayer(self.encounter.data.player)) then
+		Ai:Print("Skipping Skirmish AI - player not enabled AI")
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Creating AI Encounter...")
+	if previousEncounterID then
+		self.internalAIEncounterPtr = AI_CreateRestoreEncounter(self.encounter.data.player, AIEncounterType_FormationDefendArea, previousEncounterID)
+	else
+		self.internalAIEncounterPtr = AI_CreateEncounter(self.encounter.data.player, AIEncounterType_FormationDefendArea)
+	end
+	
+	self:SetupEncounterSkirmishAI()
+	self:SetupSkirmishAI()
+end
+
+--Setup DefendArea based on skirmish AI
+function FormationDefendAreaGoal:SetupSkirmishAI()
+	if (self.internalAIEncounterPtr == nil or not AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID)) then
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Setting up Skirmish AI...")
+	
+	self:_BaseSetupSkirmishAI()
+	
+	AIEncounter_EngagementGuidance_SetMaxIdleTime(self.internalAIEncounterPtr, self.data.maxIdleTime or -1)		--  -1 is infinite
+	
+	if (self.data.patrol_params ~= nil and self.data.patrol_params.enabled) then
+		if (self.data.patrol_params.path ~= nil and self.data.patrol_params.path ~= "") then
+			AIEncounter_TargetGuidance_SetPatrolPathByName(self.internalAIEncounterPtr, self.data.patrol_params.path, self.data.patrol_params.waypoint_wait_time or 0, self.data.patrol_params.invert_path_at_end or false, self.data.patrol_params.start_inverted or false)
+		elseif not self.data.patrol_params.wander_center_override_use_squad_spawn_pos then 
+		
+			local wanderCenter = World_Pos(0, 0, 0)
+			local overrideWanderCenter = false
+			if self.data.patrol_params.wander_center_override_marker ~= nil then
+				wanderCenter = Marker_GetPosition(self.data.patrol_params.wander_center_override_marker)
+				overrideWanderCenter = true
+			end
+			
+			AIEncounter_TargetGuidance_SetPatrolWander(self.internalAIEncounterPtr, self.data.patrol_params.waypoint_wait_time or 0, self.data.patrol_params.wander_radius_mode or AIWanderRadiusMode_Leash, self.data.patrol_params.wander_radius_override or -1, overrideWanderCenter, wanderCenter)
+		end
+	end
+	
+	-- Im assuming that script formations will all be spawned together so Formup should never fail
+	AIEncounter_FormationGuidance_SetFormUpAtPositionTarget(self.internalAIEncounterPtr, self.data.target)
+	
+	local timeoutSeconds = 0
+	local squadPercent = 1.0
+	if self.data.moreForgiving == true then
+		timeoutSeconds = 2
+		squadPercent = 0.8
+		print("Issuing more forgiving formup order")
+	end
+	local testPercent = 0.5
+	print("Order at percent: "..tostring(testPercent))
+	AIEncounter_FormationGuidance_SetFormUpAtTimeOutParams(self.internalAIEncounterPtr, 0, 0.8)
+	
+	-- If we want the formup stage to run initially, formation encounters needs to trigger immediately
+	if self.data.triggerOnInit == true then
+		self:TriggerGoal()
+	end
+end
+
+-- Internal. Updates what squads and abilities are available for the goal to use
+function FormationDefendAreaGoal:UpdateResourceGuidance()
+	assert(self.internalAIEncounterPtr ~= nil)
+	assert(AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID))
+	
+	self:_UpdateResourceGuidance()
+end
+
+--[[
+-- DefendArea Goal Data Interface
+]]--
+
+--? @shortdesc Adjust default goal data for DefendArea goals.  Sets the default GoalData to the current defaults plus additionalDefaultGoalData; any values specified are used for unspecified encounter DefendArea goal values.
+--? @args Table additionalDefaultGoalData
+function AIFormationDefendAreaGoal_AdjustDefaultGoalData(additionalDefaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Adjusting FormationDefendAreaGoal default data...")
+
+	local additionalGoalData = Clone(additionalDefaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(additionalGoalData)
+	local DefaultBaseGoalData = Ai.goals.DefaultGoalData
+	local DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData
+	local defaultGoalData = DefaultFormationDefendAreaGoalData.defaultGoalData or DefaultBaseGoalData.defaultGoalData
+	DefaultFormationDefendAreaGoalData.defaultGoalData = MergeCloneTable(defaultGoalData, additionalGoalData)
+
+	Ai:Print("-----------------------------------------------")
+	Ai:Print("additionalDefaultGoalData")
+	Ai:Print(additionalGoalData)
+	Ai:Print("-----------------------------------------------")
+	DebugPrintGoals(DefaultformationDefendAreaGoalData.defaultGoalData, DefaultFormationDefendAreaGoalData.overrideGoalData, DefaultFormationDefendAreaGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set default goal data for DefendArea goals.  defaultGoalData is cloned; any values specified are used for unspecified encounter DefendArea goal values.
+--? @args Table defaultGoalData
+function AIFormationDefendAreaGoal_SetDefaultGoalData(defaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting FormationDefendAreaGoal default data...")
+
+	local DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData
+	DefaultDefendAreaGoalData.defaultGoalData = Clone(defaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultFormationDefendAreaGoalData.defaultGoalData)
+
+	DebugPrintGoals(DefaultFormationDefendAreaGoalData.defaultGoalData, DefaultFormationDefendAreaGoalData.overrideGoalData, DefaultFormationDefendAreaGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set override goal data for DefendArea goals.  overrideGoalData is cloned; any values specified are used for encounter DefendArea goal values.
+--? @args Table overrideGoalData
+function AIFormationDefendAreaGoal_SetOverrideGoalData(overrideGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting FormationDefendAreaGoal override data...")
+
+	local DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData
+	DefaultFormationDefendAreaGoalData.overrideGoalData = Clone(overrideGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultFormationDefendAreaGoalData.overrideGoalData)
+
+	DebugPrintGoals(DefaultFormationDefendAreaGoalData.defaultGoalData, DefaultFormationDefendAreaGoalData.overrideGoalData, DefaultFormationDefendAreaGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set modify goal data for DefendArea goals.  modifyGoalData is cloned; values specified via keyname_Multiplier are used for the numeric keyname encounter DefendArea goal value.
+--? @args Table modifyGoalData
+function AIFormationDefendAreaGoal_SetModifyGoalData(modifyGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting FormationDefendAreaGoal modify data...")
+
+	local DefaultFormationDefendAreaGoalData = Ai.goals.DefaultFormationDefendAreaGoalData
+	DefaultFormationDefendAreaGoalData.modifyGoalData = Clone(modifyGoalData) 
+
+	DebugPrintGoals(DefaultFormationDefendAreaGoalData.defaultGoalData, DefaultFormationDefendAreaGoalData.overrideGoalData, DefaultFormationDefendAreaGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end

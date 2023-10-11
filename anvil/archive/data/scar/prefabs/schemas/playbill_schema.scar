@@ -1,0 +1,212 @@
+--
+-- WorldBuilder prefab
+-- "Encounter"
+--
+
+-- Global schema templates
+import("prefabs/templates/conditions_template.scar")
+import("prefabs/templates/objectives_template.scar")
+import("prefabs/templates/playbills_template.scar")
+import("prefabs/schemas/locationgroupinfo.scar")
+
+-- Schema
+
+-- This is the context selection configuration table layout.
+-- It is separated because we will be programmatically adding
+-- to the table to accomodate a checkbox for every location tag type.
+local context_selection_info_schema = 
+{
+	{
+		type = ST_BOOLEAN,
+		name = "random",
+		displayName = "Choose Random Matching Context",
+		default = false,
+		description = "Instead of returning the first matching context, choose one at random",
+	},
+	{
+		type = ST_STRING,
+		name = "context_type",
+		decsription = "Which type of context list will be used to select from",
+		default = "LOCATION_MARKER",
+		options = {"LOCATION_MARKER", "ENTITY", "SQUAD"},
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "filter_by_player",
+		displayName = "Filter By Player",
+		description = "Filter by contexts owned by a specified player when enabled",
+		requirement = {"context_type", "ENTITY", "SQUAD"},
+		default = false,
+	},
+	{
+		type = ST_PLAYER,
+		name = "player_owner",
+		displayName = "Owned By Player",
+		description = "Filter the context types to those owned by this player.",
+		requirement = {"filter_by_player", true},
+		allowWorld = true,
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "select_from_group",
+		displayName = "Select Context From Group",
+		description = "Pick the context from one in a specified SGroup/EGroup, as opposed to from all entities/squads.",
+		requirement = {"context_type", "ENTITY", "SQUAD"},
+		default = true,
+	},
+	{
+		type = ST_EGROUP,
+		name = "source_egroup",
+		displayName = "EGroup For Context Source",
+		description = "The EGroup used as a source of all entities to select the context from",
+		requirement = {
+			operator = "ALL",
+			{"context_type", "ENTITY"},
+			{"select_from_group", true}
+		},
+	},
+	{
+		type = ST_SGROUP,
+		name = "source_sgroup",
+		displayName = "SGroup For Context Source",
+		description = "The SGroup used as a source of all entities to select the context from",
+		requirement = {
+			operator = "ALL",
+			{"context_type", "SQUAD"},
+			{"select_from_group", true}
+		},
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "filter_by_bp",
+		default = false,
+		displayName = "Filter By Blueprint",
+		description = "Check to filter contexts by a specified blueprint",
+		requirement = {"context_type", "SQUAD", "ENTITY"},
+	},
+	{
+		type = ST_PBG,
+		name = "sbp_filter",
+		displayName = "Squad Blueprint",
+		blueprintType = "squad",
+		description = "Select squad contexts of this type",
+		category = "Options",
+		default = "",
+		requirement = {
+			operator = "ALL",
+			{"context_type", "SQUAD"},
+			{"filter_by_bp", true},
+		},
+	},
+	{
+		type = ST_PBG,
+		name = "ebp_filter",
+		displayName = "Entity Blueprint",
+		blueprintType = "entity",
+		description = "Select entity contexts of this type",
+		category = "Options",
+		default = "",
+		requirement = {
+			operator = "ALL",
+			{"context_type", "ENTITY"},
+			{"filter_by_bp", true},
+		},
+	},
+	{
+		type = ST_TABLE,
+		name = "conditions",
+		description = "Conditions that will be used to filter the contexts from the selected context types to choose"
+		.." one that matches when the playbill is triggered. Please limit these to conditions that are testing a"
+		.." particular context since they will run for every context that matches the specified types.",
+		multiplicity = "multiple",
+		itemSchema = g_conditions_template,
+	},
+}
+
+-- Add the location tag checkboxes (one boolean for each location type) to the context selection schema:
+locationgroup_AddLocationTagCheckbox({"context_type", "LOCATION_MARKER"}, context_selection_info_schema)
+
+
+playbill_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "playbill",																						-- name the prefab uses to identify itself
+	description = "playbill",																				-- name to display for this prefab
+	script = "playbill.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+		{
+			type = ST_BOOLEAN,
+			name = "immediate",
+			description = "Start this playbill immediately instead of requiring a trigger",
+			default = false,
+		},
+		{
+			type = ST_BOOLEAN,
+			name = "repeats_after_turns",
+			description = "Does this playbill activate itself at a certain turn frequency?",
+			default = false,
+		},
+		{
+			type = ST_NUMBER,
+			name = "turn_frequency",
+			description = "Execute these playbills at a frequency of this number of turns. Must be greater than 0",
+			requirement = {"repeats_after_turns", true},
+			default = 1,
+		},
+		{
+			type = ST_NUMBER,
+			name = "delay_until_turn",
+			description = "Don't start until this turn has been reached",
+			default = 1,
+			requirement = {"repeats_after_turns", true},
+		},
+		{
+			type = ST_STRING,
+			name = "scenref_playbill_key",
+			multiplicity = "multiple",
+			description = "Playbill should start if any of these keys are sent",
+			default = "",
+		},
+		{
+			type = ST_BOOLEAN,
+			name = "enabled",
+			displayName = "Enabled",
+			description = "Should this playbill run at all?",
+			default = true,
+		},
+		{
+			type = ST_BOOLEAN,
+			name = "context_selection_enabled",
+			description = "Whether or not to enable dynamic context selection which allows the context for the playbill sequence's"
+			.." conditions & actions to be chosen dynamically when the playbill is triggered.",
+			default = false,
+		},
+		{
+			type = ST_TABLE,
+			name = "context_selection_info",
+			displayName = "Context Selection Setup",
+			description = "Configuration for picking a context for this playbill to operate on",
+			multiplicity = "single",
+			requirement = {"context_selection_enabled", true},
+			itemSchema = context_selection_info_schema,
+		},
+		------------------------
+		------------------------ PLAYBILLS
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "playbills",
+			description = "All secondary beats possible on this map",
+			multiplicity = "multiple",
+			itemSchema = g_playbills_template,
+		},
+		
+		
+		
+		
+	},
+}

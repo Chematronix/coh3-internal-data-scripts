@@ -1,0 +1,191 @@
+--
+-- "Encounter Zone"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("anvil.scar")
+import("conditionlist.scar")
+import("actionlist.scar")
+import("playbills.scar")
+
+
+--? @group scardoc;Prefabs
+
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function encounterzone_Init(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	if player1 == nil then
+		player1 = World_GetPlayerAt(1)
+	end
+	if player2 == nil then
+		player2 = World_GetPlayerAt(2)
+	end
+	
+	MissionPrint("Encounter Zone Prefab is Initializing")
+	
+	-- set up instance's data
+	local data = {}
+	instance.data = data
+	instance.instanceName = "encounter"
+	
+	-- set up encounter details from the instance data
+	local encounter = {}
+	data.encounter = encounter
+	
+	
+	--
+	-- name, player, etc
+	--
+	encounter.player = player2
+	encounter.name = instance.instanceName
+	encounter.prefab_instance = instance.instanceName		-- this reference is in there so we can trace back to a prefab instance from an encounter
+	
+	encounter.sgroups = {}
+	--for index, item in pairs(instance.sgroups) do
+		--table.insert(encounter.sgroups, item.sgroup)
+	--end
+	
+	--
+	-- starting goal
+	--
+	local goal = {}--encountergoal_Parse(instance.goal)
+	data.goal = goal
+	encounter.goal = goal
+	
+	goal.name = "Attack"
+	goal.maxTime = -1
+	goal.maxIdleTime = -1
+	
+	--goal.useSetupLocations = 
+	--goal.setupLocationMarkers = {}
+	
+	encounter.triggerGoalOnEngage = true
+	
+	goal.target = instance.encounter_zones.zone
+	goal.range = Marker_GetProximityRadius(instance.encounter_zones.zone)
+	goal.leashRange = Marker_GetProximityRadius(instance.encounter_zones.zone)
+	
+	--encounter.secondaryTriggerGoalOnAttacked = true
+	
+	--encounter.startGoalInIdle = false
+	
+	--if instance.goal.goal_relocation_mode == "Disabled" then
+		--encounter.relocateGoalOnTrigger = false
+		--encounter.relocateGoalTemporarily = false
+	--elseif instance.goal.goal_relocation_mode == "Temporary" then
+		--encounter.relocateGoalOnTrigger = true
+		--encounter.relocateGoalTemporarily = true
+	--elseif instance.goal.goal_relocation_mode == "Permanent" then
+		--encounter.relocateGoalOnTrigger = true
+		--encounter.relocateGoalTemporarily = false
+	--end
+	
+	----
+	---- starting units
+	----
+	local sg_temp = SGroup_CreateUnique("")
+	Player_GetAllSquadsNearMarker(player2, sg_temp, goal.target, goal.range)
+	
+	if SGroup_IsAlive(sg_temp) then
+		MissionPrint("Creating Encounter")
+		instance.data.encounterID = Encounter:ConvertSGroup(sg_temp)
+	end
+	--encounter.spawnType = SPAWN[instance.deploy_type]
+	--encounter.spawn = instance.deploy_location
+	--encounter.units = {}
+	
+	--for index, this in pairs(instance.units) do
+		
+		--local unit = Encounter_ParseUnit(this, data)
+		
+		--table.insert(encounter.units, unit)
+		
+	--end
+	
+end
+
+
+
+function encounterzone_PostInit(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	--if instance.spawn_trigger == "Immediately" then
+		
+	local staggeredSpawn = instance.spawn_staggered
+	
+	if staggeredSpawn then
+		staggeredSpawn = instance.spawn_staggered_time
+	end
+	
+	--instance.data.encounterID = Encounter:Create(instance.data.encounter, true, staggeredSpawn)
+	instance.data.encounterID:SetGoal(instance.data.encounter.goal, true)
+	instance.data.hasSpawned = true
+	
+	--if instance.goal.goal_trigger == "Trigger zone" then
+		
+		--local params = {
+			--instance = instance,
+			--action = "TriggerGoal",
+			--delay = instance.goal.goal_triggerzone_delay,
+			--params = nil,
+		--}
+		--Prefab_DoAction(instance.goal.goal_triggerzone, "RegisterExternalInterest", params)
+		
+	--end
+		
+	--elseif instance.spawn_trigger == "Trigger zone" then
+		
+		--local params = {
+			--instance = instance,
+			--action = "TriggerSpawn",
+			--delay = instance.spawn_triggerzone_delay,
+			--params = nil,
+		--}
+		--Prefab_DoAction(instance.spawn_triggerzone, "RegisterExternalInterest", params)
+		
+	--elseif instance.spawn_trigger == "Manually" then
+		
+		---- do nothing
+		
+	--end
+	
+end
+
+
+
+--? @args Table/String instance
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function encounterzone_Trigger(data)
+
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end
+
+
+
+-- Stop the encounter associated with this instance and destroys any spawned squads the player can't see
+function encounterzone_Stop(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end 

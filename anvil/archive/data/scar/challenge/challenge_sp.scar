@@ -1,0 +1,162 @@
+-----------------------------------------------------------------------
+--
+-- Single-player mission/skirmish achievements
+--
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework
+-----------------------------------------------------------------------
+
+Core_RegisterModule("SPChallenge")
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function SPChallenge_OnInit()
+	if --Misc_IsDevMode() or 
+		World_IsCampaignMetamapGame() or 
+		World_IsMultiplayerGame() then
+		Core_UnregisterModule("SPChallenge")
+		return
+	end
+	_challenge_sp = {
+		squads_lost = 0,
+		reinforcements = 0,
+	}
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function SPChallenge_Start()
+	Rule_AddGlobalEvent(SPChallenge_OnSquadProduced, GE_SquadProductionQueue)
+	Rule_AddGlobalEvent(SPChallenge_OnSquadKilled, GE_SquadKilled)
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up any rules associated with this script module.
+function SPChallenge_OnWinConditionTriggered(match_result)
+
+	SPChallenge_OnMissionEnd(Table_Contains(match_result.winners, World_GetPlayerIndex(Game_GetLocalPlayer())))
+
+	-- Remove rules
+	Rule_RemoveGlobalEvent(SPChallenge_OnSquadProduced)
+	Rule_RemoveGlobalEvent(SPChallenge_OnSquadKilled)
+end
+
+
+-- Global event callback for GE_SquadProductionQueue.
+function SPChallenge_OnSquadProduced(context, data)
+	-- Check whether item was a reinforcement?
+	_challenge_sp.reinforcements = _challenge_sp.reinforcements + 1
+end
+
+-- Global event callback for GE_SquadKilled.
+function SPChallenge_OnSquadKilled(context, data)
+	if not World_OwnsSquad(context.victim) then
+		local owner = Squad_GetPlayerOwner(context.victim)
+		
+		-- Test for a valid killer to filter out script and debug-killed squads
+		if scartype(context.killer) == ST_ENTITY then
+			
+			if owner == Game_GetLocalPlayer() then
+				
+				_challenge_sp.squads_lost = _challenge_sp.squads_lost + 1
+				
+			end
+		end
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+function SPChallenge_OnMaxTicketsChanged(max_tickets, player)
+	if Game_GetLocalPlayer() == player then
+		_challenge_sp.max_tickets = max_tickets
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling ticket count has changed.
+function SPChallenge_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	if Game_GetLocalPlayer() == player then
+		_challenge_sp.tickets = tickets
+	end
+end
+
+-- Check for objective completion achievements
+function SPChallenge_CheckObjectiveChallenge(objective)
+
+end
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+-- Excludes specific challenge(s) from a mission where it/they do not make sense.
+-- (e.g. CE_ACHIEVNOREINFORCE from missions where there is no reinforcement mechanism)
+function SPChallenge_Exclude(exclusions)
+	_challenge_sp.exclude = _challenge_sp.exclude or {}
+	if scartype(exclusions) == ST_TABLE then
+		for _, exclusion in pairs(exclusions) do
+			table.insert(_challenge_sp.exclude, exclusion)
+		end
+	elseif scartype(exclusions) == ST_NUMBER then
+		table.insert(_challenge_sp.exclude, exclusions)
+	end
+end
+
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+
+-- Notifies server that a challenge has met its completion requirement(s).
+function SPChallenge_Complete(player, challenge, value, description)
+	if Player_IsHuman(player) and 
+		not (_challenge_sp.exclude and Table_Contains(_challenge_sp.exclude, challenge)) then
+		
+		Game_SendCustomChallengeEvent(player, challenge, value)
+		print(Loc_ToAnsi(Player_GetDisplayName(player)).." completed achievement "..tostring(challenge).." "..(description or ""))
+		if Misc_IsDevMode() and Misc_IsCommandLineOptionSet("show_achievements") then
+			UI_CreateEventCue(LOC(description), Loc_Empty(),  "low_priority", "icons/common/filled_star_icon", "", ECV_Title, 5.0)
+		end
+	end
+end
+
+
+function SPChallenge_OnMissionEnd(local_player_won)
+	if local_player_won then
+		if _challenge_sp.squads_lost == 0 then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVNOLOSTSQUAD, 1, "CE_ACHIEVNOLOSTSQUAD")
+		end
+
+		if _challenge_sp.reinforcements == 0 then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVNOREINFORCE, 1, "CE_ACHIEVNOREINFORCE")
+		end
+
+		if _challenge_sp.max_tickets and _challenge_sp.tickets and _challenge_sp.max_tickets == _challenge_sp.tickets then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVFLAWLESSVICTORY, 1, "CE_ACHIEVFLAWLESSVICTORY")
+		end
+		
+		if Game_GetScenarioFileName() == "tutorial_mission" then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVWINMISSIONZERO, 1, "CE_ACHIEVWINMISSIONZERO")
+		elseif Game_GetScenarioFileName() == "el_alamein_hold" then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVWINNORTHAFRICA, 1, "CE_ACHIEVWINNORTHAFRICA")
+		elseif Game_GetScenarioFileName() == "anzio_invasion" then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVWINANZIO, 1, "CE_ACHIEVWINANZIO")
+		elseif Game_GetScenarioFileName() == "monte_cassino_unique" then
+			SPChallenge_Complete(Game_GetLocalPlayer(), CE_ACHIEVMONTECASSINOBOMBING, 1, "CE_ACHIEVMONTECASSINOBOMBING")
+		end
+	end
+end
+

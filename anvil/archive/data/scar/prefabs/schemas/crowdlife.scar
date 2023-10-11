@@ -1,0 +1,214 @@
+import("gameplay/event_cues.scar")
+
+g_crowdlife_timer_instances = {}
+g_crowdlife_turn_instances = {}
+
+function GetFirstEntity(egroup)
+	return EGroup_CountSpawned(egroup) > 1 and EGroup_GetEntityAt(egroup, 1) or nil
+end
+
+function crowdlife_Init(data)
+	if data.frequency_type == "Turns" and data.turns_until_next_spawn == nil then
+		data.turns_until_next_spawn = data.frequency_turns
+	elseif data.frequency_type == "Seconds" and data.next_spawn_time == nil then
+		data.next_spawn_time = World_GetGameTime() + data.frequency_seconds
+	end
+	data.logic_last_turn = World_GetCurrentTurn()
+	
+	if data.SGroup == nil then
+		data.SGroup = SGroup_CreateUnique()
+	end
+		
+	data.owner = GetCrowdlifeOwner(data)	
+	
+	local instanceTable = nil
+	if data.frequency_type == "Turns" then
+		instanceTable = g_crowdlife_turn_instances
+	elseif data.frequency_type == "Seconds" then
+		instanceTable = g_crowdlife_timer_instances
+	end
+	
+	instanceTable[#instanceTable + 1] = data
+	
+	if not Rule_Exists(crowdlife_UpdateInstances) then
+		Rule_Add(crowdlife_UpdateInstances)
+	end
+end
+
+function crowdlife_UpdateInstances()
+	local UpdateInstanceTable = function(instanceTable, updateFunction)
+		local count = #instanceTable
+		for i=1, count do
+			updateFunction(instanceTable[i])
+		end
+	end
+	UpdateInstanceTable(g_crowdlife_timer_instances, TimerUpdate)
+	UpdateInstanceTable(g_crowdlife_turn_instances, TurnUpdate)
+end
+
+function TurnUpdate(data)
+	
+	-- If owner changed, restart timer
+	local new_owner = GetCrowdlifeOwner(data)
+	if data.owner ~= new_owner then
+		data.turns_until_next_spawn = data.frequency_turns
+		data.owner = new_owner
+		SGroup_DestroyAllSquads(data.SGroup)
+		return
+	end
+	
+	-- supply line got broken
+	local supply_check_entity = GetFirstEntity(data.supply_consumer)
+	if supply_check_entity == nil or not Entity_CheckSupply(supply_check_entity) then
+		data.turns_until_next_spawn = data.frequency_turns
+		SGroup_DestroyAllSquads(data.SGroup)
+		return
+	end
+	
+	-- neutrals can't spawn crowdlife
+	if data.owner == nil then
+		return
+	end
+	
+	local current_turn = World_GetCurrentTurn()
+
+	-- Only process logic at start of the turn
+	if data.frequency_type == "Turns" and (current_turn == data.logic_last_turn or not World_IsPlayersTurn(data.owner)) then
+		return
+	end
+	
+	data.logic_last_turn = current_turn
+
+	data.turns_until_next_spawn = data.turns_until_next_spawn - 1
+	if data.turns_until_next_spawn <= 0 then
+		SpawnCrowdEntity(data)
+		data.turns_until_next_spawn = data.frequency_turns
+	end
+end
+
+function TimerUpdate(data)
+	
+	-- If owner changed, restart timer
+	local new_owner = GetCrowdlifeOwner(data)
+	if data.owner ~= new_owner then
+		data.next_spawn_time = World_GetGameTime() + data.frequency_seconds
+		data.owner = new_owner
+		SGroup_DestroyAllSquads(data.SGroup)
+		return
+	end
+	
+	-- supply line got broken
+	local supply_check_entity = GetFirstEntity(data.supply_consumer)
+	if supply_check_entity == nil or not Entity_CheckSupply(supply_check_entity) then
+		data.next_spawn_time = World_GetGameTime() + data.frequency_seconds
+		SGroup_DestroyAllSquads(data.SGroup)
+		return
+	end
+	
+	-- neutrals can't spawn crowdlife
+	if data.owner == nil then
+		return
+	end
+	
+	if World_GetGameTime() >= data.next_spawn_time then
+		SpawnCrowdEntity(data)
+		local left_over = World_GetGameTime() - data.next_spawn_time
+		data.next_spawn_time = World_GetGameTime() + data.frequency_seconds - left_over
+	end
+end
+
+function GetCrowdlifeOwner(data)
+	local owner = nil
+
+	local player_owner_entity = GetFirstEntity(data.supply_consumer)
+	if player_owner_entity ~= nil and not World_OwnsEntity(player_owner_entity) then
+		owner = Entity_GetPlayerOwner(player_owner_entity)
+	end
+	
+	return owner
+end
+
+function SpawnCrowdEntity(data)
+	
+	local owner = GetCrowdlifeOwner(data)
+	
+	local spawn_pos = data.spawn_pos
+	local spawn_pos_entity = nil
+	if data.spawn_pos_type == "Position" then
+		spawn_pos = data.spawn_pos
+	elseif data.spawn_pos_type == "EGroup" then
+		spawn_pos_entity = GetFirstEntity(data.spawn_pos_entity)
+		if spawn_pos_entity ~= nil then
+			spawn_pos = Entity_GetPosition(spawn_pos_entity)
+		end
+	end
+	
+	local destination_pos = data.destination_pos
+	local destination_pos_entity = nil
+	if data.destination_pos_type == "Position" then
+		destination_pos = data.destination_pos
+	elseif data.destination_pos_type == "EGroup" then
+		destination_pos_entity = GetFirstEntity(data.destination_pos_entity)
+		if destination_pos_entity ~= nil then
+			destination_pos = Entity_GetPosition(destination_pos_entity)
+		end
+	end
+	
+	Util_CreateSquads(owner, data.SGroup, data.squad_to_spawn, spawn_pos, nil, 1)
+	
+	local new_squad = SGroup_GetSquadAt(data.SGroup, SGroup_Count(data.SGroup))
+	
+	if spawn_pos_entity ~= nil then
+		Squad_SetStateModelEntityTarget(new_squad, "crowdlife_start", spawn_pos_entity)
+	else
+		Squad_SetStateModelPositionTarget(new_squad, "crowdlife_start", spawn_pos)
+	end
+	
+	if destination_pos_entity ~= nil then
+		Squad_SetStateModelEntityTarget(new_squad, "crowdlife_destination", destination_pos_entity)
+	else
+		Squad_SetStateModelPositionTarget(new_squad, "crowdlife_destination", destination_pos)
+	end
+	
+	
+end
+
+
+-- Partial Save Callback for all supplyship prefabs
+function crowdlife_GeneratePartialSaveTable(saveTable)
+	saveTable.crowdlifePrefabSaveTable  = {
+		version = 1,
+		data = {}, -- dynamic data for each instance
+	}
+
+	local data = saveTable.crowdlifePrefabSaveTable.data
+	
+	local crowdlifePrefabs = Prefab_GetAllOfType("crowdlife")
+	local crowdlifePrefabCount = #crowdlifePrefabs
+	for i=1, crowdlifePrefabCount do
+		local crowdlifePrefab = crowdlifePrefabs[i]
+		local instanceName = crowdlifePrefab.instanceName
+		
+		data[instanceName] = {SGroup = crowdlifePrefab.SGroup, turns_until_next_spawn = crowdlifePrefab.turns_until_next_spawn, next_spawn_time = crowdlifePrefab.next_spawn_time}
+	end
+	
+end
+
+function crowdlife_RestoreFromTable(data, restore_table)
+	local crowdlifeTable = restore_table.crowdlifePrefabSaveTable
+	if crowdlifeTable == nil then
+		return
+	end
+	
+	local instance = Prefab_GetInstance(data)
+	local crowdlifePrefabSaveData = crowdlifeTable.data
+	
+	local saved_data = crowdlifePrefabSaveData[instance.instanceName]
+	if saved_data == nil then
+		return
+	end
+	instance.SGroup = saved_data.SGroup
+	instance.turns_until_next_spawn = saved_data.turns_until_next_spawn
+	instance.next_spawn_time = saved_data.next_spawn_time
+	
+end

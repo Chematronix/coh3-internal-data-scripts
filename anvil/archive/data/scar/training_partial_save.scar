@@ -1,0 +1,77 @@
+
+function Training_GeneratePartialSaveTable(saveTable)
+	
+	if g_disableTrainingSave == true then
+		return
+	end
+
+	local trainingSaveTable = {
+		version = 1,
+		goalSequenceSaveData = {},
+		g_ability_tracking_table = g_ability_tracking_table,
+	}
+	
+	local goalSequenceSaveData = trainingSaveTable.goalSequenceSaveData
+	local goalSequences = _TrainingGoals
+	local count = #goalSequences
+	for i=1, count do
+		local goalSequence = _TrainingGoals[i]
+		local sequenceSaveInfo = {
+			id = goalSequence.id,
+			prefabDataPath = goalSequence.prefabDataPath,
+			isActive = goalSequence.isActive,
+			timesMet = goalSequence.timesMet,
+			currentGoalIndex = goalSequence.currentGoalIndex,
+		}
+		goalSequenceSaveData[#goalSequenceSaveData + 1] = sequenceSaveInfo
+	end
+	
+	saveTable.trainingSaveTable = trainingSaveTable
+end
+
+function Training_RestoreFromSaveTable(saveTable)
+	
+	Training_Init()
+	
+	local trainingSaveTable = saveTable.trainingSaveTable
+	
+	if trainingSaveTable == nil then
+		return
+	end
+	
+	g_ability_tracking_table = trainingSaveTable.g_ability_tracking_table
+	
+	local goalSequenceSaveData = trainingSaveTable.goalSequenceSaveData
+	local count = #goalSequenceSaveData
+	
+	local trainingGoalSequences = {}
+	for i=1, count do
+		local goalSequenceData = goalSequenceSaveData[i]
+		local prefabDataPath = goalSequenceData.prefabDataPath
+		if prefabDataPath ~= nil then
+			-- Skip any goal sequence with invalid prefab data, or that has already been met.
+			local goalSequenceAction = ResolvePrefabDataPath(goalSequenceData.prefabDataPath)
+			local goalSequenceQueued = goalSequenceData.isActive or goalSequenceData.timesMet == 0
+			if goalSequenceQueued and goalSequenceAction ~= nil and goalSequenceAction.goal_sequence ~= nil then
+				
+				local goalSequence = TrainingPrefab_GoalSequenceSetup(goalSequenceAction.goal_sequence, prefabDataPath)
+
+				if goalSequence ~= nil then
+					goalSequence.timesMet = goalSequenceData.timesMet
+					goalSequence.isActive = goalSequenceData.isActive
+					goalSequence.currentGoalIndex = goalSequenceData.currentGoalIndex
+
+					trainingGoalSequences[#trainingGoalSequences + 1] = goalSequence
+					
+					if goalSequence.isActive then
+						Training_StartCurrentGoal(goalSequence, 0)
+					end
+				end
+			end
+		end
+	end
+	_TrainingGoals = trainingGoalSequences
+
+end
+
+

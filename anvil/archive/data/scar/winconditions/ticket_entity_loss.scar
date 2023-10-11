@@ -1,0 +1,308 @@
+-----------------------------------------------------------------------
+-- Ticket loss on entity death
+--
+-- (c) Relic Entertainment 2020
+--
+-- Reduces a team's tickets when any of its entities are killed.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework
+-----------------------------------------------------------------------
+
+Core_RegisterModule("EntityLoss")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+-- Initializes data used by this system.
+-- Use EntityLoss_SetParameters() to change default values/behavior.
+function EntityLoss_OnInit()
+	_entityloss = {
+		ticket_cost = 20,			-- resource value of one ticket
+		attrition_factor = 1.0,		-- factor applied to ticket cost (for ease of tuning)
+		fuel_factor = 1.6,			-- factor applied to fuel cost to determine entity value
+		building_factor = 1.0,		-- factor applied to building cost to determine entity value
+		upgrade_factor = 1.0,		-- factor applied to upgrade costs to determine entity value
+		team_size_factor = 0.4,		-- factor used to adjust cost based on team size (set to 0 to disable scaling based on team size)
+		squad_wipe_bonus = 1.0,		-- bonus when last member of a squad is killed (for squads with 2+ entities)
+		veterancy_rank_bonus = 0.3,	-- bonus for each veterancy rank
+		buildings_only = false,		-- when true only death of building entities will reduce ticket count
+		show_ticket_loss = true,	-- whether to show kicker indicating tickets lost
+		squad_rank = {},			-- squad ranks indexed by squad ID (workaround for Squad_GetVeterancyRank() not working on dead squads)
+		upgrade_cost = {},			-- total upgrade costs indexed by squad ID (workaround for Squad_GetActiveUpgrades() not working on dead squads)
+	}
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+function EntityLoss_OnMaxTicketsChanged(max_tickets, player)
+	if not _entityloss.teams then 
+		_entityloss.teams = {}
+		for i = 1, World_GetPlayerCount() do
+			local team = EntityLoss_GetTeam(World_GetPlayerAt(i))
+			if team then
+				table.insert(team.players, i)
+			else
+				table.insert(_entityloss.teams, { players = {i} })
+			end
+		end
+	end
+
+	if player then
+		local team = EntityLoss_GetTeam(player)
+		team.max_tickets = max_tickets
+	else
+		for _, team in pairs(_entityloss.teams) do
+			team.max_tickets = max_tickets
+		end
+	end
+	_entityloss.max_tickets_set = true
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function EntityLoss_Start()
+	if _entityloss.max_tickets_set then
+		-- Set initial ticket count if it hasn't already been done
+		for _, team in pairs(_entityloss.teams) do
+			if not team.tickets then
+				Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), team.max_tickets, team.tickets, true)
+			end
+		end
+
+		if _entityloss.upgrade_factor > 0 and not Rule_Exists(EntityLoss_OnUpgradeComplete) then
+			Rule_AddGlobalEvent(EntityLoss_OnUpgradeComplete, GE_UpgradeComplete)
+		end
+		if _entityloss.veterancy_rank_bonus > 0 and not Rule_Exists(EntityLoss_OnSquadRankChanged) then
+			Rule_AddGlobalEvent(EntityLoss_OnSquadRankChanged, GE_SquadVeterancyRank)
+		end
+		Rule_AddGlobalEvent(EntityLoss_OnEntityKilled, GE_EntityKilled)
+	else
+		Core_UnregisterModule("EntityLoss")
+	end
+end
+
+
+-- Called by core.scar when a save game is loaded.
+-- Restores the ticket UI to the proper ticket count.
+function EntityLoss_OnGameRestore()
+	for _, team in pairs(_entityloss.teams) do
+		if team.tickets ~= nil then
+			Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), team.tickets)
+		end
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling the ticket count for a team has changed.
+function EntityLoss_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	-- Save the new ticket count
+	local team = EntityLoss_GetTeam(player)
+	team.tickets = math.min(math.max(0, tickets), team.max_tickets)
+end
+
+
+-- Global event callback for GE_UpgradeComplete.
+-- Caches squad upgrade cost since Squad_GetActiveUpgrades() can't be used on dead squads
+function EntityLoss_OnUpgradeComplete(context)
+	if scartype(context.executer) == ST_SQUAD and not World_OwnsSquad(context.executer) then
+		local squad_id = Squad_GetID(context.executer)
+		local cost = Player_GetUpgradeBPCost(Squad_GetPlayerOwner(context.executer), context.upgrade)
+		local upgrade_cost = ((cost.manpower or 0) + (cost.munition or 0) + (cost.fuel or 0)) /  Squad_SBPGetMax(Squad_GetBlueprint(context.executer))
+		_entityloss.upgrade_cost[squad_id] = (_entityloss.upgrade_cost[squad_id] or 0) + upgrade_cost
+	end
+end
+
+-- Global event callback for GE_SquadVeterancyRank.
+-- Caches squad veterancy since Squad_GetVeterancyRank() can't be used on dead squads
+function EntityLoss_OnSquadRankChanged(context)
+	_entityloss.squad_rank[Squad_GetID(context.squad)] = Squad_GetVeterancyRank(context.squad)
+end
+
+
+-- Global event callback for GE_EntityKilled.
+-- Reduces ticket count for the team that owns the entity that was killed.
+-- Ticket loss is proportional to entity cost (including upgrade costs) with additional bonuses for squad veterancy and squad wipes.
+-- Ticket loss is scaled by team size, so adjust ticket_cost via EntityLoss_SetParameters() if this is not desired.
+function EntityLoss_OnEntityKilled(context, data)
+	if not context.victimOwner
+		or Entity_IsOfType(context.victim, "mine")
+		or Entity_IsCasualty(context.victim) then
+		return
+	end
+	local team = EntityLoss_GetTeam(context.victimOwner)
+	local cost = Player_GetEntityBPCost(context.victimOwner, Entity_GetBlueprint(context.victim))
+	local entity_value = (cost.manpower or 0) + (cost.munition or 0) + (cost.fuel or 0) * _entityloss.fuel_factor
+	if Entity_IsEBPOfType(Entity_GetBlueprint(context.victim), "building") then
+		if Entity_GetBuildingProgress(context.victim) < 1 then
+			-- TODO: Differentiate between canceling construction and building destroyed by enemy before constrcution completes
+			return
+		end
+		entity_value = entity_value * _entityloss.building_factor
+	elseif _entityloss.buildings_only then
+		return
+	end
+	if entity_value > 0 then
+		local rank = 0
+		if context.victimSquad then
+
+			-- Can't use Squad_GetActiveUpgrades() on a dead squad so look up it's last cached upgrade costs
+			entity_value = entity_value + (_entityloss.upgrade_cost[Squad_GetID(context.victimSquad)] or 0) * _entityloss.upgrade_factor
+
+			-- Can't use Squad_GetVeterancyRank() on a dead squad so look up it's last cached vet rank
+			rank = _entityloss.squad_rank[Squad_GetID(context.victimSquad)] or 0
+			entity_value = entity_value + (entity_value * _entityloss.veterancy_rank_bonus * rank)
+
+			-- Squad wipe bonus (for squads with more than 1 entity)
+			if context.numRemainingEntities and context.numRemainingEntities == 0 
+				and Squad_SBPGetMax(Squad_GetBlueprint(context.victimSquad)) > 1
+				and not Squad_IsSBPOfType(Squad_GetBlueprint(context.victimSquad), "vehicle") then
+				entity_value = entity_value + (entity_value * _entityloss.squad_wipe_bonus)
+			end
+		end
+
+		-- Scale entity value based on killer's team size (logarithmic so keep within 0.0 and 0.6)
+		-- e.g. when team_size_factor = 0.55 the entity value is 1.00/0.62/0.40/0.24 for team of 1/2/3/4
+		--		when team_size_factor = 0.50 the entity value is 1.00/0.65/0.45/0.30 for team of 1/2/3/4
+		--		when team_size_factor = 0.40 the entity value is 1.00/0.72/0.56/0.45 for team of 1/2/3/4
+		--		when team_size_factor = 0.30 the entity value is 1.00/0.79/0.67/0.58 for team of 1/2/3/4
+		--		when team_size_factor = 0.00 the entity value is 1.00 for 1/2/3/4 players
+		if _entityloss.team_size_factor then
+			local enemy_team = EntityLoss_GetTeam(context.victimOwner, R_ENEMY)
+			entity_value = entity_value - (entity_value * _entityloss.team_size_factor * math.log(#enemy_team.players))
+		end
+
+		-- Convert entity value to tickets
+		local ticket_loss = entity_value / _entityloss.ticket_cost * _entityloss.attrition_factor
+
+		--print(string.format("killed %s (rank %d, %d left) -%0.2f -> -%d tickets", 
+				--BP_GetName(Entity_GetBlueprint(context.victim)), 
+				--rank or 0, 
+				--context.numRemainingEntities or 0, 
+				--ticket_loss, 
+				--math.max(1, math.round(ticket_loss))))
+
+		ticket_loss = math.max(1, math.round(ticket_loss))
+		if _entityloss.show_ticket_loss then
+			local msg = Loc_FormatText("$11232072", -ticket_loss)
+			if ticket_loss == 1 then
+				msg = Loc_FormatText("$11232071", -ticket_loss)
+			end
+			UI_CreatePositionKickerMessage(Game_GetLocalPlayer(), Util_GetPosition(context.victim), msg)
+		end
+		local tickets_remaining = math.max(0, team.tickets - ticket_loss)
+		Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), tickets_remaining, team.tickets)
+	end
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function EntityLoss_OnWinConditionTriggered(match_result)
+	Rule_RemoveGlobalEvent(EntityLoss_OnEntityKilled)
+	Rule_RemoveGlobalEvent(EntityLoss_OnUpgradeComplete)
+	Rule_RemoveGlobalEvent(EntityLoss_OnSquadRankChanged)
+end
+
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+-- Returns the given value rounded to the nearest integer.
+-- Note: 0.5 is rounded up to 1 and -0.5 is rounded down to -1
+function math.round(v)
+	if v >= 0 then
+		return math.floor(v + 0.5)
+	end
+	return math.ceil(v - 0.5)
+end
+
+-- Returns the value clamped to a given minimum and maximum.
+function math.clamp(v, min, max)
+	return math.max(min, math.min(v, max))
+end
+
+
+-- Returns a table of data associated with the team for a given player.
+function EntityLoss_GetTeam(player, relation)
+	local relation = relation or R_ALLY
+	local player_index = World_GetPlayerIndex(player)
+	for _, team in pairs(_entityloss.teams) do
+		for _, index in pairs(team.players) do
+			if index == player_index or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == relation then
+				return team
+			end
+		end
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+-- Returns a table containing the settings parameters and their values.
+function EntityLoss_GetParameters()
+	return {
+		ticket_cost = _entityloss.ticket_cost,
+		attrition_factor = _entityloss.attrition_factor,
+		fuel_factor = _entityloss.fuel_factor,
+		building_factor = _entityloss.building_factor,
+		upgrade_factor = _entityloss.upgrade_factor,
+		team_size_factor = _entityloss.team_size_factor,
+		squad_wipe_bonus = _entityloss.squad_wipe_bonus,
+		veterancy_rank_bonus = _entityloss.veterancy_rank_bonus,
+		buildings_only = _entityloss.buildings_only,
+		show_ticket_loss = _entityloss.show_ticket_loss,
+	}
+end
+
+
+-- Overrides the default behavior values.
+function EntityLoss_SetParameters(params)
+	if scartype(params) == ST_TABLE then
+		if scartype(params.ticket_cost) == ST_NUMBER then
+			_entityloss.ticket_cost = params.ticket_cost
+		end
+		if scartype(params.attrition_factor) == ST_NUMBER then
+			_entityloss.attrition_factor = math.max(0.1, params.attrition_factor)
+		end
+		if scartype(params.fuel_factor) == ST_NUMBER then
+			_entityloss.fuel_factor = params.fuel_factor
+		end
+		if scartype(params.building_factor) == ST_NUMBER then
+			_entityloss.building_factor = params.building_factor
+		end
+		if scartype(params.squad_wipe_bonus) == ST_NUMBER then
+			_entityloss.squad_wipe_bonus = params.squad_wipe_bonus
+		end
+		if scartype(params.team_size_factor) == ST_NUMBER then
+			_entityloss.team_size_factor = math.clamp(params.team_size_factor, 0.0, 0.65)
+		end
+		if scartype(params.veterancy_rank_bonus) == ST_NUMBER then
+			_entityloss.veterancy_rank_bonus = params.veterancy_rank_bonus
+			if _entityloss.veterancy_rank_bonus > 0 and not Rule_Exists(EntityLoss_OnSquadRankChanged) then
+				Rule_AddGlobalEvent(EntityLoss_OnSquadRankChanged, GE_SquadVeterancyRank)
+			end
+		end
+		if scartype(params.upgrade_factor) == ST_NUMBER then
+			_entityloss.upgrade_factor = params.upgrade_factor
+			if _entityloss.upgrade_factor > 0 and not Rule_Exists(EntityLoss_OnUpgradeComplete) then
+				Rule_AddGlobalEvent(EntityLoss_OnUpgradeComplete, GE_UpgradeComplete)
+			end
+		end
+		if scartype(params.buildings_only) == ST_BOOLEAN then
+			_entityloss.buildings_only = params.buildings_only
+		end
+		if scartype(params.show_ticket_loss) == ST_BOOLEAN then
+			_entityloss.show_ticket_loss = params.show_ticket_loss
+		end
+	end
+end

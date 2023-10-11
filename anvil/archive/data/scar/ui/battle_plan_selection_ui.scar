@@ -1,0 +1,480 @@
+-----------------------------------------------------------------------
+--
+-- Shows a selection dialogue for presenting multiple plans, each with a
+-- picture, title, description etc.
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+--[[
+NOTE: Locstrings are actually strings with the $ prefix and the locid, like "$0" or "$123456"
+CONFIG TABLE FORMAT:
+{
+	ui_name: string (the WPF element name of the selection dialogue)
+	title: locstring (big title)
+	description: locstring (main description of dialogue)
+	choice_title: locstring (subtitle above choices)
+    add_toggle_button: bool (whether or not to add the tutorial toggle button)
+    button_text: locstring text on each button (text on each choice's button)
+    handler: function(int) (a callback function that gets passed the selection index as an arg)
+	plans: table with the following format {
+		{
+			title: locstring (title for this choice)
+			image: string (path to the header image for this choice)
+			description: locstring (description of this plan choice)
+			bonus_title: locstring (title above the bonus bullet point section, if there is one)
+			bonuses: array of locstring (leave as an empty table for no bonus bullet point section)
+		}
+		... (can put more plans in order here)
+	}
+
+]]--
+
+--? @shortdesc Creates a plan selection dialogue based on the layout specified in the config table. See battle_plan_selection_ui.scar
+--? @args Table config (see format in battle_plan_selection_ui.scar)
+function SetupBattlePlanSelectionScreen(config)
+	
+	assert(g_battleplan_config == nil, "Attempted to bring up multiple plan selection screens at once.")
+	
+	local xaml = __GenerateBattlePlanSelectionXaml(config)
+	
+	UI_AddChild("", "XamlPresenter", config.ui_name, { Xaml = xaml })
+	
+	local plan_count = #config.plans
+	for i=1,plan_count do
+		local plan_path = config.ui_name..".Plan"..tostring(i)
+		local handler_name = "__Plan" .. tostring(i) .. "_Selected"
+		UI_AddEventHandler(plan_path, "Click", handler_name)
+	end
+	
+	UI_AddEventHandler(config.ui_name..".ConfirmButton", "Click", "__ConfirmButton_Clicked")
+
+	if config.add_toggle_button then
+		UI_AddEventHandler(config.ui_name..".TutorialToggle", "Checked", "tutorial_toggle_checked")
+		UI_AddEventHandler(config.ui_name..".TutorialToggle", "Unchecked", "tutorial_toggle_unchecked")
+
+		if g_play_tutorial then
+			UI_SetPropertyValue(config.ui_name..".TutorialToggle", "IsChecked", "true")
+		else
+			UI_SetPropertyValue(config.ui_name..".TutorialToggle", "IsChecked", "false")
+		end
+	end
+	
+	g_battleplan_config = config
+	g_plan_count = plan_count
+	g_selected_battle_plan_number = 1
+	
+	UI_SetPropertyValue(config.ui_name..".Plan1", "IsChecked", "true")
+end
+
+function __Plan1_Selected()
+	g_selected_battle_plan_number = 1
+	UI_SetPropertyValue(g_battleplan_config.ui_name..".Plan1", "IsChecked", "true")
+	__UncheckOtherPlans(1)
+end
+
+function __Plan2_Selected()
+	g_selected_battle_plan_number = 2
+	UI_SetPropertyValue(g_battleplan_config.ui_name..".Plan2", "IsChecked", "true")
+	__UncheckOtherPlans(2)
+end
+
+function __Plan3_Selected()
+	g_selected_battle_plan_number = 3
+	UI_SetPropertyValue(g_battleplan_config.ui_name..".Plan3", "IsChecked", "true")
+	__UncheckOtherPlans(3)
+end
+
+function __Plan4_Selected()
+	g_selected_battle_plan_number = 4
+	UI_SetPropertyValue(g_battleplan_config.ui_name..".Plan4", "IsChecked", "true")
+	__UncheckOtherPlans(4)
+end
+
+function __UncheckOtherPlans(selection)
+	local plan_count = g_plan_count
+	local config = g_battleplan_config
+	
+	for i=1,plan_count do
+		if i ~= selection then
+			local plan_path = config.ui_name..".Plan"..tostring(i)
+			UI_SetPropertyValue(plan_path, "IsChecked", false)
+		end
+	end
+end
+
+function __ConfirmButton_Clicked()
+	__SelectionComplete(g_selected_battle_plan_number)
+end
+
+function __SelectionComplete(selection)
+	local config = g_battleplan_config
+	
+	if config == nil then
+		-- Possible with spam clicking and the global config
+		-- has been cleared already. No-op if so.
+		return
+	end
+
+	UI_Remove(config.ui_name)
+	
+	g_battleplan_config = nil
+	
+	config.handler(selection)
+end
+
+
+function __GenerateBonusListXaml(config)
+	
+	local bonus_count = #config.bonuses	
+	if bonus_count == 0 then
+		return ""
+	end
+	
+	local bullet_points_xaml = ""
+	for i=1, bonus_count do
+		local locstring_id_str = config.bonuses[i]
+		local bullet_point_xaml = [[<!--  Bonus  -->
+                                                                    <StackPanel Margin="2,0,0,2" Orientation="Horizontal">
+                                                                        <Ellipse Width="13" Height="13"
+                                                                                 HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                                                 Fill="White" />
+    
+                                                                        <TextBlock Margin="5,2,0,0"
+                                                                                   Style="{StaticResource BattlePlansBodyTextStyle}"
+                                                                                   Text="{esUtility:LocString ]] .. locstring_id_str .. [[}" />
+                                                                    </StackPanel>
+                                                                    ]]
+		bullet_points_xaml = bullet_points_xaml .. bullet_point_xaml
+	end
+
+	local xaml =
+	[[<!-- Bullets Point List Header -->
+                                                                    <TextBlock Margin="0,12,0,0"
+                                                                               Style="{StaticResource BattlePlansSubSubTitleStyle}"
+                                                                               Text="{esUtility:LocString ]] .. config.bonus_title .. [[}" />
+                                                                    <Rectangle Height="2"
+                                                                               Margin="0,5,0,15"
+                                                                               Fill="White" />
+                                                                    ]] .. bullet_points_xaml
+	return xaml
+end
+
+-- Generates the xaml for a single plan choice (handles the case where there is an empty choice)
+function __GeneratePlanXaml(parentConfig, button_text, i)
+	
+	local config = parentConfig.plans[i]
+	
+	if config == nil then
+		return ""
+	end
+	
+	local plan_name = "Plan"..tostring(i)
+	local xaml =
+	[[<!-- Generated Plan Xaml -->
+                            <ToggleButton x:Name="]] .. plan_name ..[["
+                                          Width="536"
+                                          Height="590"
+                                          Margin="0,0,0,0" VerticalAlignment="Top">
+                                <ToggleButton.Style>
+                                    <Style TargetType="ToggleButton">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ToggleButton">
+                                                    <Grid>
+                                                        <Image x:Name="BackgroundImage" Height="590" Width="536"
+                                                               Source="]] .. config.image .. [[" Stretch="Uniform" />
+                                                                  
+                                                        <Grid Margin="45,240,45,0">
+                                                            <Grid>
+                                                                <Grid.RowDefinitions>
+                                                                    <RowDefinition Height="*" />
+                                                                    <RowDefinition Height="Auto" />
+                                                                </Grid.RowDefinitions>
+                                                                <StackPanel VerticalAlignment="Top" Grid.Row="0" Background="{DynamicResource DefaultTextBorderBackgroundBrush}">
+                                                                    <!--  Plan Title  -->
+                                                                    <TextBlock Style="{StaticResource ModalSelectionTitleTextBlockStyle}" Text="{esUtility:LocString ]] .. config.title .. [[}" />
+                                                                    
+                                                                    <!--  Plan Description  -->
+                                                                    <TextBlock Style="{StaticResource BodyDarkTextBlockStyle}"
+                                                                               Text="{esUtility:LocString ]] .. config.description .. [[}" TextWrapping="Wrap" />
+	                                                                ]] .. __GenerateBonusListXaml(config) ..
+	                                                                [[<!-- Bonus List Generated Above -->
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </Grid>
+
+														<Image x:Name="HighlightImage" Visibility="Hidden" Height="590" Width="536"
+                                                               Source="{StaticResource CompanySelectHighlightImage}" Stretch="Uniform" /> 
+                                                    </Grid>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="true">
+                                                            <Setter TargetName="HighlightImage" Property="Visibility" Value="Visible" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="true">
+                                                            <Setter TargetName="BackgroundImage" Property="Effect">
+                                                                <Setter.Value>
+                                                                    <esEffects:TintEffect Tint="DarkGray" />
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </Trigger>
+                                                        <Trigger Property="IsChecked" Value="True">
+                                                            <Setter TargetName="HighlightImage" Property="Visibility" Value="Visible" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Setter Property="esUtility:AudioAttachedProperty.MouseEnterSound" Value="sfx_ui_frontend_highlight_card_play" />
+                                        <Setter Property="esUtility:AudioAttachedProperty.PreviewMouseLeftButtonUpSound" Value="sfx_ui_campaign_plan_select_play" />
+                                    </Style>
+                                </ToggleButton.Style>
+                            </ToggleButton>
+                            ]]
+	return xaml
+end
+
+function __GenerateBattlePlanSelectionXaml(config)
+	
+	-- The Panel Width depends on the number of choices. The original width
+	-- of the panel was hardcoded to 1350 for 3 choices. This calculates an
+	-- appropriate width for N choices.
+	local plan_count = #config.plans
+	local outer_margin = 20 -- left margin
+	local inner_margin = 25 -- left margin
+	local total_margin = (outer_margin + inner_margin) * 2 -- multiply by 2 to get total horizontal margin
+	local width_for_three = 1350
+	local width = ((width_for_three - total_margin) / 3) * plan_count + total_margin
+	local width_string = tostring(width)
+	
+	local toggle_xaml = ""
+	if config.add_toggle_button then
+		-- We have a toggle handler, so generate toggle xaml
+		toggle_xaml =
+		[[<!-- Generated Tutorial Toggle Xaml -->
+                        <StackPanel Orientation="Horizontal" Grid.Row="1" HorizontalAlignment="Right" Margin="0,0,20,20" >
+                            <TextBlock Text="Play Tutorial" Style="{StaticResource BattlePlansSubSubTitleStyle}" Margin="0,4,6,0" />
+                            <CheckBox Margin="10,0,0,0" x:Name="TutorialToggle"
+                              IsChecked="False"
+                              Style="{StaticResource ToggleCheckbox}">
+                                <TextBlock>
+                                    <TextBlock.Style>
+                                        <Style BasedOn="{StaticResource SettingsComponentTextBlockStyle}" TargetType="TextBlock">
+                                            <Setter Property="Text" Value="{esUtility:LocString $2901}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ElementName=TutorialToggle, Path=IsChecked}" Value="True">
+                                                    <Setter Property="Margin" Value="-90,0,0,0" />
+                                                    <!--  $2900: On  -->
+                                                    <Setter Property="Text" Value="{esUtility:LocString $2900}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding ElementName=TutorialToggle, Path=IsChecked}" Value="False">
+                                                    <Setter Property="Margin" Value="-62,0,0,0" />
+                                                    <!--  $2901: Off  -->
+                                                    <Setter Property="Text" Value="{esUtility:LocString $2901}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </CheckBox>
+                        </StackPanel>
+                        ]]
+	end
+	
+	local xaml =
+	[[<!-- Generated Page Xaml -->
+<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                  xmlns:d="http://schemas.microsoft.com/expression/blend/2008" xmlns:esCommands="clr-namespace:WPFGUI.Shared.Commands;assembly=EngineUI"
+                  xmlns:esEffects="clr-namespace:WPFGUI.Shared.Effects;assembly=EngineUI" xmlns:feModels="clr-namespace:FrontEndModelsTypes"
+                  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="clr-namespace:WPFGUI"
+                  xmlns:esUtility="clr-namespace:WPFGUI.Shared.Utility;assembly=EngineUI" xmlns:esModels="clr-namespace:WPFGUI.Shared.Models;assembly=EngineUI"
+				  KeyboardNavigation.TabNavigation="Cycle">
+          <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <Grid>
+                <Grid.Resources>
+                    <ResourceDictionary>
+                        <ResourceDictionary.MergedDictionaries>
+                            <ResourceDictionary Source="pack://application:,/WPFGUI;component/Resources/HUDResources.xaml" />
+                            <ResourceDictionary Source="pack://application:,/WPFGUI;component/Resources/ButtonResources.xaml" />
+                        </ResourceDictionary.MergedDictionaries>
+					
+    					<!--  Modal - Company Select  -->
+    					<BitmapImage x:Key="CompanySelectDescriptionBackgroundImage" UriSource="/WPFGUI;component/images/companyselect/FE_companyselect_tapetext.png" />
+						<BitmapImage x:Key="ModalScrimBackgroundImage1" UriSource="/WPFGUI;component/images/backgrounds/fe_bg_main_01.png" />
+					
+                        <DropShadowEffect x:Key="BattlePlansPageTextDropShadow"
+                                          BlurRadius="1" Direction="270"
+                                          Opacity="1" ShadowDepth="1"
+                                          Color="Black" />
+    
+                        <Style x:Key="BattlePlansTitleStyle"
+                               BasedOn="{StaticResource TitleLargeTextBlockStyle}"
+                               TargetType="TextBlock">
+                            <Setter Property="Effect" Value="{StaticResource BattlePlansPageTextDropShadow}" />
+                            <Setter Property="Foreground" Value="White" />
+                        </Style>
+    
+                        <Style x:Key="BattlePlansBodyTextStyle"
+                               BasedOn="{StaticResource DINBaseFontFamily}"
+                               TargetType="TextBlock">
+                            <Setter Property="FontSize" Value="{Binding Source={x:Static w:GameUIApp.Scale}, Path=UserDIP, Converter={StaticResource FontSizeByScale}, ConverterParameter=18}" />
+                            <Setter Property="FontWeight" Value="Normal" />
+                        </Style>
+    
+                        <Style x:Key="BattlePlansSubTitleStyle"
+                               BasedOn="{StaticResource BattlePlansTitleStyle}"
+                               TargetType="TextBlock">
+                            <Setter Property="FontSize" Value="{Binding Source={x:Static w:GameUIApp.Scale}, Path=UserDIP, Converter={StaticResource FontSizeByScale}, ConverterParameter=36}" />
+                        </Style>
+    
+                        <Style x:Key="BattlePlansSubSubTitleStyle"
+                               BasedOn="{StaticResource BattlePlansSubTitleStyle}"
+                               TargetType="TextBlock">
+                            <Setter Property="FontSize" Value="{Binding Source={x:Static w:GameUIApp.Scale}, Path=UserDIP, Converter={StaticResource FontSizeByScale}, ConverterParameter=22}" />
+                            <Setter Property="FontStretch" Value="Expanded" />
+                            <Setter Property="FontWeight" Value="Normal" />
+                        </Style>
+    
+                        <Style x:Key="SelectPlanButtonTemplate"
+                               BasedOn="{StaticResource ConfirmationFrontendButton}"
+                               TargetType="{x:Type Button}">
+                            <Setter Property="IsHitTestVisible" Value="False" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border>
+                                            <Grid>
+                                                <Image x:Name="ButtonBackground"
+                                                       Margin="0,2,0,0"
+                                                       Source="pack://application:,,,/WPFGUI;component/images/buttons/common/primary_button.png" Stretch="Fill" />
+                                                <ContentPresenter Name="content"
+                                                                  Margin="10,3,10,0" HorizontalAlignment="Center"
+                                                                  VerticalAlignment="Center" />
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="Foreground" Value="{StaticResource ButtonHighlightTextColorBrush}">
+                                                <Setter TargetName="ButtonBackground" Property="Image.Effect">
+                                                    <Setter.Value>
+                                                        <esEffects:TintEffect Tint="Black" />
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Foreground" Value="{StaticResource ButtonDisabledTextColorBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+    
+                    </ResourceDictionary>
+                </Grid.Resources>
+    
+                <!--  Scrim Background  -->
+        		<Image Source="{StaticResource ModalScrimBackgroundImage1}" Stretch="UniformToFill" />
+			
+				<Image VerticalAlignment="Top" HorizontalAlignment="Stretch" Height="266" Source="{StaticResource CompanySelectDescriptionBackgroundImage}" Margin="0,110,0,0" Stretch="Fill" />
+			
+    			<Grid Margin="]] .. tostring(outer_margin) .. [[,25" Width="1800">
+    				<!--  Modal Accents  -->
+	                <Image Width="40" Height="40"
+	                       HorizontalAlignment="Left" VerticalAlignment="Top"
+	                       Source="{StaticResource ModalTopLeftAccentImage}"
+	                       Stretch="Uniform" />
+	                <Image Width="40" Height="40"
+	                       HorizontalAlignment="Right" VerticalAlignment="Top"
+	                       Source="{StaticResource ModalTopRightAccentImage}"
+	                       Stretch="Uniform" />
+	                <Image Width="40" Height="40"
+	                       HorizontalAlignment="Left" VerticalAlignment="Bottom"
+	                       Source="{StaticResource ModalBottomLeftAccentImage}"
+	                       Stretch="Uniform" />
+	                <Image Width="40" Height="40"
+	                       HorizontalAlignment="Right" VerticalAlignment="Bottom"
+	                       Source="{StaticResource ModalBottomRightAccentImage}"
+	                       Stretch="Uniform" />
+	                <Image Width="258" Height="28"
+	                       Margin="0,20,20,0" HorizontalAlignment="Right"
+	                       VerticalAlignment="Top"
+	                       Source="{StaticResource ModalTextAccentImage}" />
+	                <Image Width="626" Height="28"
+	                       Margin="30,30,0,0" HorizontalAlignment="Left"
+	                       VerticalAlignment="Top"
+	                       RenderTransformOrigin="0,0.5"
+	                       Source="{StaticResource ModalNumberAccentImage}">
+	                    <Image.RenderTransform>
+	                        <RotateTransform Angle="90" CenterX="0.5" CenterY="0.5" />
+	                    </Image.RenderTransform>
+	                </Image>
+	                <Image Width="626" Height="28"
+	                       Margin="40,0,0,20" HorizontalAlignment="Left"
+	                       VerticalAlignment="Bottom"
+	                       Source="{StaticResource ModalNumberAccentImage}" />  	                       
+    
+	                <Grid Margin="40,20,40,20">
+		                <esUtility:UINavigationAttachedProperty.Request>
+			            	<esModels:UINavigationRequestParameter ID="battle_plan_selection_ui.scar" Focus="{StaticResource HUDFocusBattlePlan}"/>
+			            </esUtility:UINavigationAttachedProperty.Request>
+	                    <Grid.RowDefinitions>
+	                        <RowDefinition Height="Auto" />
+	                        <RowDefinition Height="Auto" />
+	                        <RowDefinition Height="Auto" />
+	                        <RowDefinition Height="Auto" />
+	                        <RowDefinition Height="*" />
+	                    </Grid.RowDefinitions>
+	    
+	                    <!--  Screen Title  -->
+		                <StackPanel Margin="86,0,0,0" HorizontalAlignment="Left" Grid.Row="0" Background="{DynamicResource DefaultTextBorderBackgroundBrush}">
+		                    <!--  $11193570 : Select  -->
+		                    <TextBlock Margin="8,0,0,0"
+		                               Style="{StaticResource ModalTitleSmallTextBlockStyle}"
+		                               Text="{esUtility:LocString $11193570}" />
+		                    <!--  $11193731 : Campaign Company  -->
+		                    <TextBlock Margin="0,-42,0,0"
+		                               Style="{StaticResource ModalTitleLargeTextBlockStyle}"
+		                               Text="{esUtility:LocString $11193731}" />
+		                </StackPanel>
+	                
+	                	<!--  Screen Description  -->
+	                	<Border Background="{DynamicResource DefaultTextBorderBackgroundBrush}" Margin="106,-8,160,0" Grid.Row="1">
+		                	<TextBlock Style="{StaticResource BodyBlackTextBlockStyle}" 
+	                               Text="{esUtility:LocString ]] .. config.description .. [[}" TextWrapping="Wrap" />
+	    				</Border>
+	                    <Grid Grid.Row="3" HorizontalAlignment="Center">
+	                        <Grid.RowDefinitions>
+	                            <RowDefinition Height="*" />
+	                            <RowDefinition Height="Auto" />
+	                        </Grid.RowDefinitions>
+	    
+	                        <StackPanel Grid.Row="0"
+	                                    Height="590"
+	                                    Margin="]] .. tostring(inner_margin) .. [[,15,]] .. tostring(inner_margin) .. [[,0"
+	                                    VerticalAlignment="Top"
+	                                    Orientation="Horizontal">
+	                            ]] ..
+								__GeneratePlanXaml(config, config.button_text, 1) ..
+								__GeneratePlanXaml(config, config.button_text, 2) ..
+								__GeneratePlanXaml(config, config.button_text, 3) ..
+								[[<!--  Toggle Buttons Generated Here -->
+	                        </StackPanel>
+	                        ]] .. toggle_xaml ..
+	                        [[<!-- Tutorial Toggle Button Generated Here -->
+	                    </Grid>
+
+						<!--  $11233228 : Confirm  -->
+	                    <Button Grid.Row="4" x:Name="ConfirmButton"
+	                            Margin="0,0,70,0" HorizontalAlignment="Right"
+	                            Content="{esUtility:LocString $11233228}"
+	                            Style="{StaticResource StandardButton}">
+	                    </Button>
+	                </Grid>                       
+    			</Grid>
+            </Grid>
+          </Grid>
+</Page>
+]] -- TODO indentation is off by 4
+	return xaml
+end

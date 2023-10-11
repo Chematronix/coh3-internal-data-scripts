@@ -1,0 +1,118 @@
+--
+-- WorldBuilder prefab
+-- "mapcallouts"
+--
+
+
+-- Schema
+
+mapcallouts_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "mapcallouts",																						-- name the prefab uses to identify itself
+	description = "mapcallouts",																				-- name to display for this prefab
+	script = "mapcallouts.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+	
+		------------------------
+		------------------------ MAP CALLOUTS
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "map_callouts",
+			description = "Map Callouts",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_TABLE,
+					name = "standing_locations",
+					description = "Prefered locations for unit types to stand",
+					multiplicity = "multiple",
+					itemSchema = {
+						{											
+							type = ST_STRING,
+							name = "unit_type_preference",
+							description = "Prefered unit type",
+							options = {"Any", "HMG", "AT"},
+							default = "Any",
+						},
+						{											
+							type = ST_STRING,
+							name = "combat_location",
+							description = "Use location for Combat, Idle, or Both",
+							options = {"Both", "Combat", "Idle"},
+							default = "Both",
+						},
+						{
+							type = ST_MARKER,
+							name = "standing_location",
+							description = "Location units will stand",
+							colour = "blue",
+							hasDirection = true,
+						},
+					},		
+				},
+				{
+					type = ST_TABLE,
+					name = "interactable_objects",
+					description = "Objects units can interact with",
+					multiplicity = "multiple",
+					itemSchema = {
+						{
+							type = ST_PBG,
+							name = "blueprint",
+							blueprintType  = "entity",
+							description = "What object will be placed",
+							show = true,
+							showAlways = true,
+							lockedTo = "location",
+						},
+						{
+							type = ST_MARKER,
+							name = "location",
+							description = "Location of the interactable object",
+							colour = "blue",
+							hasDirection = true,
+						},
+						{							
+							type = ST_NUMBER,
+							name = "interaction_frequency",
+							description = "How often this object can be interacted with",
+							default = 0,
+						},
+						{							
+							type = ST_NUMBER,
+							name = "interaction_max",
+							description = "Maximum amount of times this object can be interacted with. -1 is infinite",
+							default = -1,
+						},
+					},		
+				},
+				{
+					type = ST_TABLE,
+					name = "patrol_paths",
+					description = "Prefered locations for unit types to stand",
+					multiplicity = "multiple",
+					itemSchema = {
+						{
+							type = ST_MARKER,
+							name = "path",
+							description = "The path units can patrol along",
+							colour = "blue",
+							hasDirection = true,
+						},
+					},		
+				},
+			
+			},
+			
+		},
+		
+		
+		
+	},
+}

@@ -1,0 +1,15 @@
+
+function AI_SetCompanyPersonality(squad, personality)
+	-- set pbg value in state model
+	local player = Squad_GetPlayerOwner(squad)
+	local ais = AI_FindAISquadByID(player, Squad_GetID(squad))
+	local pbg = BP_GetAICompanyPersonalityBlueprint(personality)
+	AISquad_SetStateModelPBG(ais, "ai_company_personality", pbg)
+end
+
+function AI_GetCompanyPersonality(squad)
+	-- get pbg from state model
+	local player = Squad_GetPlayerOwner(squad)
+	local ais = AI_FindAISquadByID(player, Squad_GetID(squad))
+	return AISquad_GetStateModelPBG(ais, "ai_company_personality")
+end

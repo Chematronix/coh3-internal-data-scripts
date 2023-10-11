@@ -1,0 +1,503 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- VIEW
+-- Provides an on-screen interface for looking at variables in the game context
+--
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+
+function View_Init()
+
+	dr_clear("view")
+	dr_setautoclear("view", false)
+	dr_setdisplay("view", true)
+	
+	_view_display = false
+	_view_current_selection = nil
+	
+end
+
+Scar_AddInit(View_Init)
+
+
+
+
+
+
+function view(item)
+
+	if (item == nil) then
+		
+		_view_internal_item = nil
+		
+		View_TurnOff()
+		
+	else
+		
+		
+		_view_internal_item = item
+		_view_cursor = {1}
+		_view_cursormax = {1}
+		
+		View_TurnOn()
+		View_Manager()
+	end
+	
+end
+
+
+
+
+function View_TurnOn()
+
+	if _view_display == false then
+	
+		-- bind the keys
+		if ( Scar_DebugConsoleExecute ) then
+			Scar_DebugConsoleExecute("bind([[NUMPAD8]], [[Scar_DoString('View_UpArrow()')]])")
+			Scar_DebugConsoleExecute("bind([[NUMPAD2]], [[Scar_DoString('View_DownArrow()')]])")
+			Scar_DebugConsoleExecute("bind([[CONTROL+NUMPAD8]], [[Scar_DoString('View_UpArrow(5)')]])")
+			Scar_DebugConsoleExecute("bind([[CONTROL+NUMPAD2]], [[Scar_DoString('View_DownArrow(5)')]])")
+			Scar_DebugConsoleExecute("bind([[NUMPAD4]], [[Scar_DoString('View_LeftArrow()')]])")
+			Scar_DebugConsoleExecute("bind([[NUMPAD6]], [[Scar_DoString('View_RightArrow()')]])")
+			Scar_DebugConsoleExecute("bind([[NUMPAD5]], [[Scar_DoString('View_Focus()')]])")
+		end
+
+		-- kick off the rule that refreshes the view info
+		if not Rule_Exists(View_Manager) then
+			Rule_Add(View_Manager)
+		end
+		View_Manager()
+		
+		
+		_view_display = true
+
+	end
+	
+end
+
+function View_TurnOff()
+
+	if _view_display == true then
+
+		-- unbind the keys
+		if ( Scar_DebugConsoleExecute ) then
+			Scar_DebugConsoleExecute("unbind([[NUMPAD8]])")
+			Scar_DebugConsoleExecute("unbind([[NUMPAD2]])")
+			Scar_DebugConsoleExecute("unbind([[CONTROL+NUMPAD8]])")
+			Scar_DebugConsoleExecute("unbind([[CONTROL+NUMPAD2]])")
+			Scar_DebugConsoleExecute("unbind([[NUMPAD4]])")
+			Scar_DebugConsoleExecute("unbind([[NUMPAD6]])")
+			Scar_DebugConsoleExecute("unbind([[NUMPAD5]])")
+		end
+
+		-- kill the rule that refreshes the view info and clear any existing text
+		if Rule_Exists(View_Manager) then
+			Rule_Remove(View_Manager)
+			dr_clear("view")
+		end
+		
+		_view_display = false
+
+	end
+	
+end
+
+
+
+function View_UpArrow(count)
+	if (_view_internal_item ~= nil) then
+		local currentpos = _view_cursor[(#_view_cursor)]
+		local currentmax = _view_cursormax[(#_view_cursor)]
+		currentpos = currentpos - (count or 1)
+		if currentpos <= 0 then
+			currentpos = currentmax + currentpos
+		end
+		_view_cursor[(#_view_cursor)] = currentpos
+		View_Manager()
+	end
+end
+
+function View_DownArrow(count)
+	if (_view_internal_item ~= nil) then
+		local currentpos = _view_cursor[(#_view_cursor)]
+		local currentmax = _view_cursormax[(#_view_cursor)]
+		currentpos = currentpos + (count or 1)
+		if currentpos > currentmax then
+			currentpos = currentpos - currentmax
+		end
+		_view_cursor[(#_view_cursor)] = currentpos
+		View_Manager()
+	end
+end
+
+function View_RightArrow()
+	if (_view_internal_item ~= nil) then
+		local currentmax = _view_cursormax[(#_view_cursor)]
+		if (currentmax ~= 0) then
+			table.insert(_view_cursor, 1)
+			table.insert(_view_cursormax, 0)
+		end
+		View_Manager()
+	end
+end
+
+function View_LeftArrow()
+	if (_view_internal_item ~= nil) then
+		if ((#_view_cursor) > 1) then
+			table.remove(_view_cursor)
+			table.remove(_view_cursormax)
+		end
+		View_Manager()
+	end
+end
+
+function View_Focus()
+	if (_view_current_selection ~= nil) then
+	
+		if (scartype(_view_current_selection) ~= ST_SGROUP and scartype(_view_current_selection) ~= ST_EGROUP)
+		or (scartype(_view_current_selection) == ST_SGROUP and not SGroup_IsEmpty(_view_current_selection))
+		or (scartype(_view_current_selection) == ST_EGROUP and not EGroup_IsEmpty(_view_current_selection)) then
+			Camera_MoveTo(Util_GetPosition(_view_current_selection), true)
+		end
+	end
+end
+
+function View_ToggleDisplay()
+	if Rule_Exists(View_Manager) then
+		Rule_Remove(View_Manager)
+		dr_clear("view")
+	else
+		Rule_Add(View_Manager)
+	end
+end
+
+
+
+function View_Manager()
+	
+	if _view_internal_item == nil then
+		Rule_RemoveMe()
+		return
+	end
+	
+	dr_clear("view")
+	View_DrawItem(_view_internal_item, 0.1, 0.20, 1)
+	
+end
+
+
+function View_DrawItem(item, xpos, ypos, column)
+	
+	-- make a record of the number of items in this table (0 if it isn't a table)
+	_view_cursormax[column] = 0
+
+	_view_current_selection = nil
+	
+	-- draw the item
+	if (scartype(item) == ST_MARKER) then
+		
+		_view_current_selection = item
+		local pos = Marker_GetPosition(item)
+		
+		-- debug draw the marker's centre and proximity ring
+		dr_drawline( World_Pos(pos.x-1, pos.y+0.1, pos.z-1), World_Pos(pos.x+1, pos.y+0.1, pos.z+1), 205, 205, 255, "view" )
+		dr_drawline( World_Pos(pos.x-1, pos.y+0.1, pos.z+1), World_Pos(pos.x+1, pos.y+0.1, pos.z-1), 205, 205, 255, "view" )
+		dr_terraincircle(pos, Marker_GetProximityRadiusOrDefault(item, 0), 205, 205, 255, 24, "view")
+		
+		-- menu text
+		dr_text2d("view", xpos, ypos+0.02, "Name:", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.02, Marker_GetName(item), 205, 205, 255)
+		dr_text2d("view", xpos, ypos+0.04, "Pos:", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.04, "x:"..string.format("%.2f", pos.x).." y:"..string.format("%.2f", pos.y).." z:"..string.format("%.2f", pos.z), 205, 205, 255)
+		dr_text2d("view", xpos, ypos+0.06, "Prox:", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.06, Marker_GetProximityRadiusOrDefault(item, 0), 205, 205, 255)
+		
+	elseif (scartype(item) == ST_SCARPOS) then
+		
+		_view_current_selection = item
+		
+		-- debug draw the position
+		dr_drawline( World_Pos(item.x-1, item.y+0.1, item.z-1), World_Pos(item.x+1, item.y+0.1, item.z+1), 205, 205, 255, "view" )
+		dr_drawline( World_Pos(item.x-1, item.y+0.1, item.z+1), World_Pos(item.x+1, item.y+0.1, item.z-1), 205, 205, 255, "view" )
+		
+		-- menu text
+		dr_text2d("view", xpos, ypos+0.02, "Pos:", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.02, "x:"..string.format("%.2f", item.x).." y:"..string.format("%.2f", item.y).." z:"..string.format("%.2f", item.z), 205, 205, 255)
+		
+	elseif (scartype(item) == ST_SGROUP) then
+		
+		if SGroup_IsValid(item.SGroupID) == true then
+			
+			_view_current_selection = item
+			
+			-- debug draw circles around each squad member, and mark each squad position
+			for i = 1, SGroup_CountSpawned(item) do
+				local squad = SGroup_GetSpawnedSquadAt(item, i)
+				local pos = Squad_GetPosition(squad)
+				dr_drawline( World_Pos(pos.x-0.25, pos.y+0.1, pos.z-0.25), World_Pos(pos.x+0.25, pos.y+0.1, pos.z+0.25), 205, 205, 255, "view" )
+				dr_drawline( World_Pos(pos.x-0.25, pos.y+0.1, pos.z+0.25), World_Pos(pos.x+0.25, pos.y+0.1, pos.z-0.25), 205, 205, 255, "view" )
+				for n = 1, Squad_Count(squad) do
+					local entity = Squad_EntityAt(squad, n-1)
+					dr_terraincircle(Entity_GetPosition(entity), 1.5 * Entity_GetRadius(entity), 205, 205, 255, 16, "view")
+				end
+			end
+			
+			-- menu text
+			dr_text2d("view", xpos, ypos+0.02, "Name:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.02, SGroup_GetName(item), 205, 205, 255)
+			dr_text2d("view", xpos, ypos+0.04, "Squads:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.04, SGroup_CountSpawned(item).." Spawned    "..SGroup_CountDeSpawned(item).." Despawned", 205, 205, 255)
+			dr_text2d("view", xpos, ypos+0.06, "Members:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.06, SGroup_TotalMembersCount(item), 205, 205, 255)
+			
+		else
+			
+			dr_text2d("view", xpos, ypos+0.02, "Error: SGroup doesn't exist any more. (Maybe it was destroyed?)", 255, 50, 50)
+			
+		end
+		
+	elseif (scartype(item) == ST_EGROUP) then
+		
+		if EGroup_IsValid(item.EGroupID) == true then
+			
+			_view_current_selection = item		
+		
+			-- debug draw circles around each entity, and give a spawned / despawned count
+			for i = 1, EGroup_CountSpawned(item) do
+				local entity = EGroup_GetSpawnedEntityAt(item, i)
+				dr_terraincircle(Entity_GetPosition(entity), 1.5 * Entity_GetRadius(entity), 205, 205, 255, 16, "view")
+			end
+			
+			-- menu text
+			dr_text2d("view", xpos, ypos+0.02, "Name:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.02, EGroup_GetName(item), 205, 205, 255)
+			dr_text2d("view", xpos, ypos+0.04, "Entities:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.04, EGroup_CountSpawned(item).." Spawned    "..EGroup_CountDeSpawned(item).." Despawned", 205, 205, 255)
+		
+		else
+		
+			dr_text2d("view", xpos, ypos+0.02, "Error: EGroup doesn't exist any more. (Maybe it was destroyed?)", 255, 50, 50)
+			
+		end
+		
+	elseif (scartype(item) == ST_SQUAD) then
+		
+		if Squad_IsValid(item.SquadID) == true then
+		
+			_view_current_selection = item
+			local pos = Squad_GetPosition(item)
+			
+			-- debug draw circles around squad
+			dr_drawline( World_Pos(pos.x-0.25, pos.y+0.1, pos.z-0.25), World_Pos(pos.x+0.25, pos.y+0.1, pos.z+0.25), 205, 205, 255, "view" )
+			dr_drawline( World_Pos(pos.x-0.25, pos.y+0.1, pos.z+0.25), World_Pos(pos.x+0.25, pos.y+0.1, pos.z-0.25), 205, 205, 255, "view" )
+			
+			for n = 1, Squad_Count(item) do
+				local entity = Squad_EntityAt(item, n-1)
+				dr_terraincircle(Entity_GetPosition(entity), 1.5 * Entity_GetRadius(entity), 205, 205, 255, 16, "view")
+			end
+			
+			-- menu text
+			dr_text2d("view", xpos, ypos+0.02, "Blueprint:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.02, BP_GetName(Squad_GetBlueprint(item)), 205, 205, 255)
+			dr_text2d("view", xpos, ypos+0.04, "Members:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.04, Squad_Count(item), 205, 205, 255)
+			
+		else
+		
+			dr_text2d("view", xpos, ypos+0.02, "Error: Squad doesn't exist any more. (Maybe it was destroyed?)", 255, 50, 50)
+			
+		end
+		
+	elseif (scartype(item) == ST_ENTITY) then
+		
+		if Entity_IsValid(item.EntityID) == true then
+			
+			_view_current_selection = item
+			
+			-- debug draw circle around entity
+			dr_terraincircle(Entity_GetPosition(item), 1.5 * Entity_GetRadius(item), 205, 205, 255, 16, "view")
+			
+			-- menu text
+			dr_text2d("view", xpos, ypos+0.02, "Blueprint:", 205, 205, 255)
+			dr_text2d("view", xpos+0.06, ypos+0.02, BP_GetName(Entity_GetBlueprint(item)), 205, 205, 255)
+		
+		else
+		
+			dr_text2d("view", xpos, ypos+0.02, "Error: Entity doesn't exist any more. (Maybe it was destroyed?)", 255, 50, 50)
+			
+		end
+		
+	elseif (scartype(item) == ST_PLAYER) then
+		
+		dr_text2d("view", xpos, ypos+0.02, "Player: ", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.02, World_GetPlayerIndex(item), 205, 205, 255)
+		dr_text2d("view", xpos, ypos+0.04, "Population: ", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.04, Player_GetCurrentPopulation(item, CT_Personnel).." / "..Player_GetMaxPopulation(item, CT_Personnel), 205, 205, 255)		
+		dr_text2d("view", xpos, ypos+0.06, "Resources: ", 205, 205, 255)
+		
+		-- TODO: Make this more project-agnostic by looping through resources with "for index = RT_Begin, RT_Count do...", but needs method of getting the resource names first
+		
+		dr_text2d("view", xpos+0.06, ypos+0.06, Player_GetResource(item, RT_Food).." food", 86, 175, 211)		
+		dr_text2d("view", xpos+0.06, ypos+0.08, Player_GetResource(item, RT_Wood).." wood", 255, 147, 41)		
+		dr_text2d("view", xpos+0.06, ypos+0.10, Player_GetResource(item, RT_Stone).." stone", 205, 205, 205)		
+		dr_text2d("view", xpos+0.06, ypos+0.12, Player_GetResource(item, RT_Gold).." gold", 255, 228, 0)		
+		
+	elseif (scartype(item) == ST_STRING) then
+		
+		dr_text2d("view", xpos, ypos+0.02, "Text: ", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.02, item, 205, 205, 255)
+		
+	elseif (scartype(item) == ST_NUMBER) then
+		
+		dr_text2d("view", xpos, ypos+0.02, "Value: ", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.02, item, 205, 205, 255)
+		
+	elseif (scartype(item) == ST_BOOLEAN) then
+		
+		dr_text2d("view", xpos, ypos+0.02, "Value: ", 205, 205, 255)
+		if (item == true) then
+			dr_text2d("view", xpos+0.06, ypos+0.02, "true", 205, 205, 255)
+		elseif (item == false) then
+			dr_text2d("view", xpos+0.06, ypos+0.02, "false", 205, 205, 255)
+		end
+	
+	elseif (scartype(item) == ST_PBG) then
+		
+		dr_text2d("view", xpos, ypos+0.02, "Blueprint:", 205, 205, 255)
+		dr_text2d("view", xpos+0.06, ypos+0.02, BP_GetName(item), 205, 205, 255)
+	
+	elseif (scartype(item) == ST_NIL) then
+		
+		-- do nothing
+		
+	elseif (scartype(item) == ST_TABLE) or (type(item) == "table") then
+	
+		local delta = 0.02		-- extra distance on the y axis to draw the entry (increments each row)
+		local row = 0			
+		
+		-- try and figure out the width of the keys column (proportional font, so a guesstimate will have to do)
+		local width = 4
+		if item[1] == nil then										-- dictionary-style, get the longest key name
+			local _GetWidth = function(k, v)						
+				width = math.max(width, string.len(k))
+			end
+			for k,v in pairs(item) do
+				_GetWidth(k, v)
+			end			
+		end
+		width = (width * 0.005) + 0.03
+		
+		-- if table is too long, move it up		
+		local heighttocursor = ((_view_cursor[column] + 2) * delta)	
+		if ypos + heighttocursor >= 0.9 then
+			--ypos = math.max(0.9 - heighttocursor, 0.1)
+			ypos = 0.9 - heighttocursor
+		end
+
+		-- draw each item in the table
+		local _TableEntry = function(k, v)
+			
+			row = row + 1
+			
+			if (row == _view_cursor[column]) then																						-- selected row entry
+				dr_text2d("view", xpos, ypos+delta, k, 255, 255, 255)
+				dr_text2d("view", xpos+width-0.01, ypos+delta, ">", 255, 255, 255)
+				if (column == (#_view_cursor)) then
+					dr_text2d("view", xpos+width, ypos+delta, scartype_tostring(v), 255, 255, 255)
+					dr_text2d("view", xpos+width+0.05, ypos+delta, View_ItemShortDescription(v), 255, 255, 255)
+				else
+					View_DrawItem(item[k], xpos+width, ypos+delta, column+1)
+				end
+			else																														-- unselected row entry
+				dr_text2d("view", xpos, ypos+delta, k, 205, 205, 255)
+				if (column == (#_view_cursor)) then
+					dr_text2d("view", xpos+width, ypos+delta, scartype_tostring(v), 205, 205, 255)
+					dr_text2d("view", xpos+width+0.05, ypos+delta, View_ItemShortDescription(v), 205, 205, 255)
+				end
+			end
+			
+			delta = delta + 0.02
+			
+		end
+		
+		-- this makes a copy of the table and sorts it, so the order doesn't shuffle around!
+		local sortedTable = {}
+		for k,v in pairs(item) do
+			local item = {
+				key = k,
+				value = v,
+			}
+			table.insert(sortedTable, item)
+		end
+		table.sort(sortedTable, function(a, b) return a.key < b.key end)
+
+		-- draw each item of this sorted table
+		for index, item in pairs(sortedTable) do
+			_TableEntry(item.key, item.value)
+		end
+		
+		_view_cursormax[column] = row
+		
+		if row == 0 then
+			dr_text2d("view", xpos, ypos+delta, "Table is empty.", 255, 50, 50)
+		end
+		
+	end
+	
+	-- draw the item's type on the screen
+	dr_text2d("view", xpos, ypos, scartype_tostring(item), 255, 255, 255)
+	
+end
+
+
+
+
+function View_ItemShortDescription(item)
+
+	if (scartype(item) == ST_MARKER) then
+		return Marker_GetName(item)
+	elseif (scartype(item) == ST_PLAYER) then
+		return Player_GetID(item)
+	elseif (scartype(item) == ST_PBG) then
+		return BP_GetName(item)
+	elseif (scartype(item) == ST_SGROUP) then
+		return SGroup_GetName(item)
+	elseif (scartype(item) == ST_EGROUP) then
+		return EGroup_GetName(item)
+	elseif (scartype(item) == ST_SQUAD) then
+		return BP_GetName(Squad_GetBlueprint(item))
+	elseif (scartype(item) == ST_ENTITY) then
+		return BP_GetName(Entity_GetBlueprint(item))
+	elseif (scartype(item) == ST_STRING) then
+		return [["]]..item..[["]]
+	elseif (scartype(item) == ST_TABLE) then
+		if next(item) == nil then
+			return "Empty table"
+		elseif item[1] ~= nil then
+			local count = #item
+			if count == 1 then
+				return "Array (1 item)"
+			else
+				return "Array ("..#item.." items)"
+			end
+		else
+			return "Dictionary"
+		end
+	elseif (scartype(item) == ST_NUMBER) then
+		return item
+	elseif (scartype(item) == ST_BOOLEAN) then
+		if item == true then
+			return "true"
+		else
+			return "false"
+		end
+	end
+	
+	return ""
+	
+end

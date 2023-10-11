@@ -1,0 +1,7 @@
+-- Copyright 2019 SEGA Corporation, Developed by Relic Entertainment
+
+import("test/test_framework.scar")
+
+import("test/cover.scar")
+import("test/navigation_pathfinding.scar")
+import("test/garrison_combat.scar")

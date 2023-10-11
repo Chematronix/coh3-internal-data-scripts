@@ -1,0 +1,152 @@
+--? @group scardoc;Encounter
+
+import("aimanager/Goals/BaseGoal.scar")
+
+Ai = Ai or fatal("Ai not loaded properly")
+Ai.goals = Ai.goals or {}
+Ai.goals.FormationAttackGoal = Clone(Ai.goals.BaseGoal)
+Ai.goals.DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData or {} -- preserve data on soft-reload
+
+local FormationAttackGoal = Ai.goals.FormationAttackGoal
+
+FormationAttackGoal._BaseCreate = FormationAttackGoal.Create
+FormationAttackGoal._BaseSetupSkirmishAI = FormationAttackGoal.SetupSkirmishAI
+FormationAttackGoal._BaseUpdateGoalData = FormationAttackGoal.UpdateGoalData
+FormationAttackGoal._UpdateResourceGuidance = FormationAttackGoal.UpdateResourceGuidance
+
+
+function FormationAttackGoal:Create(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData, previousEncounterID)
+	local DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData
+	defaultGoalData = defaultGoalData or DefaultFormationAttackGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultFormationAttackGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultFormationAttackGoalData.modifyGoalData
+	
+	local goal = self:_BaseCreate(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	
+	if(not goal.data.target) then fatal("ERROR: No attack target defined for encounter "  .. encounter.data.name) end
+	if(goal.internalAIEncounterPtr) then fatal("ERROR: Objective object already defined for encounter "  .. encounter.data.name) end
+	
+	goal:CreateSkirmishAI(previousEncounterID)
+	
+	return goal
+end
+
+function FormationAttackGoal:UpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	local DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData
+	defaultGoalData = defaultGoalData or DefaultFormationAttackGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultFormationAttackGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultAttackGoalData.modifyGoalData
+
+	self:_BaseUpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+end
+
+--Create and Setup attack based on skirmish AI
+function FormationAttackGoal:CreateSkirmishAI(previousEncounterID)
+	if (not AI_IsLocalAIPlayer(self.encounter.data.player)) then
+		Ai:Print("Skipping Skirmish AI - player not enabled AI")
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Creating AI Encounter...")
+	if previousEncounterID then
+		self.internalAIEncounterPtr = AI_CreateRestoreEncounter(self.encounter.data.player, AIEncounterType_FormationAttackMove, previousEncounterID)
+	else
+		self.internalAIEncounterPtr = AI_CreateEncounter(self.encounter.data.player, AIEncounterType_FormationAttackMove)
+	end
+	
+	self:SetupEncounterSkirmishAI()
+	self:SetupSkirmishAI()
+end
+
+--Setup attack based on skirmish AI
+function FormationAttackGoal:SetupSkirmishAI()
+	if (self.internalAIEncounterPtr == nil or not AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID)) then
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Setting up Skirmish AI...")
+	
+	self:_BaseSetupSkirmishAI()
+	
+	AIEncounter_EngagementGuidance_SetMaxIdleTime(self.internalAIEncounterPtr, self.data.maxIdleTime or 60)
+	
+	-- Im assuming that script formations will all be spawned together so Formup should never fail
+	AIEncounter_FormationGuidance_SetFormUpAtSquadAverage(self.internalAIEncounterPtr)
+	AIEncounter_FormationGuidance_SetFormUpAtTimeOutParams(self.internalAIEncounterPtr, 0, 0.8)
+end
+
+-- Internal. Updates what squads and abilities are available for the goal to use
+function FormationAttackGoal:UpdateResourceGuidance()
+	assert(self.internalAIEncounterPtr ~= nil)
+	assert(AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID))
+	
+	self:_UpdateResourceGuidance()
+end
+
+--[[
+-- Attack Goal Data Interface
+]]--
+
+--? @shortdesc Adjust default goal data for attack goals.  Sets the default GoalData to the current defaults plus additionalDefaultGoalData; any values specified are used for unspecified encounter attack goal values.
+--? @args Table additionalDefaultGoalData
+function AIFormationAttackGoal_AdjustDefaultGoalData(additionalDefaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Adjusting FormationAttackGoal default data...")
+
+	local additionalGoalData = Clone(additionalDefaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(additionalGoalData)
+	local DefaultBaseGoalData = Ai.goals.DefaultGoalData
+	local DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData
+	local defaultGoalData = DefaultFormationAttackGoalData.defaultGoalData or DefaultBaseGoalData.defaultGoalData
+	DefaultFormationAttackGoalData.defaultGoalData = MergeCloneTable(defaultGoalData, additionalGoalData)
+
+	Ai:Print("-----------------------------------------------")
+	Ai:Print("additionalDefaultGoalData")
+	Ai:Print(additionalGoalData)
+	Ai:Print("-----------------------------------------------")
+	DebugPrintGoals(DefaultformationAttackGoalData.defaultGoalData, DefaultFormationAttackGoalData.overrideGoalData, DefaultFormationAttackGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set default goal data for attack goals.  defaultGoalData is cloned; any values specified are used for unspecified encounter attack goal values.
+--? @args Table defaultGoalData
+function AIFormationAttackGoal_SetDefaultGoalData(defaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting FormationAttackGoal default data...")
+
+	local DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData
+	DefaultAttackGoalData.defaultGoalData = Clone(defaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultFormationAttackGoalData.defaultGoalData)
+
+	DebugPrintGoals(DefaultFormationAttackGoalData.defaultGoalData, DefaultFormationAttackGoalData.overrideGoalData, DefaultFormationAttackGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set override goal data for attack goals.  overrideGoalData is cloned; any values specified are used for encounter attack goal values.
+--? @args Table overrideGoalData
+function AIFormationAttackGoal_SetOverrideGoalData(overrideGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting FormationAttackGoal override data...")
+
+	local DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData
+	DefaultFormationAttackGoalData.overrideGoalData = Clone(overrideGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultFormationAttackGoalData.overrideGoalData)
+
+	DebugPrintGoals(DefaultFormationAttackGoalData.defaultGoalData, DefaultFormationAttackGoalData.overrideGoalData, DefaultFormationAttackGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set modify goal data for attack goals.  modifyGoalData is cloned; values specified via keyname_Multiplier are used for the numeric keyname encounter attack goal value.
+--? @args Table modifyGoalData
+function AIFormationAttackGoal_SetModifyGoalData(modifyGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting FormationAttackGoal modify data...")
+
+	local DefaultFormationAttackGoalData = Ai.goals.DefaultFormationAttackGoalData
+	DefaultFormationAttackGoalData.modifyGoalData = Clone(modifyGoalData) 
+
+	DebugPrintGoals(DefaultFormationAttackGoalData.defaultGoalData, DefaultFormationAttackGoalData.overrideGoalData, DefaultFormationAttackGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end

@@ -1,0 +1,116 @@
+-----------------------------------------------------------------------
+-- Disconnect Win Condition
+--
+-- (c) Relic Entertainment 2020
+--
+-- Handles behavior when a player quits or otherwise disconnects and an AI takes over.
+-- 
+--  A team is eliminated if the last human on a team drops/disconnects.
+--  The win condition is triggered when only one team remains.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Disconnect")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+-- Caches the human players that started the match.
+function Disconnect_OnInit()
+	_disconnect = {
+		human_player_indices = {},
+	}
+	for i = 1, World_GetPlayerCount() do 
+		if Player_IsHuman(World_GetPlayerAt(i)) then
+			table.insert(_disconnect.human_player_indices, i)
+		end
+	end
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function Disconnect_OnWinConditionTriggered(match_result)
+	_disconnect.match_result = match_result
+end
+
+
+-- Called by core.scar when a player has been taken over by AI.
+-- Overrrides default AI takeover behavior in core.scar.
+function Disconnect_OnPlayerAITakeover(context)
+
+	if _disconnect.match_result then
+		return
+	end
+
+	--print(Loc_ToAnsi(Player_GetDisplayName(context.player)).." dropped from the game")
+	print(string.format("%s (player %d, %s) dropped from the game",
+			Loc_ToAnsi(Player_GetDisplayName(context.player)),
+			World_GetPlayerIndex(context.player),
+			Player_GetRaceName(context.player)))
+	print(Loc_ToAnsi(Player_GetDisplayName(context.player)).." replaced by AI")
+
+	-- Prevent core.scar from executing default behaviour (i.e. end match when only 1 human player remains)
+	OnPlayerAITakeover_Hold()
+
+	-- New behavior: Let match continue but eliminate team when no humans remain
+	World_SetPlayerLose(context.player)
+
+	-- Determine how many teams there are
+	local teams = {}
+	for i = 1, World_GetPlayerCount() do
+		local team
+		for _, t in pairs(teams) do
+			if Player_ObserveRelationship(World_GetPlayerAt(t[1]), World_GetPlayerAt(i)) == R_ALLY then
+				team = t
+				break
+			end
+		end
+		team = team or {}
+		table.insert(team, i)
+		if not Table_Contains(teams, team) then 
+			table.insert(teams, team)
+		end
+	end
+
+	-- Determine how many teams  that started with humans still has them
+	local remaining_teams = {}
+	for _, team in pairs(teams) do
+		local team_had_humans = false
+		local humans_on_team = {}
+		for _, player_index in pairs(team) do
+			team_had_humans = team_had_humans or Table_Contains(_disconnect.human_player_indices, player_index)
+			if Player_IsHuman(World_GetPlayerAt(player_index)) then
+				table.insert(humans_on_team, player_index)
+			end
+		end
+		if not team_had_humans or #humans_on_team > 0 then
+			table.insert(remaining_teams, team)
+		end
+	end
+
+	-- Trigger win condition if only one team that started with humans still has them
+	if #remaining_teams == 1 then
+		local winning_team = remaining_teams[1]
+		local match_result = {
+			winners = {},
+			losers = {},
+			win_reason = WR_SURRENDER,
+		}
+		for i = 1, World_GetPlayerCount() do
+			if Table_Contains(remaining_teams[1], i) then
+				table.insert(match_result.winners, i)
+			else
+				table.insert(match_result.losers, i)
+			end
+		end
+		Core_CallDelegateFunctions("OnWinConditionTriggered", match_result)
+	end
+end

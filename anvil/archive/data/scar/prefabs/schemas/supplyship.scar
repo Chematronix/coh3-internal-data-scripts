@@ -1,0 +1,294 @@
+import("gameplay/event_cues.scar")
+import("anvil.scar")
+
+-- Income tunables
+local manpower_per_depot = 50
+local munition_per_depot = 10
+local fuel_per_depot = 5
+local munition_per_depotupgrade = 10
+local fuel_per_depotupgrade = 5
+local manpower_per_depotupgrade = 15
+
+--Player_GetStateModelInt(World_GetPlayerAt(1), "fuel_depot_income")
+
+local difficulty = {
+	1.25,	-- Easy
+	1,		-- Normal
+	0.9,	-- Hard
+	0.75	-- Expert
+}
+
+-- Table storing income data that gets passed to UI
+-- NOTE:  	These are named purposefully to match AE's lua_enum_string values
+--			This makes it easy for code to reference these values without hardcoded strings.
+--   		Rename at your own peril.
+local player_income = {
+	per_depot = {
+		RT_Manpower = manpower_per_depot,
+		RT_Munition = munition_per_depot,
+		RT_Fuel = fuel_per_depot
+	},
+	RT_Manpower = 0, 
+	RT_Munition = 0, 
+	RT_Fuel = 0
+}
+
+-- Partial Save Callback for all supplyship prefabs
+function supplyship_GeneratePartialSaveTable(saveTable)
+	saveTable.supplyshipPrefabSaveTable  = {
+		version = 2,
+		data = {}, -- dynamic data for each instance
+	}
+
+	local data = saveTable.supplyshipPrefabSaveTable.data
+	
+	local supplyshipPrefabs = Prefab_GetAllOfType("supplyship")
+	local supplyShipPrefabCount = #supplyshipPrefabs
+	for i=1, supplyShipPrefabCount do
+		local supplyshipPrefab = supplyshipPrefabs[i]
+		local instanceName = supplyshipPrefab.instanceName
+		
+		local timer = supplyshipPrefab.current_supply_ship_respawn_timer
+		data[instanceName] = {timer = timer, SGroup = supplyshipPrefab.SGroup, is_supply_ship_returning = supplyshipPrefab.is_supply_ship_returning}
+	end
+	
+	-- NOTE: There is no symmetric partial save restore
+	-- for supplyship prefabs (similar to aiprefabs). 
+	-- We re-init all prefabs to sanitize,
+	-- apply defaults, and add them back into the active
+	-- prefab table from the worldbuilder data that is
+	-- loaded. Partial save hooks into that process and
+	-- calls <prefabtype>_RestoreFromTable and is passed
+	-- the whole partial save table at that point to
+	-- restore from.
+end
+
+function supplyship_RestoreFromTable(data, restore_table)
+	local supplyshipTable = restore_table.supplyshipPrefabSaveTable
+	if supplyshipTable == nil then
+		return
+	end
+	
+	local instance = Prefab_GetInstance(data)
+	local supplyshipPrefabSaveData = supplyshipTable.data
+	
+	if supplyshipTable.version == 1 then
+		instance.current_supply_ship_respawn_timer = supplyshipPrefabSaveData[instance.instanceName]
+	else
+		local saved_data = supplyshipPrefabSaveData[instance.instanceName]
+		instance.current_supply_ship_respawn_timer = saved_data.timer
+		instance.SGroup = saved_data.SGroup
+		instance.is_supply_ship_returning = saved_data.is_supply_ship_returning
+	end
+	
+end
+
+function supplyship_Init(data)
+	if data.current_supply_ship_respawn_timer == nil then
+		-- supplyship_RestoreFromTable happens first so if already set we don't want to overwrite
+		data.current_supply_ship_respawn_timer = data.ship_return_timer
+	end
+	
+	data.supply_ship_logic_last_turn = World_GetCurrentTurn()
+	
+	if data.SGroup == nil then
+		data.SGroup = SGroup_CreateUnique("supply_ship")
+	end
+	
+	if data.is_supply_ship_returning == nil then
+		data.is_supply_ship_returning = false
+	end
+	
+	Rule_Add(SupplyShipUpdate, data)
+	
+	eg_AllMunitions = EGroup_CreateIfNotFound("eg_AllMunitions")
+	local temp_EGroup = Player_GetEntitiesFromType(World_GetPlayerAt(1), "resource_point_munition")
+	EGroup_AddEGroup(eg_AllMunitions, temp_EGroup)
+	EGroup_Destroy(temp_EGroup)
+	temp_EGroup = Player_GetEntitiesFromType(World_GetPlayerAt(2), "resource_point_munition")
+	EGroup_AddEGroup(eg_AllMunitions, temp_EGroup)
+	EGroup_Destroy(temp_EGroup)
+	
+	eg_AllFuel = EGroup_CreateIfNotFound("eg_AllFuel")
+	temp_EGroup = Player_GetEntitiesFromType(World_GetPlayerAt(1), "resource_point_fuel")
+	EGroup_AddEGroup(eg_AllFuel, temp_EGroup)
+	EGroup_Destroy(temp_EGroup)
+	temp_EGroup = Player_GetEntitiesFromType(World_GetPlayerAt(2), "resource_point_fuel")
+	EGroup_AddEGroup(eg_AllFuel, temp_EGroup)
+	EGroup_Destroy(temp_EGroup)
+	
+	eg_AllManpower = EGroup_CreateIfNotFound("eg_AllManpower")
+	temp_EGroup = Player_GetEntitiesFromType(World_GetPlayerAt(1), "resource_point_manpower")
+	EGroup_AddEGroup(eg_AllManpower, temp_EGroup)
+	EGroup_Destroy(temp_EGroup)
+	temp_EGroup = Player_GetEntitiesFromType(World_GetPlayerAt(2), "resource_point_manpower")
+	EGroup_AddEGroup(eg_AllManpower, temp_EGroup)
+	EGroup_Destroy(temp_EGroup)
+	
+	-- Initialize income data
+	CalculateIncome(data)
+end
+
+function SupplyShipUpdate(context, data)
+
+	CalculateIncome(data)
+	
+	local current_turn = World_GetCurrentTurn()
+
+	-- Only process logic at start of the turn
+	if current_turn == data.supply_ship_logic_last_turn or not World_IsPlayersTurn(data.player) then
+		return
+	end
+	
+	data.supply_ship_logic_last_turn = current_turn
+	local is_spawned_and_alive = SGroup_IsAlive(data.SGroup)
+	
+	-- If no supply ship, count down respawn timer and spawn it when ready
+	if not is_spawned_and_alive then
+		data.current_supply_ship_respawn_timer = data.current_supply_ship_respawn_timer - 1
+		if data.current_supply_ship_respawn_timer <= 0 then
+			Util_CreateSquads(data.player, data.SGroup, data.ship_to_spawn, data.ship_spawn_pos, nil, 1)
+			data.is_supply_ship_returning = false
+			is_spawned_and_alive = true
+			data.current_supply_ship_respawn_timer = data.ship_respawn_timer
+		else
+			return
+		end
+	end
+	
+	local supply_ship = SGroup_GetSquadAt(data.SGroup, 1)
+	
+	-- MetaMap_DisableInput()
+	-- Temp fix: slightly delay move command so the ship has chance to regain action and movement points
+	-- We shouldn't need this anymore once we got better turn flow order implemented
+	Rule_AddOneShot(SendMoveCommand, 0.5, data)
+end
+
+function SendMoveCommand(context, data)
+	
+	if data.is_supply_ship_returning then
+		Cmd_Move(data.SGroup, data.ship_spawn_pos)
+		Rule_AddInterval(CheckDestinationReached, {delay = 1, interval = 0}, data)
+	else
+		Cmd_Move(data.SGroup, data.ship_destination_pos)
+		Rule_AddInterval(CheckDestinationReached, {delay = 1, interval = 0}, data)
+	end
+	
+end
+
+function CalculateIncome(data)
+	local manpower_amount = data.manpower_amount or 0
+	local munition_amount = data.munition_amount or 0
+	local fuel_amount = data.fuel_amount or 0
+	local player1 = World_GetPlayerAt(1)
+	
+	-- value multiplication from statetree
+	manpower_amount = manpower_amount * (Player_GetStateModelFloat(player1, "cm_supplyship_manpower_multiplier") or 1)
+	munition_amount = munition_amount * (Player_GetStateModelFloat(player1, "cm_supplyship_munitions_multiplier") or 1)
+	fuel_amount = fuel_amount * (Player_GetStateModelFloat(player1, "cm_supplyship_fuel_multiplier") or 1)
+	
+	--value additive from statetree
+	manpower_amount = manpower_amount + Player_GetStateModelFloat(player1, "cm_supplyship_manpower_additive") or 0
+	munition_amount = munition_amount + Player_GetStateModelFloat(player1, "cm_supplyship_munitions_additive") or 0
+	fuel_amount = fuel_amount + Player_GetStateModelFloat(player1, "cm_supplyship_fuel_additive") or 0
+	
+	--value additive for each point owned of type
+	manpower_amount = manpower_amount + (supplyship_EGroup_CountOwned(eg_AllManpower) * manpower_per_depot)
+	munition_amount = munition_amount + (supplyship_EGroup_CountOwned(eg_AllMunitions) * munition_per_depot)
+	fuel_amount = fuel_amount + (supplyship_EGroup_CountOwned(eg_AllFuel) * fuel_per_depot)
+	
+	--apply difficulty modifiers 
+	local difficultyMultiplier = difficulty[Game_GetSPDifficulty()+1]
+	
+	manpower_amount = manpower_amount * difficultyMultiplier
+	munition_amount = munition_amount * difficultyMultiplier
+	fuel_amount = fuel_amount * difficultyMultiplier
+	
+	-- add values from resource upgrades (after difficulty modifiers)
+	--manpower_amount = manpower_amount + (Player_GetStateModelInt(World_GetPlayerAt(1), "campaign_player_manpower_income_multiplier") * manpower_per_depotupgrade)
+	--munition_amount = munition_amount + (Player_GetStateModelInt(World_GetPlayerAt(1), "campaign_player_munitions_income_multiplier") * munition_per_depotupgrade)
+	--fuel_amount = fuel_amount + (Player_GetStateModelInt(World_GetPlayerAt(1), "campaign_player_fuel_income_multiplier") * fuel_per_depotupgrade)
+	manpower_amount = manpower_amount + (supplyship_EGroup_CountOwned(eg_AllManpower, BP_GetUpgradeBlueprint("cmap_manpower_income_rate")) * manpower_per_depotupgrade)
+	munition_amount = munition_amount + (supplyship_EGroup_CountOwned(eg_AllMunitions, BP_GetUpgradeBlueprint("cmap_munitions_income_rate")) * munition_per_depotupgrade)
+	fuel_amount = fuel_amount + (supplyship_EGroup_CountOwned(eg_AllFuel, BP_GetUpgradeBlueprint("cmap_fuel_income_rate")) * fuel_per_depotupgrade)
+	
+	-- store in file-local table
+	player_income.RT_Manpower = manpower_amount
+	player_income.RT_Munition = munition_amount
+	player_income.RT_Fuel = fuel_amount
+	player_income.days_until_drop = data.current_supply_ship_respawn_timer
+	
+	-- Store income to datastore for UI			
+	Game_StoreTableData("campaign_player_income", player_income)
+end
+
+function CheckDestinationReached(context, data)	
+	-- Ship died while moving
+	if not SGroup_IsAlive(data.SGroup) then
+		-- MetaMap_EnableInput()
+		Rule_RemoveMe()
+		return
+	end
+	
+	local supply_ship = SGroup_GetSquadAt(data.SGroup, 1)
+	
+	local is_moving = Squad_IsMoving(supply_ship)
+	
+	if not is_moving then
+		
+		local destination_pos = Marker_GetPosition(data.ship_destination_pos)
+		--local destination_node_ID = World_GetMovementNodeFromWorldPosition(destination_pos.x, destination_pos.z)
+		local spawn_pos = Marker_GetPosition(data.ship_spawn_pos)
+		--local spawn_node_ID = World_GetMovementNodeFromWorldPosition(spawn_pos.x, spawn_pos.z)
+		
+		if Prox_AreSquadsNearMarker(data.SGroup, destination_pos, ANY, 5) and not data.is_supply_ship_returning then
+			
+			CalculateIncome(data)
+			
+			local notification_data = {
+				Resources = {
+					Fuel = player_income.RT_Fuel,
+					Munitions = player_income.RT_Munition,
+					Manpower = player_income.RT_Manpower
+				}
+			}
+			EventCues_CampaignEventTimedSquad("cm_supply_ship_arrived", "$11204142", "$11167013", 10, supply_ship, notification_data)
+			
+			-- We reached the port, give resouce and turn around
+			data.is_supply_ship_returning = true
+			Player_AddResource(data.player, RT_Manpower, player_income.RT_Manpower)
+			Player_AddResource(data.player, RT_Munition, player_income.RT_Munition)
+			Player_AddResource(data.player, RT_Fuel, player_income.RT_Fuel)
+		
+		elseif Prox_AreSquadsNearMarker(data.SGroup, spawn_pos, ANY, 5) and data.is_supply_ship_returning then
+			data.is_supply_ship_returning = false
+			
+			-- We finished our trip, destroy and wait one turn before spawning again
+			Squad_Destroy(supply_ship)
+			data.current_supply_ship_respawn_timer = data.ship_return_timer
+		end
+		
+		-- MetaMap_EnableInput()
+		Rule_RemoveMe()
+	end
+	
+end
+
+function supplyship_EGroup_CountOwned(egroup, opt_upgradePBG)
+	if scartype(egroup) == ST_EGROUP then
+		local count = 0
+		for i=1, EGroup_Count(egroup) do
+			local entity = EGroup_GetEntityAt(egroup, i)
+			if opt_upgradePBG == nil then
+				if World_OwnsEntity(entity) == false and Entity_GetPlayerOwner(entity) == World_GetPlayerAt(1) then
+					count = count + 1
+				end
+			else
+				if World_OwnsEntity(entity) == false and Entity_GetPlayerOwner(entity) == World_GetPlayerAt(1) and Entity_HasUpgrade(entity, opt_upgradePBG) then
+					count = count + 1
+				end
+			end
+		end
+		return count
+	end
+end

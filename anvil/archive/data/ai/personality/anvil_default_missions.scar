@@ -1,0 +1,111 @@
+import('tactics.scar' )
+import('utility/debug.scar' )
+import('ai-view.scar' )
+import('anvil_objects.scar' )
+import('anvil_production_scoring_functions.scar')
+import('anvil_encounter_scoring_functions.scar')
+import('ai/ai_utils.scar' )
+
+t_personality_tuning = 
+{
+	-- Multipliers for military target scoring factors
+	dist_to_base_weight = 1.25,
+	-- When dist_to_enemy_base_weight is negative, we set any target within abs(dist_to_enemy_base_weight) units of the base to invalid
+	-- AI wont try to capture zones within the radius of dist_to_enemy_base_weight from the enemy base
+	dist_to_enemy_base_weight = -125,
+	dist_to_ally_base_weight = -1.5, -- Adjusts target scores that are closer to allies then us by the amount of distance they are closer / map size * this weight
+	dist_to_ally_squad = {
+		weight = -5.0,
+		distance = 30,
+	}, -- Subtracts weight * number of ally squads nearby from final score. Wont take score below 0
+	dist_to_owned_squad = {
+		weight = 1.25,
+		distance = 30,
+	}, -- Adds weight * number of owned squads nearby to the final score.
+	capture_point_weight = 1,
+	connected_sector_weight = 1,
+	bridge_weight = 1,
+
+	-- Capture point priority (higher value = higher priority)
+	victory_point_priority = 0.05,
+	munition_point_priority = 0.0,
+	fuel_point_priority = 0.06,
+	strategic_point_priority = 0.01,
+	
+	-- Entities --
+	attack_unit_tags_multipliers = { -- Anything not specified will be zeroed
+		--Enabling all capture points
+		capture = 1,
+		victory_point = 1,
+		territory_point = 1,
+		--Disabling targeting player base buildings, set to 1 to enable
+		hq = 0,
+		production1 = 0,
+		production2 = 0,
+		production3 = 0,
+		production4 = 0,
+		forward_barracks = 1,
+		-- Enabling all bridges
+		bridge = 1,
+		-- Disabling wrecks
+		wreck = 0,
+	},
+	defend_unit_tags_multipliers = { -- Anything not specified will be zeroed
+		--Enabling all capture points
+		capture = 1,
+		victory_point = 1,
+		territory_point = 1,
+		--Enabling targeting player base buildings
+		hq = 1,
+		production1 = 1,
+		production2 = 1,
+		production3 = 1,
+		production4 = 1,
+		forward_barracks = 1,
+	},
+	forward_barracks_multipliers = { -- If the structure is a converted forward barracks, this multiplier will be used in place of unit tag
+		attack = 1,
+		defend = 1,
+	},
+	
+	-- Squads --
+	attack_squad_tags_multipliers = { -- Anything not specified will be zeroed
+		teamweapon = 1,
+		heavy_armor = 1,
+	},
+	defend_squad_tags_multipliers = { -- Anything not specified will be zeroed
+	},
+	in_hold_squad_multipliers = { -- If squad is in hold, this multiplier will be used in place of squad tag
+		attack = 1,
+		defend = 1,
+	},
+	
+	
+	-- Behind Capture Points --
+	behind_capture_points_buffer = 2,
+	
+	ally_ping_weight = 2,
+	ally_ping_timeout = 10,
+	ally_ping_distance = 30,
+}
+
+--------------------------------------------------------------------
+-- InitializeAI - where the AI starts
+function InitializeSkirmishAI()
+
+	print("InitializeSkirmishAI - default missions")
+				
+	-- turn display on and off
+	dr_setdisplay("aidebug".. AI_GetPlayerID(), true)	
+	
+	AI_KillAllTasks()
+	TimeRule_RemoveAll()
+
+	AI_SimulatePre()
+end
+
+function InitializeAIPersonality()
+end
+
+InitializeSkirmishAI()
+InitializeAIPersonality()

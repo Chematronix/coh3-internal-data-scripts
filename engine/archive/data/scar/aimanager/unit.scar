@@ -1,0 +1,201 @@
+--Unit class
+--Represents a type of unit within an encounter
+
+Unit = {}
+
+Unit.state = "Idle"
+Unit.prevState = "Idle"
+Unit.data = {}
+Unit.encounter = nil --The encounter to which this unit belongs. can be nil
+--~ Unit.allowedBehaviors = {} --Behaviors this unit is allowed to have
+--~ Unit.activeBehavior = nil --The currently active behavior
+--~ Unit.roles = {} --e.g. Antitank, transport,
+--~ Unit.enabled = true
+--~ Unit.isScripted = false
+
+
+--Creates and returns a new unit based on given data table or SBP.
+function Unit:Create(data, encounter)
+
+	local unit = Clone(self)
+	
+	unit.encounter = encounter
+	unit.data = Clone(data)
+	
+	--Set the name
+	if(unit.data.name == nil) then
+		if(encounter.units == nil) then
+			unit.data.name = encounter.data.name .. "_unit1"
+		else
+			unit.data.name = encounter.data.name .. "_unit" .. (#encounter.units + 1)
+		end
+	end
+	
+	-- create a specific sgroup for this unit
+	unit.sgroup = SGroup_CreateUnique(unit.data.name)
+	
+	-- add this sgroup to that unit-specific sgroup list
+	if scartype(unit.data.sgroup) ~= ST_TABLE then
+		unit.data.sgroup = {unit.data.sgroup}
+	end
+	table.insert(unit.data.sgroup, unit.sgroup)
+	
+	return unit
+	
+end
+
+--Calculates unit specific spawn information and returns a table
+function Unit:SpawnTable ()
+
+	return self.data
+	
+	--local spawnLocation = self.data.spawn
+	
+	--if scartype(spawnLocation) == ST_TABLE then
+		--spawnLocation = Table_GetRandomItem(spawnLocation)
+	--end
+	
+	----Check to see if it's trying to spawn in an invalid location. Use the backupSpawn if one is defined.
+	--if((scartype(spawnLocation) == ST_EGROUP and EGroup_CountAlive(spawnLocation) == 0)
+		--or (scartype(spawnLocation) == ST_SGROUP and SGroup_CountSpawned(spawnLocation) == 0)) then
+			--if(self.data.backupSpawn) then
+				--Ai:Print("\tWARNING: Spawn location is invaled. Using 'backupSpawn' as spawn position")
+				--spawnLocation = self.data.backupSpawn
+			--else
+				--fatal("Attempted to spawn a squad in an invalid egroup. No 'backupSpawn' defined.")
+			--end
+	--end
+	
+	----Dynamic spawning
+	--local facingPos = nil
+	--if(self.data.dynamicSpawnTarget)  then
+		--Ai:Print("\tUsing dynamic spawn")
+		--if self.data.dynamicSpawnTarget_position == nil then
+			--self.data.dynamicSpawnTarget_position = DST_FURTHEST_HIDDEN
+		--end
+		
+		--if self.data.dynamicSpawnTarget_position == DST_FURTHEST_HIDDEN then
+			--spawnLocation = Util_FindHiddenSpawn(Util_GetPosition(spawnLocation), Util_GetPosition(self.data.dynamicSpawnTarget), true)
+		--elseif self.data.dynamicSpawnTarget_position == DST_FURTHEST_VISIBLE then
+			--spawnLocation = Util_FindVisibleSpawn(Util_GetPosition(spawnLocation), Util_GetPosition(self.data.dynamicSpawnTarget), true)
+		--elseif self.data.dynamicSpawnTarget_position == DST_CLOSEST_HIDDEN then
+			--spawnLocation = Util_FindHiddenSpawn(Util_GetPosition(spawnLocation), Util_GetPosition(self.data.dynamicSpawnTarget), false)
+		--elseif self.data.dynamicSpawnTarget_position == DST_CLOSEST_VISIBLE then
+			--spawnLocation = Util_FindVisibleSpawn(Util_GetPosition(spawnLocation), Util_GetPosition(self.data.dynamicSpawnTarget), false)
+		--elseif self.data.dynamicSpawnTarget_position == DST_ADJACENT then
+			--spawnLocation = Util_GetOffsetPosition(Util_GetPosition(spawnLocation), World_GetRand(0, 6), 5)
+		--end
+		--facingPos = Util_GetPosition(self.data.dynamicSpawnTarget)
+		
+	--end
+	
+	--local spawnTable = {}
+	--spawnTable.sbp = self.data.sbp
+	--spawnTable.player = self.data.player
+	--spawnTable.loadout = self.data.loadout or self.data.load
+	--spawnTable.attackMove = self.data.attackMove
+	--spawnTable.destination = self.data.destination
+	--spawnTable.facing = facingPos
+	--spawnTable.spawn = spawnLocation
+	--spawnTable.sgroup = self.sgroup
+	--spawnTable.idle_behaviour = self.data.idle_behaviour
+	
+	--if (spawnTable.sbp == nil) then
+		--return nil
+	--end
+	
+	--return spawnTable
+end
+
+
+
+
+--Main update logic for the unit
+function Unit:Update()
+
+	if(SGroup_GetAvgHealth(self.sgroup) <= 0) then
+		Ai:Print(self.data.name .. " unit has been killed")
+	elseif(SGroup_CountSpawned(self.sgroup) <= 0) then
+		return
+	elseif(not self.enabled) then
+		return
+	elseif(self:UpdateState())then 
+		return 
+	end
+	
+	if(self.activeBehavior and self:IsAlive()) then
+		self.activeBehavior:Update(self.state, "Update")
+	end
+end
+
+--Checks status of the unit and updates the state if needed.
+function Unit:UpdateState()
+	if(self.state == "Idle" and (SGroup_IsDoingAttack(self.sgroup, ANY, 5) or SGroup_IsUnderAttack(self.sgroup, ANY, 5)))then
+		self:SetState("Combat")
+		
+		return true
+	elseif(self.state == "Combat" and not (SGroup_IsDoingAttack(self.sgroup, ANY, 5) or SGroup_IsUnderAttack(self.sgroup, ANY, 5))) then
+		self:SetState("Idle")
+		
+		return true
+	end
+end
+
+
+function Unit:SetState(state)
+	Ai:Print(self.data.name .. " unit set state: " .. state)
+	if(self.activeBehavior) then
+		self.activeBehavior:Update(self.state, "Exit")
+		self.activeBehavior:Update(state, "Enter")
+	end
+	
+	self.prevState = self.state
+	self.state = state
+end
+
+
+--Determines if a unit has a specific role
+function Unit:HasRole(role)
+	for i=1, #self.roles do
+		if(self.roles[i] == "role") then
+			return true
+		end
+	end
+	
+	return false
+end
+
+--Determines whether the unit has an allowed behavior or not
+function Unit:AllowsBehavior(behaviorName)
+	return (self.allowedBehaviors[behaviorName])
+end
+
+
+function Unit:Enable()
+	self.enabled = true
+end
+
+function Unit:Disable()
+	self.enabled = false
+end
+
+function Unit:IsEnabled()
+	return self.enabled
+end
+
+function Unit:IsAlive()
+	return self.sgroup and SGroup_CountSpawned(self.sgroup) > 0
+end
+
+--Changes the onDeath event for the unit
+function Unit:SetOnDeath(func)
+--~ 	Rule_RemoveSGroupEvent(self.data.onDeath, self.sgroup)
+	
+	self.data.onDeath = func
+--~ 	Rule_AddSGroupEvent(func, self.sgroup)
+end
+
+--Returns the encounter this unit belongs to
+function Unit:GetEncounter()
+	return self.encounter
+end

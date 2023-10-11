@@ -1,0 +1,95 @@
+import("table.scar")
+import("prefabs/templates/actions_base_template.scar")
+import("prefabs/templates/objectives_template.scar")
+import("prefabs/templates/dynamic_narrative_node_names_template.scar")
+import("prefabs/templates/soldier_story_names_template.scar")
+import("prefabs/templates/training_template.scar")
+
+--[[
+
+This file provides schema subtables for use in multiple locations within prefab schemas
+
+Provided Global Variables:
+==========================
+
+- g_playbills_actions_full_template: A schema to represent the most-inclusive list of actions you can
+  embed within another prefab schema somewhere. It is "inclusive" meaning it has extra actions that are
+  not included in the base actions template schema (see actions_base_template.scar). The reason for
+  separating out some additional actions, is that these ones can contain sub actions (e.g. creating an
+  objective through CreateDynamicObjective can be customized to run actions picked from the base action
+  schema, but not from the "full" action schema). This prevents a cyclic definition of a schema which is
+  not supported. The base actions are therefore restricted to actions that do not contain any sub actions.
+  
+  
+Explanation of Local Variables:
+===============================
+- action_type_full: Schema for the action type dropdown that includes additional action types
+- playbills_actions_template_additional: Schema for action data that includes fields required by
+  additional action types
+
+--]]
+
+
+local action_type_full =
+{
+	{
+		type = ST_STRING,
+		name = "action",
+		displayName = "Action",
+		description = "Actions triggered once above actions are met",
+		options = Table_Concatenate(g_action_type_base_list, {"RandomWeightedActions", "CreateDynamicObjective", "TrainingGoalSequence"}),
+		default = "None",
+		category = "Action",
+	}
+}
+
+local playbills_actions_template_additional =
+{
+	{
+		type = ST_TABLE,
+		name = "random_weighted_actions",
+		displayName = "Random Weighted Actions",
+		description = "list of set of actions with weights",
+		multiplicity = "multiple",
+		itemSchema = {
+			{
+				type = ST_NUMBER,
+				name = "weight",
+				displayName = "Weight",
+				description = "Weight of this set of actions to be fired",
+				default = "1",
+			},
+			{
+				type = ST_TABLE,
+				name = "actions",
+				displayName = "Actions",
+				description = "All actions to be fired for this set",
+				multiplicity = "multiple",
+				itemSchema = g_playbills_actions_base_template,
+			},
+		},
+		requirement = {"action", "RandomWeightedActions"},
+	},
+	{
+		type = ST_TABLE,
+		name = "objectiveVariants",
+		displayName = "Objectives",
+		multiplicity = "multiple",
+		requirement = {"action", "CreateDynamicObjective"},
+		cateogry = "Options",
+		itemSchema = g_objectives_template,
+	},
+	{
+		type = ST_TABLE,
+		name = "goal_sequence",
+		displayName = "Training Goal Sequence",
+		multiplicity = "single",
+		requirement = {"action", "TrainingGoalSequence"},
+		itemSchema = g_goal_sequence_schema,
+	},
+}
+
+g_playbills_actions_full_template = 
+Table_Concatenate(
+	Table_Concatenate(Table_Concatenate(action_type_full, g_playbills_actions_template_base),
+		playbills_actions_template_additional), Table_Concatenate(g_narrative_variable_template, g_narrative_variable_action_template))

@@ -1,0 +1,262 @@
+--
+-- WorldBuilder prefab
+-- "encounterzone"
+--
+
+
+-- Schema
+
+encounterzone_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "encounterzone",																						-- name the prefab uses to identify itself
+	description = "encounterzone",																				-- name to display for this prefab
+	script = "encounterzone.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+	
+		------------------------
+		------------------------ ENCOUNTER ZONES
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "encounter_zones",
+			description = "zones the enemies will populate",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_MARKER,
+					name = "zone",
+					description = "The area the enemy will try to hold",
+					colour = "blue",
+					hasDirection = true,
+				},
+				{							
+					type = ST_NUMBER,
+					name = "intensity",
+					description = "How intense should this zone be compared to the others",
+					default = 1,
+					min = 1,
+					max = 10,
+				},
+				{							
+					type = ST_NUMBER,
+					name = "challenge",
+					description = "How intense should this zone be compared to the others",
+					default = 1,
+					min = 1,
+					max = 10,
+				},
+				{							
+					type = ST_NUMBER,
+					name = "complexity",
+					description = "How intense should this zone be compared to the others",
+					default = 1,
+					min = 1,
+					max = 10,
+				},
+				{											
+					type = ST_STRING,
+					name = "enemy_goal",
+					description = "Influences tactics the enemy will use when in this zone",
+					options = {"None", "DefendObjective", "KeepPlayerOut", "PrioritizePreservation"},
+					default = "None",
+				},
+				
+				{											
+					type = ST_STRING,
+					name = "zone_loss_condition",
+					description = "What is considered to be a loss",
+					options = {"HealthPercentage", "ObjectiveComplete", "OverwhelmingEnemy"},
+					default = "HealthPercentage",
+					category = "Zone Lost"
+				},
+				{											
+					type = ST_STRING,
+					name = "objective_title",
+					description = "Name of the objective to trigger zone_loss",
+					requirement = {"zone_loss_condition", "ObjectiveComplete"},
+					category = "Zone Lost"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "health_percentage",
+					description = "Average health % of all units in zone to trigger zone_loss (0-1)",
+					default = 0,
+					requirement = {"zone_loss_condition", "HealthPercentage"},
+					category = "Zone Lost"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "overwhelming_enemy",
+					description = "Enemy must have this % of the player's force to trigger zone_loss (0-1)",
+					default = 0.1,
+					requirement = {"zone_loss_condition", "OverwhelmingEnemy"},
+					category = "Zone Lost"
+				},
+				{											
+					type = ST_STRING,
+					name = "behaviour_if_lost",
+					description = "What the enemy should do if the zone is lost",
+					options = {"CounterattackOnceIfLost", "ForgetIfLost", "CounterattackRepeatedIfLost"},
+					default = "ForgetIfLost",
+					category = "Zone Lost"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "time_until_counterattack",
+					description = "Time until the enemy tries to retake this zone. -1 is default value",
+					default = -1,
+					requirement = {"behaviour_if_lost", "CounterattackOnceIfLost", "CounterattackRepeatedIfLost"},
+					category = "Zone Lost"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "amount_of_counterattacks",
+					description = "Amount of times the enemy tries to retake this zone. -1 is infinite",
+					default = -1,
+					requirement = {"behaviour_if_lost", "CounterattackRepeatedIfLost"},
+					category = "Zone Lost"
+				},
+				
+				{											
+					type = ST_STRING,
+					name = "reinforce_type",
+					description = "How should the enemy reinforce",
+					options = {"Trickle", "Group"},
+					default = "Group",
+					category = "Reinforce"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "reinforce_at_health",
+					description = "Reinforce this zone with more units once it's health is below this PERCENTAGE (0-1). -1 is never reinforce",
+					default = -1,
+					min = -1,
+					max = 1,
+					category = "Reinforce"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "reinforce_frequency",
+					description = "How frequent should the system reinforce. -1 is never reinforce",
+					default = -1,
+					category = "Reinforce"
+				},
+				
+				{											
+					type = ST_STRING,
+					name = "zone_type",
+					description = "Sets what units should/shouldn't be allowed in this zone",
+					options = {"General", "DenseUrban", "OpenField", "LightUrban", "FrontLine", "AdvancedOptions"},
+					default = "General",
+					category = "Unit Preferences"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "budget",
+					description = "How populated should this area be from the start of the mission. -1 means not at all",
+					default = -1,
+					requirement = {"zone_type", "AdvancedOptions"},
+					category = "Unit Preferences"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "max_infantry",
+					description = "Max number of infantry able to be assigned to this area at one time. -1 means no cap",
+					default = -1,
+					requirement = {"zone_type", "AdvancedOptions"},
+					category = "Unit Preferences"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "max_lightvehicle",
+					description = "Max number of light vehicles able to be assigned to this area at one time. -1 means no cap",
+					default = -1,
+					requirement = {"zone_type", "AdvancedOptions"},
+					category = "Unit Preferences"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "max_tank",
+					description = "Max number of tanks able to be assigned to this area at one time. -1 means no cap",
+					default = -1,
+					requirement = {"zone_type", "AdvancedOptions"},
+					category = "Unit Preferences"
+				},
+				{							
+					type = ST_NUMBER,
+					name = "max_teamweapon",
+					description = "Max number of team weapons able to be assigned to this area at one time. -1 means no cap",
+					default = -1,
+					requirement = {"zone_type", "AdvancedOptions"},
+					category = "Unit Preferences"
+				},
+				
+				{
+					type = ST_TABLE,
+					name = "units_required",
+					description = "List of units that will be spawned in this area on start- ignoring any budget or other constraints",
+					multiplicity = "multiple",
+					category = "Unit Preferences",
+					itemSchema = {
+						{
+							type = ST_PBG,
+							name = "unit",
+							blueprintType  = "squad",
+							description = "Unit blueprint to be spawned",
+							show = false,
+						},
+						{							
+							type = ST_NUMBER,
+							name = "vertancy",
+							description = "What vet this unit should start at",
+							default = 0,
+							min = 0,
+							max = 3,
+						},
+						{											
+							type = ST_BOOLEAN,
+							name = "spawn_on_easy",
+							description = "Spawn this unit on easy difficulty",
+							default = true,
+						},
+						{											
+							type = ST_BOOLEAN,
+							name = "spawn_on_normal",
+							description = "Spawn this unit on normal difficulty",
+							default = true,
+						},
+						{											
+							type = ST_BOOLEAN,
+							name = "spawn_on_hard",
+							description = "Spawn this unit on hard difficulty",
+							default = true,
+						},
+						{
+							type = ST_TABLE,
+							name = "upgrades",
+							description = "Any upgrades to add to this unit",
+							multiplicity = "multiple",
+							category = "Unit Preferences",
+							itemSchema = {
+								{
+									type = ST_PBG,
+									name = "upgrade",
+									blueprintType  = "upgrade",
+									description = "Unit upgrade to be added",
+									show = false,
+								},
+							},		
+						},
+					},		
+				},
+			},
+		}
+		
+		
+	},
+}

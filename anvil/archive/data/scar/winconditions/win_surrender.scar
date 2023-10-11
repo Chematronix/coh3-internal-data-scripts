@@ -1,0 +1,59 @@
+-----------------------------------------------------------------------
+-- Surrender Win Condition
+--
+-- (c) Relic Entertainment 2020
+--
+-- This win condition is triggered when a successful surrender vote occurs.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Surrender")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by core.scar after opening cinematics and events are complete.
+function Surrender_Start()
+	Rule_AddInterval(Surrender_Check, 3)
+end
+
+
+-- Called when any win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function Surrender_OnWinConditionTriggered(match_result)
+	if Rule_Exists(Surrender_Check) then 
+		Rule_Remove(Surrender_Check)
+	end
+end	
+
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+function Surrender_Check()				
+	
+	local match_result = {
+		winners = {}, 				-- table of player indices for the winning players
+		losers = {},				-- table of player indices for the losing players
+		win_reason = WR_SURRENDER,	-- the win condition that was triggered
+	}	
+	for i = 1, World_GetPlayerCount() do
+		if Player_IsSurrendered(World_GetPlayerAt(i)) then
+			table.insert(match_result.losers, i)
+		else
+			table.insert(match_result.winners, i)
+		end
+	end
+  
+	if #match_result.losers > 0 then 
+		Core_CallDelegateFunctions("OnWinConditionTriggered", match_result)
+	end
+end
+

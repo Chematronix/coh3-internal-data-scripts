@@ -1,0 +1,68 @@
+--
+-- "Encounter Goal"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("anvil.scar")
+import("conditionlist.scar")
+import("actionlist.scar")
+import("playbills.scar")
+
+--? @group scardoc;Prefabs
+
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function encountergoal_Init(data)
+	
+	local instance = Prefab_GetInstance(data)
+	instance = instance.aigoal
+	
+	player1 = player1 or World_GetPlayerAt(1)
+	g_enemy_team = g_enemy_team or Core_GetTeamsEntryFromIndex(2)
+	
+	MissionPrint("Encounter Goal Prefab is Initializing")
+	
+end
+
+
+
+function encountergoal_PostInit(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end
+
+
+
+--? @args Table/String instance
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function encountergoal_Trigger(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	Wave_Start(instance)
+	
+end
+
+
+
+-- Stop the encounter associated with this instance and destroys any spawned squads the player can't see
+function encountergoal_Stop(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end 
+

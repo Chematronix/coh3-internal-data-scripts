@@ -1,0 +1,21 @@
+import("anvil_scoring_util.scar")
+import("ai/ai_tuning.scar")
+import("ai/ai_utils.scar")
+
+function ScoringFunctions_CompanyOrAttachment(aiPlayer)
+	local result = {}
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local maxCurrent = 100 + CalculateUnitCap(aiPlayer, t_campaign_production.enemyCapturePointScale, t_campaign_production.enemySquadScale) -- Dynamic unit cap
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, t_campaign_production.perUnitScale, t_campaign_production.perUnitScaleProduced, maxCurrent, t_campaign_production.maxProduced)
+	end
+
+    local typeUtility = function(aiPlayer, prodGroupID, pbg)
+		local typeList = t_personality_tuning.preferred_types or {}
+        return SquadTypeUtility(pbg, t_campaign_production.squadTypeScale, typeList)
+    end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, typeUtility, "TypeUtility")
+	return result
+end

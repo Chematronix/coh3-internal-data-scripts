@@ -1,0 +1,323 @@
+import("anvil.scar")
+import("scarutil.scar")
+import("narrative/soldier_stories_debug.scar")
+import("narrative/soldier_story_screens.scar")
+import("narrative/soldier_story_vignettes.scar")
+import("narrative/mission_story_definitions.scar")
+import("narrative/skirmish_story_definitions.scar")
+import("narrative/company_story_definitions.scar")
+
+local soldier_story_data_key = "soldier_story" -- Name of Data Store key used by the UI to retrieve info on the active Soldier Story
+
+g_next_soldier_story =
+{
+	next_mission_story = nil,
+    next_skirmish_story = nil,
+	next_company_story = nil,
+
+	pre_vignette = nil,
+	success_vignette = nil,
+	failure_vignette = nil,
+	
+	post_mission_vignette = nil,
+}
+
+g_company_story_state = { }
+
+--? @shortdesc Process an Articy Soldier Story node and return the next valid node
+--? @extdesc Follows the first connection with a valid condition
+--? Executes the expression associated with the connection 
+--? Optionally updates the names of the next Soldier Story vignettes
+--? Optionally sets the text field in the supplied screen content structure
+--? @args soldier_story_nodes Articy node graph     
+--? active_node - Current node within the supplied node graph
+--? content - Screen content for text [optional]
+--? @result First valid connected node or nil if there were no more valid nodes 
+local function ProcessSoldierStoryNode(soldier_story_nodes, active_node, content)
+
+	-- Temporary text processing
+	if (content ~= nil and active_node.loc_string_key ~= nil) then
+		content.loc_string_key = "$" .. active_node.loc_string_key
+	end
+	
+	if (active_node.pre_vignette ~= nil) then		
+		g_next_soldier_story.pre_vignette = active_node.pre_vignette
+	end
+	
+	if (active_node.success_vignette ~= nil) then	
+		g_next_soldier_story.success_vignette = active_node.success_vignette
+	end
+	
+	if (active_node.failure_vignette ~= nil) then
+		g_next_soldier_story.failure_vignette = active_node.failure_vignette
+	end
+
+	if (active_node.post_mission_vignette ~= nil) then
+		g_next_soldier_story.post_mission_vignette = active_node.post_mission_vignette
+	end	
+	
+	local next_node = nil
+	
+    for _, connection in ipairs(active_node.connections) do	
+		
+		if (connection.condition()) then
+			
+			DoExitExpression(connection)
+			next_node = soldier_story_nodes[connection.destination_node]			
+			break
+			
+		end
+		
+    end
+	
+	return next_node
+end
+
+--? @shortdesc Clear Soldier Story UI data 
+--? @extdesc Ensures that no Soldier Story is displayed during the next skirmish
+function ClearVignetteScreens()
+	
+	Game_RetrieveTableData(soldier_story_data_key, true)
+	
+end
+
+--? @shortdesc Set up the vigentte names for the next Soldier Story
+--? @extdesc Process an Articy node graph that initializes the vignette names for a given Soldier Story  
+--? Instruction nodes will initialise the Soldier Story data structures as required. 
+--? @args soldier_story_definitions - Soldier Stories data where the definition for this story is found  
+--? soldier_story_name - Name of the Soldier Story that will be displayed during the upcoming skirmish 
+local function SetVignettes(soldier_story_definitions, soldier_story_name)
+	
+	local soldier_story = soldier_story_definitions[soldier_story_name]
+	
+	if (soldier_story ~= nil) then
+
+		local active_node = soldier_story[soldier_story.start_node]		
+
+		while (active_node ~= nil) do
+			active_node = ProcessSoldierStoryNode(soldier_story, active_node, nil)
+		end
+		
+	else
+		ClearNextSoldierStory();
+	end
+	
+end
+
+--? @shortdesc Set up the next Skirmish Story 
+--? @extdesc Sets the vignettes for a requested skirmish story using the skirmish story definition data.
+--? Vignettes will be displayed during the next skirmish.
+local function SetUpSkirmishStory()
+
+	SetVignettes(g_skirmish_story_definitions, g_next_soldier_story.next_skirmish_story)
+	g_next_soldier_story.next_skirmish_story = nil
+	
+end
+
+--? @shortdesc Set up the next Soldier Story based on the Company Story associated with a given company id
+--? @extdesc Sets the active story for this company if a new company story has been requested
+--? Sets the vignettes using the node graph in the Company Story definition
+--? @args company_id - ID of the player controlled company currently taking part in combat
+local function SetUpCompanyStory(company_id)
+		
+	if (g_company_story_state[company_id] == nil and g_next_soldier_story.next_company_story ~= nil) then 
+
+		g_company_story_state[company_id] = { soldier_story_name = g_next_soldier_story.next_company_story }	
+		g_next_soldier_story.next_company_story = nil
+	
+	end 
+
+	local company_state = g_company_story_state[company_id] 
+	if (company_state ~= nil) then		
+		SetVignettes(g_company_story_definitions, company_state.soldier_story_name)		
+	end
+
+end
+
+--? @shortdesc Find the next Soldier Story and initialize the vignette data to display it
+--? @extdesc Sets up the Soldier Story vignette data ready to display the correct vignettes for the next Soldier Story 
+--? Uses Company Story content if the supplied company has an active Company Story or a new one has been requested.
+--? Uses Skirmish Story content if there is no company story and a Skirmish Story has been requested. 
+--? Clears the UI data structure if there is no Soldier Story content set up.
+--? @args company_id - ID of the player controlled company current taking part in combat
+local function InitializeSoldierStory(company_id)
+
+	local vignette_name = g_next_soldier_story.pre_vignette
+	
+	if (vignette_name == nil and company_id ~= nil) then
+		
+		SetUpCompanyStory(company_id)
+		vignette_name = g_next_soldier_story.pre_vignette
+		
+	end 
+	
+	if (vignette_name == nil and g_next_soldier_story.next_skirmish_story ~= nil) then
+		SetUpSkirmishStory()
+	end		
+end
+
+--? @shortdesc Initialize the screen content field for a given vignette  
+--? @extdesc Uses a vignette's node graph to initialize the content structure for the vignette's screen
+--? @args vignette - the vignette to initialize
+local function InitializeVignetteContent(vignette)
+
+	local content = g_narrative_vignette_screens[vignette.screen_name].content
+	
+	if (content ~= nil) then 
+
+		local active_node = vignette.nodes[vignette.start_node]
+
+		content.text = ""
+		
+		while (active_node ~= nil) do
+			active_node = ProcessSoldierStoryNode(vignette.nodes, active_node, content)
+		end
+
+	end
+	
+end
+
+--? @shortdesc Initialize the next vignette of the given type 
+--? @extdesc Initializes the content field of the screen used by the vignette
+--? Stores the screen data in the datastore for the UI to use
+--? @args vignette_type - pre_vignette, success_vignette, failure_vignette
+function InitializeVignette(vignette_type)
+
+	local vignette_name = g_next_soldier_story[vignette_type]
+
+	if (vignette_name ~= nil) then 
+	
+		local vignette = g_soldier_story_vignettes[vignette_name]
+		
+		InitializeVignetteContent(vignette)
+		
+		local vignette_screen = g_narrative_vignette_screens[vignette.screen_name]			
+		if (vignette_screen ~= nil) then
+			Game_StoreTableData(soldier_story_data_key, vignette_screen)
+		end
+		
+	else
+		ClearVignetteScreens()
+	end
+	
+end
+
+--? @shortdesc Don't display a Soldier Story during the next skirmish
+function ClearNextSoldierStory()
+
+	g_next_soldier_story.next_skirmish_story = nil
+	g_next_soldier_story.next_company_story = nil
+	g_next_soldier_story.pre_vignette = nil	
+	g_next_soldier_story.success_vignette = nil
+	g_next_soldier_story.failure_vignette = nil
+	g_next_soldier_story.post_mission_vignette = nil
+
+end
+
+--? @shortdesc Stop displaying any Mission Stories
+function ClearNextMissionSoldierStory()
+
+	g_next_soldier_story.next_mission_story = nil	
+	
+end
+
+--? @shortdesc Set the Mission Story to be shown after the next mission
+--? @args post_mission_vignette - Vignette to display on the next mission loading screen
+function SetNextMissionStory(mission_story_name)
+
+	g_next_soldier_story.next_mission_story = mission_story_name	
+	
+end
+
+--? @shortdesc Stop displaying any Skirmish stories
+function ClearNextSkirmishStory()
+
+	g_next_soldier_story.next_skirmish_story = nil
+		
+end
+
+--? @shortdesc Set the Skirmish Story to be shown during the next skirmish
+--? @args soldier_story_name - name of the Soldier Story to display during the next skirmish
+function SetNextSkirmishStory(soldier_story_name)
+
+	g_next_soldier_story.next_skirmish_story = soldier_story_name
+		
+end
+
+--? @shortdesc Stop displaying any company stories  
+function ClearNextCompanyStory(company_story_name)
+
+	g_next_soldier_story.next_company_story = nil
+		
+end
+
+--? @shortdesc Set the Company Story to be displayed during the next skirmish  
+--? @args  company_story_name - name of the Company Story to initialize
+function SetNextCompanyStory(company_story_name)
+
+	g_next_soldier_story.next_company_story = company_story_name
+		
+end
+
+--? @shortdesc Set up the Soldier Story screen before a skirmish 
+--? @args player_squad_id - ID of the company taking part in the skirmish
+function InitializePreRTSSoldierStory(player_squad_id)
+
+	InitializeSoldierStory(player_squad_id)
+	
+	InitializeVignette("pre_vignette")
+	ClearNextMissionSoldierStory()
+	
+end
+
+--? @shortdesc Set up the Soldier Story screen after a skirmish 
+--? @args success - True if the player won the skirmish
+function InitializePostRTSSoldierStory(success)
+	
+	if (success) then
+		InitializeVignette("success_vignette")
+	else
+		InitializeVignette("failure_vignette")
+	end 
+		
+	ClearNextSoldierStory()
+	
+end
+
+--? @shortdesc Set up the Soldier Story screen after a mission 
+function InitializeMissionSoldierStory()
+	
+	if (g_next_soldier_story.next_mission_story ~= nil) then
+		
+		SetVignettes(g_mission_story_definitions, g_next_soldier_story.next_mission_story)
+		InitializeVignette("post_mission_vignette")
+		
+	end
+	
+end
+
+temp_current_skirmish_story = 2 -- Temporarily used to cycle through skirmish stories
+
+function SelectNextSkirmishStory()
+
+	if (g_next_soldier_story.next_skirmish_story == nil) then
+
+		local skirmish_story_name = g_skirmish_story_names[temp_current_skirmish_story]
+
+		if (skirmish_story_name ~= nil) then
+		
+			g_next_soldier_story.next_skirmish_story = skirmish_story_name
+			
+			temp_current_skirmish_story = temp_current_skirmish_story + 1
+		end
+	end
+	
+end
+
+function IsSoldierStorySet()
+	
+	return g_next_soldier_story ~= nil and 
+		(g_next_soldier_story.next_skirmish_story ~= nil or 
+		 g_next_soldier_story.next_mission_story ~= nil or 
+		 g_next_soldier_story.next_company_story ~= nil)
+end

@@ -1,0 +1,181 @@
+import("anvil.scar")
+import("scarutil.scar")
+
+import("narrative/subcommander_satisfaction.scar")
+import("narrative/dynamic_narrative_debug.scar")
+import("narrative/narrative_intel.scar")
+
+g_fast_narrative = Util_GetCommandLineArgument("narrative_fast") ~= nil or Util_GetCommandLineArgument("enable_fast_narrative") ~= nil 
+g_core_narrative_disabled = Util_GetCommandLineArgument("narrative_disable_core") ~= nil or Util_GetCommandLineArgument("disable_core_narrative") ~= nil
+g_unlock_campaign = Util_GetCommandLineArgument("unlock_campaign") ~= nil 
+
+local PROPAGANDA_RADIO_INTERVAL = 6
+
+function Narrative_Init()
+
+	InitializeNarrativeVariables()
+	InitializeCommandLineVariables()
+
+ 	ClearNextSoldierStory()
+	
+	if (g_fast_narrative) then
+		NarrativeDebug_EnableFastNarrative()
+	else
+		NarrativeDebug_DisableFastNarrative()
+	end
+
+	if (g_core_narrative_disabled) then
+		NarrativeDebug_DisableCoreNarrative()
+	else
+		NarrativeDebug_EnableCoreNarrative()
+	end
+
+	if (g_unlock_campaign and World_IsCampaignMetamapGame()) then
+		Debug_RevealAll()
+	end		
+	
+end
+
+-- Update any variables set through the command line
+function InitializeCommandLineVariables()
+	
+	local variableCount = World_GetNarrativeVariableCount()
+	for i=0,(variableCount - 1) do
+		
+		local variableValue = World_GetNarrativeVariableAt(i)
+		if variableValue ~= nil then
+
+			local variableName = World_GetNarrativeVariableNameAt(i)
+			local value = Util_GetCommandLineArgument(variableName)
+	
+			if (value ~= nil) then
+
+				if (value == "true") then
+					value = true
+				else
+					if (value == "false") then
+						value = false
+					else
+						value = tonumber(value)
+					end
+				end			
+
+				SetNarrativeVariable(variableName, value)
+			end
+			
+		end
+
+	end		
+end
+
+function UpdatePropagandaRadio()
+	if (GetNarrativeVariable("state_campaign_narrative.propaganda_radio_enabled")) then
+		SetNarrativeVariable("state_campaign_narrative.propaganda_radio_trigger", ((GetNarrativeVariable("state_game.turn") % PROPAGANDA_RADIO_INTERVAL) == 0))
+	end
+end
+
+
+function Narrative_StartTurn(turn)
+	
+	if (GetNarrativeVariable("state_game.turn") == nil) then	
+		SetNarrativeVariable("state_game.turn", 1)		
+	else		
+		SetNarrativeVariable("state_game.turn", turn)
+	end
+
+	SetNarrativeVariable("state_narrative.check_satisfaction", (GetNarrativeVariable("state_game.turn") % 5 == 0))
+	SetNarrativeVariable("state_narrative.check_satisfaction", (GetNarrativeVariable("state_game.turn") % 2 == 0))
+	
+	if (not g_core_narrative_disabled) then
+		UpdateNarrativeCooldown()
+	end
+
+	UpdateSubcommanderSatisfactionFlags()
+	UpdateCapturePointStatus()
+	UpdateNarrativeArcStatus()
+	UpdateNarrativeIntel()
+	UpdatePropagandaRadio()
+	
+	CheckNarrativeAchievements()
+	
+end
+
+function UpdateNarrativeCooldown()
+	
+	local cooldown = GetNarrativeVariable("state_narrative.narrative_cooldown")
+	
+	if (cooldown > 0) then
+
+		if (g_fast_narrative) then
+			cooldown = 1
+		end
+
+		SetNarrativeVariable("state_narrative.narrative_cooldown", cooldown - 1)
+	end
+		
+end
+
+function UpdateNarrativeArcStatus()
+
+	local startTurn = GetNarrativeVariable("na001_bari.start_turn")
+	local bariCaptured = GetNarrativeVariable("state_capture.bari_captured")
+	local delta = GetNarrativeVariable("na001_bari.delta")
+
+	if (startTurn > 0 and bariCaptured) then
+		SetNarrativeVariable("na001_bari.delta", delta + 1)
+	end
+
+	if (GetNarrativeVariable("state_capture.bari_captured_turn") ~= 0 and startTurn == 0) then		
+		SetNarrativeVariable("na001_bari.start_turn", GetNarrativeVariable("state_capture.bari_captured_turn"))	
+		SetNarrativeVariable("na001_bari.delta", GetNarrativeVariable("state_game.turn") - GetNarrativeVariable("state_capture.bari_captured_turn"))
+	end
+
+end
+
+function UpdateCapturePointStatus()
+	
+	SetNarrativeVariable("state_capture.bari_captured", CheckCapturePointStatus("eg_capturepoint_bari"))
+	SetNarrativeVariable("state_capture.foggia_captured", CheckCapturePointStatus("eg_capturepoint_foggia"))
+	
+end
+
+function CheckCapturePointStatus(capturePoint)
+	
+	local target = EGroup_FromName(capturePoint)
+	local player = World_GetPlayerAt(1) 
+	
+	return Util_GetPlayerOwner(target) == player
+	
+end
+
+function CheckNarrativeAchievements()
+	
+	local allLetters = (GetNarrativeVariable("soldier_story_state.skr001_chapter") > 1) -- Current chapter for WASP Soldier Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr002_chapter") > 1) -- Current chapter for The Medic Soldier Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr003_chapter") > 1) -- Current chapter for Xtrooper Soldier Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr004_chapter") > 1) -- Current chapter for The Chaplian Soldier Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr006_chapter") > 1) -- Current chapter for Terry the Postman Soldeir Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr007_chapter") > 1) -- Current chapter for Nikola the Infiltrator Soldier Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr008_chapter") > 1) -- Current chapter for Joe the Family Man Soldier Soldier Story
+	allLetters = allLetters and (GetNarrativeVariable("soldier_story_state.skr009_chapter") > 1) -- Current Chapter for the Polish Soldier
+
+	if (allLetters) then
+		local writerLetters = (GetNarrativeVariable("soldier_story_state.skr005_chapter_salerno") > 1) -- Current chapter for The Travel Writer Soldier Story - Salerno
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_naples") > 1) -- Current chapter for The Travel Writer Soldier Story - Naples
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_potenza") > 1) -- Current chapter for The Travel Writer Soldier Story - Potenza
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_bari") > 1) -- Current chapter for The Travel Writer Soldier Story - Bari
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_taranto") > 1) -- Current chapter for The Travel Writer Soldier Story - Taranto
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_gaeta") > 1) -- Current chapter for The Travel Writer Soldier Story - Gaeta
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_avellino") > 1) -- Current chapter for The Travel Writer Soldier Story - Avellino
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_foggia") > 1) -- Current chapter for The Travel Writer Soldier Story - Foggia
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_termoli") > 1) -- Current chapter for The Travel Writer Soldier Story - Termoli
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_sanpancrazio") > 1) -- Current chapter for The Travel Writer Soldier Story - San Pancrazio Salentino
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_casteldisangro") > 1) -- Current chapter for The Travel Writer Soldier Story - Castel Di Sangro
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_calitri") > 1) -- Current chapter for The Travel Writer Soldier Story - Calitri
+		writerLetters = writerLetters or (GetNarrativeVariable("soldier_story_state.skr005_chapter_benevento") > 1) -- Current chapter for The Travel Writer Soldier Story - Benevento
+
+		if (writerLetters) then
+			Game_SendCustomChallengeEvent(Game_GetLocalPlayer(), CE_ACHIEVALLSOLDIERSTORIES, 1)
+		end
+	end
+end

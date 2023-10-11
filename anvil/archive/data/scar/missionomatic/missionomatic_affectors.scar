@@ -1,0 +1,799 @@
+--
+-- Mission-o-Matic Affectors 1000
+--
+-- Script that runs any mission affectors attached to this mission
+
+-- Here lies some of the logic to set mission affectors from campaign map
+-- and also the logic to use some of the mission affectors in missions/skirmishes
+--
+
+import("metamap/metamap_tuning.scar")
+
+-- Common Affectors (both skirmish and mission)
+local Affectors_Names =
+{
+	"PlayerCompany",
+	"EnemyCompany",
+	"ReinforcingCompany",
+	"AdjacentEnemies",
+	"PartisanObserveReport",
+	"PartisanLootSupplies",
+	"NearbyCompanyOrAttachment",
+	"GarrisonedCompany",
+	"GarrisonReinforcementAttachment",
+	"PartisanDisable"
+	-- Add more common affectors when they are designed
+}
+
+-- Affectors event cues
+Affectors_EventCuesInfo= 
+{ 
+	PartisanObserveReport = 
+	{
+		eventName = "affector_partisan_observe_report",
+		eventCueLocID = 11227885,
+		eventCueIconPath = "icons/common/orders/pick_up_item.png",
+		eventCuePriority = "medium_priority"
+	},
+	PartisanLootSupplies =
+	{
+		eventName = "affector_partisan_loot_supplies",
+		eventCueLocID = 11227884,
+		eventCueIconPath = "icons/common/orders/pick_up_item.png",
+		eventCuePriority = "medium_priority"
+	},
+	NearbyCompanyOrAttachment =
+	{
+		eventName = "affector_nearby_company_or_attachment",
+		eventCueLocID = 11227887,
+		eventCueIconPath = "icons/common/orders/pick_up_item.png",
+		eventCuePriority = "high_priority"
+	},
+	PartisanDisable =
+	{
+		eventName = "affector_partisan_disable",
+		eventCueLocID = 11227886,
+		eventCueIconPath = "icons/common/orders/pick_up_item.png",
+		eventCuePriority = "medium_priority"
+	}
+}
+
+-- Skirmish Specific Affectors
+local Skirmish_Only_Affector_Names =
+{
+	-- Add skirmish only affectors when they are designed
+}
+
+Skirmish_Affector_Names = Table_Concatenate(Skirmish_Only_Affector_Names, Affectors_Names)
+
+-- Mission Specific Affectors
+local Mission_Only_Affector_Names =
+{
+	-- Add more mission only affectors when they are designed
+}
+
+Mission_Affector_Names = Table_Concatenate(Mission_Only_Affector_Names, Affectors_Names)
+
+function __GetFuncs(create_or_use, is_skirmish)
+	if create_or_use ~= "Create" and create_or_use ~= "Use" then
+		error("Func type is not \"Create\" or \"Use\"")
+	end
+	
+	if is_skirmish == nil then
+		error("is_skirmish is null")
+	end
+	
+	if scartype(is_skirmish) ~= ST_BOOLEAN then
+		error("is_skirmish is not in bool format")
+	end
+	
+	local affector_names = nil
+	-- if is skirmish, use skirmish affector names
+	if is_skirmish then
+		affector_names = _G["Skirmish_Affector_Names"]
+	else
+	-- otherwise use mission affector names
+		affector_names = _G["Mission_Affector_Names"]
+	end
+	
+	local funcs = {}
+	for i, affector_name in pairs(affector_names) do
+		funcs[i] = _G["Affectors_"..affector_name.."_"..create_or_use]
+		if funcs[i] == nil then
+			error(string.format(create_or_use.." func not found for %s", affector_name))
+		end
+	end
+	
+	return funcs
+end
+
+function Affectors_GetCreateFuncs(is_skirmish)
+	return __GetFuncs("Create", is_skirmish)
+end
+
+function Affectors_GetUseFuncs(is_skirmish)
+	return __GetFuncs("Use", is_skirmish)
+end
+
+function Affectors_DelayToStart(func, data)
+	if data.affector_data == nil then
+		-- No Affector Data!
+		return false
+	end
+	local delay = data.affector_data.delay_to_start
+	if delay == nil or delay <= 0 then
+		return false
+	end
+	__DelayedAffectors = __DelayedAffectors or {}
+	local entry = {
+		func = func,
+		data = data,
+		time = World_GetGameTime() + data.affector_data.delay_to_start
+	}
+	table.insert(__DelayedAffectors, entry)
+	if not Rule_Exists(Affectors_CheckDelayedAffectors) then
+		Rule_AddInterval(Affectors_CheckDelayedAffectors, 1)
+	end
+	return true
+end
+
+local COMPLETED_DELAY = true
+
+function Affectors_CheckDelayedAffectors()
+	if not __DelayedAffectors or #__DelayedAffectors == 0 then
+		Rule_RemoveMe()
+	else
+		for i = #__DelayedAffectors, 1, -1 do
+			local entry = __DelayedAffectors[i]
+			if World_GetGameTime() >= entry.time then
+				entry.func(entry.data, COMPLETED_DELAY)
+				table.remove(__DelayedAffectors, i)
+			end
+		end
+	end
+end
+
+function Affectors_OnInit()
+	-- Hacky way to disable AI repair ability when the player has the Partisan Disable affector
+	local partisan_disable_ability = BP_GetAbilityBlueprint("rts_partisan_disable") 
+	if Player_HasAbility(World_GetPlayerAt(1), partisan_disable_ability) then
+        if BP_AbilityExists("repair_pioneer_ger") then
+            Player_SetAbilityAvailability(World_GetPlayerAt(2), ABILITY.GERMAN.REPAIR_PIONEER_GER, ITEM_REMOVED)
+        end
+    end
+ end
+
+--? @shortdesc Get the table of Mission Affectors 
+--? @extdesc Returns the mission_affectors table. The data in this table describes campaign map state and is used to 
+--? 	affect mission setup or mission gameplay. Also available in skirmish missions.
+--? Entries (available in mission and skirmish unless mission only, skirmish only:
+--? 	entry_point_id: an integer indicating the entry point from which the player is starting the mission (mission only)
+--? 	player_company_bp_name: name of the blueprint for the company with which the player started the mission
+--? 	enemy_company_bp_name: name of the blueprint for the company with which the enemy started the mission
+--? @result Table
+function Affectors_GetTable()
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign == nil then
+		return
+	end
+	
+	return campaign.mission_affectors
+end
+
+function Affectors_CreateAffectors(data, is_skirmish)
+	local affectors = {}
+	for i, func in pairs(Affectors_GetCreateFuncs(is_skirmish)) do
+		if scartype(func) == ST_FUNCTION then
+			local affector = func(data)
+			if affector ~= nil then
+				if affector[2] == nil then
+					error("Affector not returned as a key, value")
+				end
+				affectors[affector[1]] = affector[2]
+			end
+		end
+	end
+	
+	return affectors
+end
+
+function Affectors_UseAffectors()
+	local mission_affector_prefabs = Prefab_GetAllOfType("missionaffector")
+	-- no mission affectors in this scenario
+	if next(mission_affector_prefabs) == nil then
+		return
+	end
+	
+	if #mission_affector_prefabs > 1 then
+		error("More than 1 mission affector prefabs found in the map")
+	end
+	
+	-- Get the only mission affector prefab
+	local mission_affector_prefab = mission_affector_prefabs[1]
+	
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign == nil or next(campaign) == nil then
+		MissionPrint("SCAR Affectors are not being executed because campaign datastore does not exist")
+		return
+	elseif (campaign.mission_data == nil or next(campaign.mission_data) == nil) or
+		   (campaign.player_data == nil or next(campaign.player_data) == nil) then
+		
+		if campaign.mission_affectors == nil then
+			
+			MissionPrint("SCAR Affectors are not being executed because campaign datastore does not have data required. "..
+			"This usually happens when missionaffector prefab exist in a mission "..
+			"that is launched through command line arguments "..
+			"and not through campaign map")
+			return
+		end
+	end
+	
+	local is_skirmish = false
+	if campaign.mission_data ~= nil then
+		is_skirmish = campaign.mission_data.mission_type == "skirmish"
+	end
+	
+	-- Go through all the available Use functions of mission affectors
+	for i, func in pairs(Affectors_GetUseFuncs(is_skirmish)) do
+		local affector_data = nil
+		if next(mission_affector_prefab.affectors) ~= nil then
+			-- Gathering affector specific custom data
+			for j = 1, #mission_affector_prefab.affectors do
+				local this_func = _G["Affectors_"..mission_affector_prefab.affectors[j].affector_type.."_Use"]
+				if this_func == func then
+					-- If any mission specific data is specified for that affector, keep it
+					affector_data = mission_affector_prefab.affectors[j]
+				end
+			end
+		end
+		
+		-- If there's no custom data or if there's custom data but the designers don't want to ignore the base functionality
+		if affector_data == nil or affector_data.ignore_base_affector_behaviour == false then
+			-- Execute affector functionality per player who has the ability from the campaign map
+			local LaunchAffectorFunction = function(data)
+				if affector_data ~= nil and affector_data.additional_conditions_playbill ~= nil and affector_data.additional_conditions_playbill ~= "" then
+					local playbill_id = nil
+					if not playbill_IsActive(affector_data.additional_conditions_playbill) then
+						playbill_id = playbill_Trigger(affector_data.additional_conditions_playbill)
+					else
+						playbill_id = Playbill_GetIDIfRunning(affector_data.additional_conditions_playbill)
+					end
+					Playbill_InsertAdditionalFunctionsOnConditionFulfilled(playbill_id, func, data)
+				else
+					func(data)
+				end
+			end
+			-- Executing base functionality for each affector type
+			for j = 1, World_GetPlayerCount() do
+				
+				local data =
+				{
+					player = World_GetPlayerAt(j),
+					affector_data = affector_data,
+				}
+				LaunchAffectorFunction(data)
+			end
+		end
+		-- Executing additional functionality (this might update once the design becomes more clear on the usage of each affector)
+		if affector_data ~= nil then
+			local additional_behaviour_prefab = affector_data.additional_behaviour_prefab
+			if additional_behaviour_prefab ~= nil and additional_behaviour_prefab ~= "" then
+				Prefab_Trigger(additional_behaviour_prefab)
+			end
+		end
+	end
+end
+
+-- TODO: Look into moving PlayerCompany outside of this affectors scar file
+function Affectors_PlayerCompany_Create(data)
+	local player_squad = data.attacker
+	if not Player_IsHuman(Squad_GetPlayerOwner(player_squad)) then
+		player_squad = data.defender
+	end
+	local player_company_bp = Squad_GetBlueprint(player_squad)
+	local player_company_bp_name = BP_GetName(player_company_bp)
+	
+	return {"player_company_bp_name", player_company_bp_name}
+end
+
+-- TODO: Look into moving EnemyCompany outside of this affectors scar file
+function Affectors_EnemyCompany_Create(data)
+	local enemy_squad = data.defender
+	if Player_IsHuman(Squad_GetPlayerOwner(enemy_squad)) then
+		enemy_squad = data.attacker
+	end
+	local enemy_company_bp = Squad_GetBlueprint(enemy_squad)
+	local enemy_company_bp_name = BP_GetName(enemy_company_bp)
+	
+	return {"enemy_company_bp_name", enemy_company_bp_name}
+end
+---------------------------------------------------------------------------
+
+function Affectors_ReinforcingCompany_Create(data)
+	local ally_squad = data.reinforcing_company
+	local ally_company_bp_name = ""
+	if ally_squad ~= nil then
+		local ally_company_bp = Squad_GetBlueprint(ally_squad)
+		ally_company_bp_name = BP_GetName(ally_company_bp)
+	end
+	return {"reinforcing_company_bp_name", ally_company_bp_name}
+end
+
+-- TODO: Look into removing AdjacentEnemies scar affector as it is being handled as an ability
+function Affectors_AdjacentEnemies_Create(data)
+	local attacking_player = Squad_GetPlayerOwner(data.attacker)
+	local pos = data.pos
+	local adjacent_enemies_group = SGroup_CreateIfNotFound("sg_enemies_in_mission_radius")
+	World_GetSquadsNearPoint(attacking_player, adjacent_enemies_group, pos, t_affectors_tuning.t_enemy_adjacency_distance_tuning, OT_Enemy)
+	local adjacent_enemies_names = {}
+	
+	local ExtractNames = function(groupid, itemindex, itemid)
+		-- If the found squad is the same as the position passed in, don't do anything
+		if Squad_GetPosition(itemid) == pos then
+			return
+		end
+		
+		local bp = Squad_GetBlueprint(itemid)
+		table.insert(adjacent_enemies_names, BP_GetName(bp))
+	end
+	
+	SGroup_ForEach(adjacent_enemies_group, ExtractNames)
+	-- If no adjacent enemies are found, return nil
+	if next(adjacent_enemies_names) == nil then
+		return nil
+	end
+	
+	return {"adjacent_enemies_names", adjacent_enemies_names}
+end
+---------------------------------------------------------------------------------------------
+
+function Affectors_PartisanObserveReport_Create(data)
+	return nil
+end
+
+function Affectors_PartisanDisable_Create(data)
+	return nil
+end
+
+function Affectors_PartisanLootSupplies_Create(data)
+	return nil
+end
+
+function Affectors_NearbyCompanyOrAttachment_Create(data)
+	return nil
+end
+
+function Affectors_GarrisonedCompany_Create(data)
+	return nil
+end
+
+function Affectors_GarrisonReinforcementAttachment_Create(data)
+	return nil
+end
+
+-- TODO: Look into removing scar affectors that are not being used
+function Affectors_PlayerCompany_Use(data)
+	-- TODO: Implement USE functionality (if required)
+end
+
+-- TODO: Look into removing scar affectors that are not being used
+function Affectors_EnemyCompany_Use(data)
+	-- TODO: Implement USE functionality (if required)
+end
+
+function Affectors_ReinforcingCompany_Use(data)
+	-- TODO: Implement USE functionality (if required)
+end
+
+function Affectors_AdjacentEnemies_Use(data)
+	-- TODO: Implement USE functionality (if required)
+end
+
+------------------------------------------------------------------
+
+function Affectors_PlayAudioAndEventCue(eventCueInfo, opt_clickableTarget)
+	-- the target that opt_clickableTarget points to could be destroyed when DoPlayEventAndAudioCue() gets executed, so get it's
+	-- name now which will be used to check if it exists
+	local opt_clickableTarget_name = ""
+	local opt_clickableTarget_type = scartype(opt_clickableTarget)
+	
+	if eventCueInfo.triggered then
+		return
+	end
+	eventCueInfo.triggered = true
+	
+	if opt_clickableTarget_type == ST_SGROUP then
+		opt_clickableTarget_name = SGroup_GetName(opt_clickableTarget)
+	elseif opt_clickableTarget_type == ST_EGROUP then
+		opt_clickableTarget_name = EGroup_GetName(opt_clickableTarget)
+	end
+	
+	local function DoPlayEventAndAudioCue()
+		local opt_clickableTarget_exists = opt_clickableTarget ~= nil and
+			(opt_clickableTarget_type == ST_SGROUP and SGroup_Exists(opt_clickableTarget_name)) or
+			(opt_clickableTarget_type == ST_EGROUP and EGroup_Exists(opt_clickableTarget_name))
+		
+		if opt_clickableTarget_exists == false or __UIFireEventCue_MoveCamera == nil then
+			UI_CreateEventCue(
+				eventCueInfo.eventCueLocID,
+				Loc_Empty(),
+				eventCueInfo.eventCuePriority,
+				eventCueInfo.eventCueIconPath,
+				"",
+				ECV_Queue,
+				20.0
+				)
+		else
+			id = UI_CreateEventCueClickable(
+				-1,   --uniqueness from event_type
+				2, -- priority
+				20.0, --lifetime
+				5.0, -- seen lifetime
+				0, -- repeat count
+				0, -- repeat time
+				eventCueInfo.eventCueLocID,
+				Loc_Empty(),
+				eventCueInfo.eventCuePriority, 
+				eventCueInfo.eventCueIconPath, 
+				"",
+				255, 255, 255, 255, -- white, opaque
+				ECV_Queue,
+				__UIFireEventCue_MoveCamera_CycleGroup)
+			
+			_UIFireEventCue_data = _UIFireEventCue_data or {}
+			_UIFireEventCue_data[id] = {
+				target = opt_clickableTarget,
+				target_name = opt_clickableTarget_name,				
+				callback_function = __DoNothing,
+				reset = true,
+			}
+		end
+		
+		CTRL.Subtitle_PlayNarrativeEvent(eventCueInfo.eventName)
+		CTRL.WAIT()
+	end	
+	
+	Event_Start(DoPlayEventAndAudioCue, EVENT_INTEL)
+end
+
+------------------------------------------------------------------
+
+-- This "Use" function's only purpose is to handle firing of Audio/Even cue for the PartisanDisable affector
+-- The actual gameplay effect is not fired from the prefab but rather from the Ability's StateTree
+function Affectors_PartisanDisable_Use(data, delay_completed)
+	if not delay_completed and Affectors_DelayToStart(Affectors_PartisanDisable_Use, data) then
+		return
+	end
+	local player = data.player
+	local partisan_disable_ability = BP_GetAbilityBlueprint("rts_partisan_disable")
+	
+	if Player_HasAbility(player, partisan_disable_ability) then
+		local affector_data = data.affector_data
+		
+		if affector_data == nil then
+			print("No affector data specified for PartisanDisable")
+			return
+		end
+		
+		if affector_data.play_event_and_audio_cue then
+			Affectors_PlayAudioAndEventCue(Affectors_EventCuesInfo.PartisanDisable)
+		end
+	end
+end
+
+function Affectors_PartisanObserveReport_Use(data, delay_completed)
+	if not delay_completed and Affectors_DelayToStart(Affectors_PartisanObserveReport_Use, data) then
+		return
+	end
+	local player = data.player
+	local partisan_observe_report_ability = BP_GetAbilityBlueprint("rts_partisan_observe_report")
+	if Player_HasAbility(player, partisan_observe_report_ability) then
+		local affector_data = data.affector_data
+		if affector_data == nil or next(affector_data) == nil then
+			print("No affector data specified for PartisanObserveReport")
+			return
+		end
+		if affector_data.observe_and_report_data == nil  or next(affector_data.observe_and_report_data) == nil then
+			print("No observe_and_report_data specified for PartisanObserveReport")
+			return
+		end
+		
+		local sg_revealed = SGroup_CreateUnique("sg_revealed")
+		
+		if affector_data.play_event_and_audio_cue then
+			Affectors_PlayAudioAndEventCue(Affectors_EventCuesInfo.PartisanObserveReport, sg_revealed)
+		end
+		
+		affector_data.rule_interval = 1.0
+		Rule_AddInterval(__SGroupRevealRuleFunc, affector_data.rule_interval,
+			{
+				accumulated_time = 0.0,
+				affector_data = affector_data,
+				player = player,
+				sgroup_to_reveal = SGroup_CreateUniqueWithPrefix("sg_partisanobservereport"),
+				revealed_sgroup = sg_revealed,
+			})
+	end
+end
+
+function __SGroupRevealRuleFunc(context, data)
+	data.accumulated_time = data.accumulated_time + data.affector_data.rule_interval
+	local sgroup = SGroup_CreateUnique("sg_temp_to_store_squads_to_reveal")
+	for i = 1, #data.affector_data.observe_and_report_data do
+		local observe = data.affector_data.observe_and_report_data[i]
+		if scartype(observe.observe_position) == ST_MARKER then
+			SGroupCaller.GetItemsNearMarker(sgroup, data.player, observe.observe_position, OT_Enemy)
+		elseif scartype(observe.observe_position) == ST_SCARPOS then
+			SGroupCaller.GetItemsNearPoint(sgroup, data.player, observe.observe_position, observe.observe_radius or 36, OT_Enemy)
+		end
+		SGroup_ForEach(sgroup, 
+			function(sg, index, squad)
+				if Squad_IsRetreating(squad) then
+					SGroup_Remove(sg, squad)
+				end
+			end)
+		SGroup_AddGroup(data.sgroup_to_reveal, sgroup)
+		SGroup_Clear(sgroup)
+	end
+	SGroup_Destroy(sgroup)
+	-- If there are any enemies in the sgroup
+	if SGroup_Count(data.sgroup_to_reveal) > 0 then
+		-- Get all the revealed squads
+		SGroup_Intersection(data.revealed_sgroup, data.sgroup_to_reveal)
+		if SGroup_Count(data.revealed_sgroup) > 0 then
+			-- If revealed, then remove the revealed squads from the sgroup
+			-- and only reveal the ones that haven't been revealed already
+			SGroup_RemoveGroup(data.sgroup_to_reveal, data.revealed_sgroup)
+		end
+		-- Check if the sgroup_to_reveal still has squads to reveal after doing the set intersection
+		if SGroup_Count(data.sgroup_to_reveal) > 0 then
+			local garrisoned_building = SGroup_GetGarrisonedBuildingEntity(data.sgroup_to_reveal)
+			if garrisoned_building ~= nil then
+				-- Do the reveal for squads that are garrisoned
+				FOW_PlayerRevealEntity(data.player, garrisoned_building, data.affector_data.duration)
+			end
+			-- Do the reveal for squads that haven't been revealed yet
+			FOW_PlayerRevealSGroup(data.player, data.sgroup_to_reveal, 5 --[[fixed radius of 5 meters]], data.affector_data.duration) 
+			SGroup_ForEach(data.sgroup_to_reveal, 
+				function(sg, index, squad)
+					UI_CreateMinimapBlip(squad, 20.0, "ThreatGroupDataTemplate") 
+				end)
+			-- Keep track of the squads that have just been revealed, if any
+			SGroup_AddGroup(data.revealed_sgroup, data.sgroup_to_reveal)
+			-- Clear the sgroup_to_reveal to get it ready for the next time it needs to be filled
+			SGroup_Clear(data.sgroup_to_reveal)
+		end
+	end
+	
+	if data.accumulated_time >= data.affector_data.rule_duration then
+		SGroup_Destroy(data.sgroup_to_reveal)
+		SGroup_Destroy(data.revealed_sgroup)
+		Rule_RemoveMe()
+	end
+end
+
+function Affectors_PartisanLootSupplies_Use(data, delay_completed)
+	if not delay_completed and Affectors_DelayToStart(Affectors_PartisanLootSupplies_Use, data) then
+		return
+	end
+	local player = data.player
+	local partisan_loot_supplies_ability = BP_GetAbilityBlueprint("rts_partisan_loot_supplies")
+	if Player_HasAbility(player, partisan_loot_supplies_ability) then
+		local affector_data = data.affector_data
+		if affector_data == nil or next(affector_data) == nil then
+			print("No affector data specified for PartisanLootSupplies")
+			return
+		end
+		if affector_data.collectibles == nil  or next(affector_data.collectibles) == nil then
+			print("No collectibles specified for PartisanLootSupplies")
+			return
+		end
+		
+		local add_hintpoint_to_group = affector_data.add_hintpoint_to_group
+		local hintpoint_visible = affector_data.hintpoint_visible
+		local hintpoint_text = affector_data.hintpoint_text
+		local opt_hintpoint_height = affector_data.opt_hintpoint_height
+		local opt_hintpoint_icon_name = affector_data.opt_hintpoint_icon_name
+		local opt_hintpoint_priority = affector_data.opt_hintpoint_priority
+		local opt_hintpoint_visible_in_fow = affector_data.opt_hintpoint_visible_in_fow
+		local opt_hintpoint_data_template = affector_data.opt_hintpoint_data_template
+		if opt_hintpoint_data_template == "None" then
+			opt_hintpoint_data_template = ""
+		end
+		if hintpoint_text == "" or hintpoint_text == "$0" then
+			hintpoint_text = "$11223479"
+		end
+		
+		if opt_hintpoint_icon_name == "" then
+			opt_hintpoint_icon_name = "icons/common/orders/pick_up_item"
+		end
+		
+		local collectibles_group = EGroup_CreateUniqueWithPrefix("eg_partisan_lootsupplies")
+		for i = 1, #affector_data.collectibles do
+			local collectible_ebp = affector_data.collectibles[i].collectible_ebp
+			local collectible_position = affector_data.collectibles[i].collectible_position
+			Util_CreateEntities(nil, collectibles_group, collectible_ebp, collectible_position, 1, nil, nil, nil, true)
+		end
+		
+		local hintpoints_added = {}
+		local blips_added = {}
+		if add_hintpoint_to_group == false then
+			for i = 1, EGroup_CountSpawned(collectibles_group) do
+				local collectible = EGroup_GetEntityAt(collectibles_group, i)
+				table.insert(hintpoints_added, HintPoint_Add(collectible, hintpoint_visible, hintpoint_text,
+						opt_hintpoint_height, HPAT_Hint, opt_hintpoint_icon_name, opt_hintpoint_priority,
+						opt_hintpoint_visible_in_fow, opt_hintpoint_data_template))
+				table.insert(blips_added, UI_CreateMinimapBlip(collectible, -1, opt_hintpoint_data_template)) 
+			end
+		else
+			table.insert(hintpoints_added, HintPoint_Add(Util_GetPosition(collectibles_group), hintpoint_visible,
+					hintpoint_text, opt_hintpoint_height, HPAT_Hint, opt_hintpoint_icon_name, opt_hintpoint_priority,
+					opt_hintpoint_visible_in_fow, opt_hintpoint_data_template))
+			table.insert(blips_added, UI_CreateMinimapBlip(Util_GetPosition(collectibles_group), -1, opt_hintpoint_data_template)) 
+			-- Remove the hintpoints manually when entities in the egroup cease to exist
+			Rule_AddInterval(_CleanupHintpointAndEGroup, 1,
+			{
+				hintpoint_ids = hintpoints_added,
+				blip_ids = blips_added,
+				egroup_to_cleanup = collectibles_group
+			})
+		end
+		
+		if affector_data.play_event_and_audio_cue then
+			Affectors_PlayAudioAndEventCue(Affectors_EventCuesInfo.PartisanLootSupplies, collectibles_group)
+		end
+		
+	end
+end
+
+function Affectors_NearbyCompanyOrAttachment_Use(data, delay_completed)
+	if not delay_completed and Affectors_DelayToStart(Affectors_NearbyCompanyOrAttachment_Use, data) then
+		return
+	end
+	local player = data.player
+	
+	-- This affector is designed for enemy players.
+	if ((not Game_HasLocalPlayer()) or (not AI_IsAIPlayer(player))) then
+		return
+	end
+	
+	if (Player_ObserveRelationship(Game_GetLocalPlayer(), player) == R_ENEMY) then
+		--Get the data of reinforcement abilities sent by campaign map
+		local reinforcement_abilities = Affectors_GetTable().reinforcement_abilities
+		local affector_data = data.affector_data
+		
+		if affector_data == nil then
+			print("No affector data specified for NearbyCompanyOrAttachment")
+			return
+		end
+		
+		__ObtainSquadsToSpawn(player, affector_data, reinforcement_abilities)
+		
+		if affector_data.play_event_and_audio_cue then
+			Affectors_PlayAudioAndEventCue(Affectors_EventCuesInfo.NearbyCompanyOrAttachment)
+		end
+	end
+end
+
+function Affectors_GarrisonedCompany_Use(data, delay_completed)
+	if not delay_completed and Affectors_DelayToStart(Affectors_GarrisonedCompany_Use, data) then
+		return
+	end
+	local player = data.player
+	
+	local garrison_ability = Affectors_GetTable().garrison_ability
+	
+	__ObtainSquadsToSpawn(player, data.affector_data, garrison_ability)
+end
+
+function Affectors_GarrisonReinforcementAttachment_Use(data, delay_completed)
+	if not delay_completed and Affectors_DelayToStart(Affectors_GarrisonReinforcementAttachment_Use, data) then
+		return
+	end
+	local player = data.player
+	local garrison_attachment_reinforcement_ability = Affectors_GetTable().garrison_attachment_reinforcement_ability
+	__ObtainSquadsToSpawn(player, data.affector_data, garrison_attachment_reinforcement_ability)
+end
+
+function Affectors_SpawnSquads(spawns, player)
+	for _, spawn in pairs(spawns) do
+		local spawn_dest = spawn.squad_to_spawn_destination
+		if spawn.squad_to_spawn_bp then
+			if scartype(spawn_dest) == ST_MARKER and Marker_GetPosition(spawn_dest) == World_Pos(0,0,0) then
+				spawn_dest = nil -- Don't move the squad to a destination if that marker is at its default position
+			end
+			Util_CreateSquads(player, spawn.squad_sgroup, spawn.squad_to_spawn_bp, spawn.squad_to_spawn_position, spawn_dest)
+		end
+	end
+end
+
+
+-- abilities_to_check must be a table of pairs of squad names and ability PBG
+function __ObtainSquadsToSpawn(player, affector_data, abilities_to_check)
+	if abilities_to_check == nil or next(abilities_to_check) == nil then
+		return
+	end
+
+	local squad_types_to_spawn_data = {}
+	
+	local squad_type_indices_already_spawned = {}
+	
+	-- Go through the abilities brought to the mission
+	for squad, ability in pairs(abilities_to_check) do
+		if Player_HasAbility(player, BP_GetAbilityBlueprintByPbgID(ability.PropertyBagGroupID)) then
+			if affector_data == nil or next(affector_data) == nil then
+				MissionPrint("No affector_data found")
+				return
+			end
+			
+			-- Get the squad whose entity supplied the ability
+			local squad_bp = BP_GetSquadBlueprint(squad)
+			for i = 1, #affector_data.data_required_for_populating_squads do
+				local entry_point = affector_data.data_required_for_populating_squads[i].entry_point
+				if entry_point < 0 or entry_point == g_entryPointID then
+					if affector_data.data_required_for_populating_squads[i].unit_or_type_check == "Unit" then
+						-- Check if the company/attachment data has been set in mission
+						if affector_data.data_required_for_populating_squads[i].company_or_attachment_to_check == squad_bp then
+							local squads_to_spawn = affector_data.data_required_for_populating_squads[i].squads_to_spawn
+							Affectors_SpawnSquads(squads_to_spawn, player)
+						end
+					else
+						-- If it is not company/attachment data, store the values to use later if no specific company/attachment is found
+						table.insert(squad_types_to_spawn_data, affector_data.data_required_for_populating_squads[i].squad_type_to_spawn)
+					end
+				end
+			end
+		-- Ability exists on player, but the company wasn't found in the mission_affector prefab in mission
+			for i = 1, #squad_types_to_spawn_data do
+				-- This check is done so as for post launch company units, they dont use the same data if multiples of the same affector with different companies are brought in
+				if not Table_Contains(squad_type_indices_already_spawned, i) then
+					local squads_available = BP_GetCompanyStartingSquadsTable(squad_bp)
+					if next(squads_available) ~= nil then
+						local squads_to_spawn = {}
+						for j, squad_type_to_spawn in pairs(squad_types_to_spawn_data[i]) do
+							local squad_info = {
+								squad_to_spawn_bp = squads_available[squad_type_to_spawn.backup_starting_unit_type],
+								squad_sgroup = squad_type_to_spawn.squad_sgroup,
+								squad_to_spawn_position = squad_type_to_spawn.squad_to_spawn_position,
+								squad_to_spawn_destination = squad_type_to_spawn.squad_to_spawn_destination,
+							}
+							Affectors_SpawnSquads({squad_info}, player)
+						end
+						if next(squads_to_spawn) ~= nil then
+							table.insert(squad_type_indices_already_spawned, i)
+						end
+						break
+					end
+				end
+			end
+		end
+	end
+end
+
+
+function _CleanupHintpointAndEGroup(context, data)
+	if EGroup_Count(data.egroup_to_cleanup) == 0 then
+		-- Defer the removal of hintpoint in the next concurrent phase
+		HintPoint_Remove(data.hintpoint_ids[1])
+		UI_DeleteMinimapBlip(data.blip_ids[1])
+		-- Do the cleanup after you defer the removal, so the hintpoint is taken care of
+		-- as soon as next concurrent phase is reached
+		_CleanupEGroupWhenHintpointsVisible(context, data)
+	end
+end
+
+function _CleanupEGroupWhenHintpointsVisible(context, data)
+	local i = 1
+	while i <= #data.hintpoint_ids do
+		if Hintpoint_IsVisible(data.hintpoint_ids[i]) then
+			table.remove(data.hintpoint_ids, i)
+			table.remove(data.blip_ids, i)
+		else
+			i = i + 1
+		end
+	end
+	if next(data.hintpoint_ids) == nil then
+		EGroup_Destroy(data.egroup_to_cleanup)
+		Rule_RemoveMe()
+	end
+end

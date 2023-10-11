@@ -1,0 +1,664 @@
+-----------------------------------------------------------------------
+--
+-- Event Cues
+--
+-- Custom/situational event cues.
+--
+-- (c) Relic Entertainment 2017
+--
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Data
+-----------------------------------------------------------------------
+
+local end_turn_event_cue_ids = {}
+
+_events = {
+	-- NOTE: Call To Action currently not available until the integration from Cardinal and EE happens
+	call_to_action = {
+		cue = {
+			lifetime = 65000.0,
+			repeatTime = 0.0,
+			title = Loc_Empty(),
+			desc = Loc_Empty(),
+			
+			-- placeholder sfx
+			sfx = "sfx_foley_gear_movement_light_01",
+			
+			-- placeholder icon
+			icon = "icons/dev/dev_placeholder_conquest.png",
+			
+			color = {r = 255, g = 255, b = 255, a = 255},
+			template = "cta_alarm",
+			style = ECV_Queue,
+		},
+	},
+	
+}
+
+-- NOTE: Call To Action currently not available until the integration from Cardinal and EE happens
+
+--- Call to Action types
+
+CTA_ALARM = "cta_alarm"
+CTA_CELEBRATE = "cta_celebration"
+CTA_UNIQUE_STAKES = "cta_raised_stakes"
+CTA_UNIQUE_CHANGE = "cta_focus_change"
+CTA_INFLUENCE_REWARD_UNLOCKED = "cta_influence_reward_unlocked"
+
+-- Types of titles to show for when a unit dies
+local destroyEventType = {
+	COMPANY = 1,
+	TOWN = 2,
+	EMPLACEMENT = 3,
+	VESSEL = 4,
+	AIRCRAFT = 5,
+	OTHER = 6, -- As a fallback.
+}
+
+local destroyEventTitleLocStrings = {
+	[destroyEventType.COMPANY] = 11235453,
+	[destroyEventType.TOWN] = 11243769,
+	[destroyEventType.EMPLACEMENT] = 11243770,
+	[destroyEventType.VESSEL] = 11243771,
+	[destroyEventType.AIRCRAFT] = 11243772,
+	[destroyEventType.OTHER] = 11235453, -- Use the same one as company for now.
+}
+
+-----------------------------------------------------------------------
+-- Private/internal functions
+-----------------------------------------------------------------------
+function __DoNothing()
+	-- This function is intentionally left blank :-)
+end
+
+
+function _ReturnLocVersion (item)
+	
+	local itemType = scartype (item)
+	
+	if itemType == ST_LOCSTRING then
+		return item
+	elseif itemType == ST_STRING then
+		return LOC(item)
+	elseif itemType == ST_NUMBER then
+		item = tostring(item)
+		return LOC (item)
+	end
+end
+
+-- Iterates through the EVENTS table, so we know if a function is an Intel Event or not
+function _IsIntelEvent (func)
+	-- return false if this isn't a function
+	if scartype (func) ~= ST_FUNCTION then
+		return false
+	end
+	-- return false if there's no EVENTS table
+	if EVENTS == nil then
+		return false
+	end
+	-- iterate through EVENTS and see if the function matches anything
+	for k,v in pairs (EVENTS) do
+		if v == func then
+			return true
+		end
+	end
+	-- if nothing matches, return false
+	return false
+	
+end
+
+--? @shortdesc Gets the title type of the squad.
+--? @args Squad squad
+local function GetDestroySquadTitleType(squad)
+	if (Squad_IsOfType(squad, "navy")) then
+		return destroyEventType.VESSEL
+	elseif (Squad_IsOfType(squad, "airplane")) then
+		return destroyEventType.AIRCRAFT
+	elseif (Squad_IsOfType(squad, "company")) then
+		return destroyEventType.COMPANY
+	else
+		return destroyEventType.OTHER
+	end
+end
+
+--? @shortdesc Gets the title type of the entity.
+--? @args Entity entity
+local function GetDestroyEntityTitleType(entity)
+	-- Emplacements can be buildings, but towns are not emplacements, so check
+	-- emplacement first.
+	if (Entity_IsOfType(entity, "emplacement")) then
+		return destroyEventType.EMPLACEMENT
+	elseif (Entity_IsOfType(entity, "building")) then
+		return destroyEventType.TOWN
+	else
+		return destroyEventType.OTHER
+	end
+end
+
+--? @shortdesc Gets the name that should be shown in a company destroyed message.
+--? @args Entity entity
+local function GetDestroyMessageEntityName(entity)
+	local ui_info = BP_GetEntityUIInfo(Entity_GetBlueprint(entity))
+	return ui_info.screenName
+end
+
+--? @shortdesc Gets the name that should be shown in a company destroyed message. Can return nil.
+--? @args Squad squad
+local function GetDestroyMessageSquadName(squad)
+	local player = Squad_GetPlayerOwner(squad)
+	if (player ~= nil) then
+		local ui_info = BP_GetSquadUIInfo(Squad_GetBlueprint(squad), Player_GetRace(player))
+		
+		-- For ui reasons, we actually don't put the word at the end of every company's name.
+		-- We could have edited the screen_namer_short of every company to be <name> Company,
+		-- but at the time this feature was added, it wouldn't have been a good use of bug fixing time.
+		-- If there are bugs with how company names are formatted, the fix might be to just update
+		-- every company's short name to include the word "company", use that name here, and not
+		-- programmatically format it.
+		if (GetDestroySquadTitleType(squad) == destroyEventType.COMPANY) then
+			local name = Loc_FormatText(11243811, ui_info.screenName)
+			return name
+		else
+			return ui_info.screenName
+		end
+	end
+	
+	return nil
+end
+
+--? @shortdesc Gets the name that should be shown in a company destroyed message. Can return nil.
+--? @args Squad OR Entity unit
+local function GetDestroyMessageUnitName(unit)
+	local unitName = nil
+	
+	if (scartype(unit) == ST_SQUAD) then
+		unitName = GetDestroyMessageSquadName(unit)
+	elseif (scartype(unit) == ST_ENTITY) then
+		unitName = GetDestroyMessageEntityName(unit)
+	end
+	
+	return unitName
+end
+
+--? @shortdesc Creates a center screen high priority player cue
+--? @args STRING text, STRING description, [REAL opt_duration, REAL opt_seen_duration, STRING opt_icon_name, STRING opt_sound_name, REAL opt_cue_color_red, REAL opt_cue_color_green, REAL opt_cue_color_blue, REAL opt_cue_color_alpha, INT priority]
+function EventCues_HighPriority (text, description, opt_duration, opt_seen_duration, opt_icon_name, opt_sound_name, opt_cue_color_red, opt_cue_color_green, opt_cue_color_blue, opt_cue_color_alpha, opt_priority)
+	return UI_CreateEventCueClickable(-1,
+				opt_priority or 3, -- priority
+				opt_duration or 8,
+				opt_seen_duration or 5,
+				0,
+				0,
+				text,
+				description,
+				"high_priority",
+				opt_icon_name or "icons/temp_portrait",
+				opt_sound_name or "sfx_foley_gear_movement_light_01",
+				opt_cue_color_red or 255, opt_cue_color_green or 255, opt_cue_color_blue or 255, opt_cue_color_alpha or 255,
+				ECV_Title,
+				__DoNothing)
+end
+
+--? @shortdesc Creates a side screen event cue using the "influence_gained" event cue style. 
+--? @args STRING text, STRING description
+function EventCues_InfluenceGained (text, description)
+	-- TODO: replace placeholder icon and sfx
+	return UI_CreateEventCueClickable(-1, 2, 8, 5, 0, 0, text, description, "influence_gained", "icons/temp_portrait", "sfx_foley_gear_movement_light_01", 255, 255, 255, 255, ECV_Queue, __DoNothing)
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_influence_gained" event cue style. 
+--? @args STRING text, STRING description
+function EventCues_CampaignInfluenceGained (text, description)
+	return EventCues_CampaignEventTimed("cm_influence_gained", text, description, 20, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_capture_point_lost" event cue style. 
+--? @args Entity entity
+function EventCues_CampaignCapturePointLost(entity)
+	local ui_info = BP_GetEntityUIInfo(Entity_GetBlueprint(entity))
+	local name = ui_info.screenName
+	local msg = Loc_GetString(11205227)
+	EventCues_CampaignEventTimedEntity("cm_capture_point_lost", msg, name, 30, entity, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_squad_suffering_attrition" event cue style. 
+--? @args Squad squad
+function EventCues_CampaignSquadSufferingAttrition(squad)
+	local ui_info = BP_GetSquadUIInfo(Squad_GetBlueprint(squad), Player_GetRace(Game_GetLocalPlayer()))
+	local name = ui_info.screenName
+	local msg = Loc_GetString(11205226)
+	EventCues_CampaignEventTimedSquad("cm_squad_suffering_attrition", msg, name, 30, squad, {})
+end
+	
+--? @shortdesc Creates a side screen event cue using the "cm_squad_nearing_attrition" event cue style. 
+--? @args Squad squad FLOAT supplies_remaining
+function EventCues_CampaignSquadNearingAttrition(squad, supplies_remaining)
+	local ui_info = BP_GetSquadUIInfo(Squad_GetBlueprint(squad), Player_GetRace(Game_GetLocalPlayer()))
+	local name = ui_info.screenName
+	local msg = Loc_GetString(11205225)
+	local description_msg = Loc_FormatText(11205228, math.floor(supplies_remaining))
+	EventCues_CampaignEventTimedSquad("cm_squad_nearing_attrition", msg, description_msg, 30, squad, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_capture_point_out_of_supply" event cue style. 
+--? @args Entity entity
+function EventCues_CampaignCapturePointOutOfSupply(entity)
+	local ui_info = BP_GetEntityUIInfo(Entity_GetBlueprint(entity))
+	local name = ui_info.screenName
+	local msg = Loc_GetString(11205224)
+	EventCues_CampaignEventTimedEntity("cm_capture_point_out_of_supply", msg, name, 30, entity, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_capture_point_regained_supply" event cue style. 
+--? @args Entity entity
+function EventCues_CampaignCapturePointRegainedSupply(entity)
+	local ui_info = BP_GetEntityUIInfo(Entity_GetBlueprint(entity))
+	local name = ui_info.screenName
+	local msg = Loc_GetString(11205223)
+	EventCues_CampaignEventTimedEntity("cm_capture_point_regained_supply", msg, name, 30, entity, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_company_took_damage" event cue style. 
+--? @args Squad squad, FLOAT damage
+function EventCues_CampaignCompanyTookDamage(squad, damage)
+	local msg = Loc_GetString(11205222)
+	local description_msg = Loc_FormatText(11205250, math.floor(damage))
+	EventCues_CampaignEventTimedSquad("cm_company_took_damage", msg, description_msg, 30, squad, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_resources_gained" event cue style. 
+--? @args Squad squad, FLOAT damage
+function EventCues_CampaignResourcesGained(resources)
+	--TODO create cm_resources_gained
+	local msg = Loc_GetString(11205221)
+	EventCues_CampaignEventTimed("cm_supply_ship_arrived", msg, "", 30, resources)
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_resources_gained" event cue style. 
+--? @args Squad squad, FLOAT damage
+function EventCues_CampaignRequisitionGained(resources)
+	local msg = Loc_GetString(11227746)
+	EventCues_CampaignEventTimed("cm_supply_ship_arrived", msg, "", 10, resources)
+end
+
+--? @shortdesc Creates a side screen event cue using the "cm_squad_operation_in_progress" event cue style. 
+--? @args Squad squad
+function EventCues_CampaignSquadOperationInProgress(squad)
+	--TODO create cm_squad_operation_in_progress
+	local ui_info = BP_GetSquadUIInfo(Squad_GetBlueprint(squad), Player_GetRace(Game_GetLocalPlayer()))
+	local name = ui_info.screenName
+	local msg = Loc_GetString(11205220)
+	EventCues_CampaignEventTimedSquad("cm_supply_ship_arrived", msg, name, 30, squad, {})
+end
+
+--? @shortdesc Creates a center screen player cue using the "cm_influence_reward_unlocked" event cue style
+--? @args STRING text, STRING description
+function EventCues_InfluenceRewardUnlocked (text, description)
+	local id = EventCues_CampaignEventCallback("cm_influence_reward_unlocked", text, description, __DoNothing, {})
+	EventCues_RegisterEndTurnEvent(id)
+	return id
+end
+
+--? @shortdesc Creates an AI's turn event cue using the "cm_ai_turn" event cue style
+function EventCues_AITurn()
+	local id = EventCues_Callback("cm_ai_turn", Loc_GetString(11166552), "", __DoNothing, {})
+	EventCues_RegisterEndTurnEvent(id)
+	return id
+end
+
+--? @shortdesc Creates a new day event cue using the "cm_new_day" event cue style
+--? @args NUMBER day, INTEGER lifetime
+function EventCues_NewDay(day, lifetime)
+	return EventCues_Timed("cm_new_day", Loc_GetString(11166550), "", lifetime, {day = day})
+end
+
+--? @shortdesc Creates a side screen event cue about a company being destroyed using the "cm_company_took_damage" event cue style. 
+--? @args Squad destroyedSquad
+function EventCues_CampaignSquadWasDestroyed(destroyedSquad)
+	local name = GetDestroyMessageSquadName(destroyedSquad)
+	
+	if (name ~= nil) then
+		local titleType = GetDestroySquadTitleType(destroyedSquad)
+		local titleLocString = destroyEventTitleLocStrings[titleType]
+		local msg = Loc_FormatText(titleLocString)
+		
+		local description_msg =  Loc_FormatText(11235302, name)
+		EventCues_CampaignEventTimedSquad("cm_company_took_damage", msg, description_msg, 30, destroyedSquad, {})
+	end
+end
+
+--? @shortdesc Creates a side screen event cue about a company being destroyed using the "cm_company_took_damage" event cue style. Includes the attacker.
+--? @args Squad destroyedSquad, Squad OR Entity OR Nil attackerUnit
+function EventCues_CampaignSquadWasDestroyedByAttacker(destroyedSquad, attackerUnit)
+	local attackerUnitName = GetDestroyMessageUnitName(attackerUnit)
+	
+	--If we couldn't find a name for the attacker, just show the message without an attack.
+	if (attackerUnitName == nil) then
+		EventCues_CampaignSquadWasDestroyed(destroyedSquad)
+		return
+	end
+	
+	local destroyedSquadName = GetDestroyMessageSquadName(destroyedSquad)
+	if (destroyedSquadName == nil) then
+		return
+	end
+	
+	local titleType = GetDestroySquadTitleType(destroyedSquad)
+	local titleLocString = destroyEventTitleLocStrings[titleType]
+	local msg = Loc_FormatText(titleLocString)
+	
+	local description_msg =  Loc_FormatText(11235303, destroyedSquadName, attackerUnitName)
+	EventCues_CampaignEventTimedSquad("cm_company_took_damage", msg, description_msg, 30, destroyedSquad, {})
+end
+
+--? @shortdesc Creates a side screen event cue about a company being destroyed using the "cm_company_took_damage" event cue style. 
+--? @args Entity destroyedSquad
+function EventCues_CampaignEntityWasDestroyed(destroyedEntity)
+	local name = GetDestroyMessageEntityName(destroyedEntity)
+	
+	if (name ~= nil) then
+		local titleType = GetDestroyEntityTitleType(destroyedEntity)
+		local titleLocString = destroyEventTitleLocStrings[titleType]
+		local msg = Loc_FormatText(titleLocString)
+		
+		local description_msg =  Loc_FormatText(11235302, name)
+		
+		EventCues_CampaignEventTimedEntity("cm_company_took_damage", msg, description_msg, 30, destroyedEntity, {})
+	end
+end
+
+--? @shortdesc Creates a side screen event cue about a company being destroyed using the "cm_company_took_damage" event cue style. Includes the attacker.
+--? @args Entity destroyedEntity, Squad OR Entity OR Nil attackerUnit
+function EventCues_CampaignEntityWasDestroyedByAttacker(destroyedEntity, attackerUnit)
+	local attackerUnitName = GetDestroyMessageUnitName(attackerUnit)
+	
+	--If we couldn't find a name for the attacker, just show the message without an attack.
+	if (attackerUnitName == nil) then
+		EventCues_CampaignEntityWasDestroyed(destroyedEntity)
+		return
+	end
+	
+	local destroyedEntityName = GetDestroyMessageEntityName(destroyedEntity)
+	if (destroyedEntityName == nil) then
+		return
+	end
+	
+	local titleType = GetDestroyEntityTitleType(destroyedEntity)
+	local titleLocString = destroyEventTitleLocStrings[titleType]
+	local msg = Loc_FormatText(titleLocString)
+	
+	local description_msg =  Loc_FormatText(11235303, destroyedEntityName, attackerUnitName)
+	EventCues_CampaignEventTimedEntity("cm_company_took_damage", msg, description_msg, 30, destroyedEntity, {})
+end
+
+--? @shortdesc Creates a side screen event cue using the the specified event cue style and metadata. The notification sticks around for a preset amount of time.
+--? @args STRING datatemplate, STRING text, STRING description, INTEGER lifetime, TABLE data
+function EventCues_CampaignEventTimed(datatemplate, text, description, lifetime, data)
+	return UI_CreateEventCueData(
+				 -1 --? custom event
+				,2 --? priority
+				,lifetime --? lifetime
+				,5.0 --? seenLifetime
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Queue
+				,__DoNothing --? callback
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates a side screen event cue using the the specified event cue style and metadata. The notification sticks around for a preset amount of time.
+--? @args STRING datatemplate, STRING text, STRING description, INTEGER lifetime, SQUAD squad, TABLE data
+function EventCues_CampaignEventTimedSquad(datatemplate, text, description, lifetime, squad, data)
+	return UI_CreateEventCueSquadData(
+				 -1 --? custom event
+				,2 --? priority
+				,lifetime --? lifetime
+				,5.0 --? seenLifetime
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Queue
+				,__DoNothing --? callback
+				,squad --? target
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates a side screen event cue using the the specified event cue style and metadata. The notification sticks around for a preset amount of time.
+--? @args STRING datatemplate, STRING text, STRING description, INTEGER lifetime, ENTITY entity, TABLE data
+function EventCues_CampaignEventTimedEntity(datatemplate, text, description, lifetime, entity, data)
+	return UI_CreateEventCueEntityData(
+				 -1 --? custom event
+				,2 --? priority
+				,lifetime --? lifetime
+				,5.0 --? seenLifetime
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Queue
+				,__DoNothing --? callback
+				,entity --? target
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates a side screen event cue using the the specified event cue style and metadata. The notification sticks around for a preset amount of time.
+--? @args STRING datatemplate, STRING text, STRING description, INTEGER lifetime, POSITION position, TABLE data
+function EventCues_CampaignEventTimedPosition(datatemplate, text, description, lifetime, position, data)
+	return UI_CreateEventCuePositionData(
+				 -1 --? custom event
+				,2 --? priority
+				,lifetime --? lifetime
+				,5.0 --? seenLifetime
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Queue
+				,__DoNothing --? callback
+				,position --? target
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates a side screen event cue using the the specified event cue style and metadata. The notification sticks around indefinitely until clicked.
+--? @args STRING datatemplate, STRING text, STRING description, FUNCTION callback, TABLE data
+function EventCues_CampaignEventCallback(datatemplate, text, description, callback, data)
+	return UI_CreateEventCueData(
+				 -1 --? custom event
+				,2 --? priority
+				,(1/0) --? infinite lifetime
+				,0.0 --? lifetime once clicked
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Queue
+				,callback --? callback
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates an event cue using the the specified event cue style and metadata. The notification sticks around for a preset amount of time.
+--? @args STRING datatemplate, STRING text, STRING description, INTEGER lifetime, TABLE data
+function EventCues_Timed(datatemplate, text, description, lifetime, data)
+	return UI_CreateEventCueData(
+				 -1 --? custom event
+				,2 --? priority
+				,lifetime --? lifetime
+				,5.0 --? seenLifetime
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Title
+				,__DoNothing --? callback
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates an event cue using the the specified event cue style and metadata. The notification sticks around indefinitely until clicked.
+--? @args STRING datatemplate, STRING text, STRING description, FUNCTION callback, TABLE data
+function EventCues_Callback(datatemplate, text, description, callback, data)
+	return UI_CreateEventCueData(
+				 -1 --? custom event
+				,2 --? priority
+				,(1/0) --? infinite lifetime
+				,0.0 --? lifetime once clicked
+				,0,0 --? repeat count/time
+				,text
+				,description
+				,datatemplate
+				,"" --? icon
+				,"" --? audio
+				,255,255,255,255 --? R,G,B,A
+				,ECV_Title
+				,callback --? callback
+				,data --? table of data for the event
+				)
+end
+
+--? @shortdesc Creates a Call to Action UI event
+--? @args STRING text, STRING cta_type[, FUNCTION onClickFunction, POS/MARKER/GROUP pos, REAL duration]
+function EventCues_CallToAction(text, cta_type, onClickFunction, pos, duration)
+	
+	-- check if there's already an active CtA and if so clear it
+	if _events.call_to_action.id ~= nil then
+		UI_ClearEventCueFromID(_events.call_to_action.id)
+		_events.call_to_action.id = nil
+	end
+	
+	if _events.call_to_action.blip ~=nil then
+		UI_DeleteMinimapBlip(_events.call_to_action.blip)
+		_events.call_to_action.blip = nil
+	end
+	
+	-- clear the variables we might set so any data from a previous CtA is gone
+	_events.call_to_action.intelEvent = nil
+	_events.call_to_action.func = nil
+	_events.call_to_action.pos = nil
+	
+	-- add any passed in function to the data table
+	if onClickFunction ~= nil then
+		if scartype (onClickFunction) == ST_FUNCTION then
+			if _IsIntelEvent (onClickFunction) then
+				_events.call_to_action.intelEvent = onClickFunction
+			else
+				_events.call_to_action.func = onClickFunction
+			end
+		end
+	end
+	
+	-- make sure we got a proper type
+	if cta_type == CTA_ALARM or CTA_CELEBRATE or CTA_UNIQUE_CHANGE or CTA_UNIQUE_STAKES or CTA_INFLUENCE_REWARD_UNLOCKED then
+		print ("EventCues_CallToAction received cta_type:"..cta_type)
+	else
+		print ("EventCues_CallToAction received an incorrect cta_type:")
+		print (cta_type)
+		cta_type = CTA_UNIQUE_CHANGE
+	end
+	
+	-- if we got a position, record it and create a blip
+	if pos ~= nil then
+		_events.call_to_action.pos = pos
+		_events.call_to_action.blip = UI_CreateMinimapBlip(pos, -1, cta_type)
+	end	
+	
+	-- create the CtA proper
+	local cue = _events.call_to_action.cue	
+	cue.title = _ReturnLocVersion(text)
+	cue.template = cta_type
+	
+	_events.call_to_action.id = UI_CreateEventCueClickableByType(UIE_CallToAction, 2, cue.lifetime, 5.0, cue.title, cue.desc, cue.template, cue.icon, cue.sfx, cue.color.r, cue.color.g, cue.color.b, cue.color.a, cue.style, CallToAction_OnEventCueClicked)
+	
+	if duration ~= nil then
+		Rule_AddOneShot(CallToAction_Clear, duration, {id = _events.call_to_action.id, blip = _events.call_to_action.blip})
+	end
+
+end
+
+function CallToAction_OnEventCueClicked(id)
+	print("CallToAction_OnEventCueClicked:")
+	print(id)
+	
+	-- if we have a position, move the camera
+	if _events.call_to_action.pos ~= nil then
+		local pos = _events.call_to_action.pos
+		Camera_MoveTo(pos)
+	end
+	
+	-- if we have a function, execute it
+	if _events.call_to_action.func ~= nil then
+		_events.call_to_action.func()
+	end
+	
+	-- if we have an Intel event, play it
+	if _events.call_to_action.intelEvent ~= nil then
+		Util_StartIntel (_events.call_to_action.intelEvent)
+	end
+	
+	-- clear the CtA
+	UI_ClearEventCueFromID(id)
+	_events.call_to_action.id = nil
+	
+	--if we created a blip, clear it
+	if _events.call_to_action.blip ~= nil then
+		print ("Blip:")
+		print (_events.call_to_action.blip)
+		UI_DeleteMinimapBlip(_events.call_to_action.blip)
+		_events.call_to_action.blip = nil
+	end
+end
+
+function CallToAction_Clear(context, data)
+	
+	if data.id ~= nil then
+		UI_ClearEventCueFromID(data.id)
+	end
+	
+	if data.blip ~= nil then
+		UI_DeleteMinimapBlip(data.blip)
+	end
+	
+end
+
+--? @shortdesc Adds the given event cue id to the list of event cues to be cleared at end of turn
+--? @args NUMBER event_cue_id
+function EventCues_RegisterEndTurnEvent(event_cue_id)
+	if scartype(event_cue_id) == ST_NUMBER then
+		table.insert(end_turn_event_cue_ids, event_cue_id)
+	end
+end
+
+--? @shortdesc Clears the list of event cues
+function EventCues_ClearEndTurnEvents()
+	for index, event_cue_id in pairs(end_turn_event_cue_ids) do
+		UI_ClearEventCueFromID(event_cue_id)
+	end
+end

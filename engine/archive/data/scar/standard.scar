@@ -1,0 +1,155 @@
+----------------------------------------------------------------------------------------------------------------
+-- Extensions to LUA language and the standard library
+-- Copyright 2018 SEGA Corporation, Developed by Relic Entertainment
+
+std = {}
+
+--? @shortdesc Predicate testing if a value is of specific type
+--? @extdesc e.g. f = std.TypePredicate(); f() => 1; f() => 2 ...
+--? @result Function
+function std.TypePredicate(scar_type)
+	local self =
+	{
+		m_type = scar_type
+	}
+	
+	function self.Verify(t)
+		if (self.m_type == nil) then
+			return true
+		else
+			return scartype(t) == self.m_type
+		end
+	end
+	
+	return self
+end
+
+std.T_ANY = std.TypePredicate(nil)
+std.T_NIL = std.TypePredicate(ST_NIL)
+std.T_BOOLEAN = std.TypePredicate(ST_BOOLEAN)
+std.T_NUMBER = std.TypePredicate(ST_NUMBER)
+std.T_STRING = std.TypePredicate(ST_STRING)
+std.T_TABLE = std.TypePredicate(ST_TABLE)
+std.T_FUNCTION = std.TypePredicate(ST_FUNCTION)
+std.T_POSITION = std.TypePredicate(ST_SCARPOS)
+std.T_EGROUP = std.TypePredicate(ST_EGROUP)
+std.T_ENTITY = std.TypePredicate(ST_ENTITY)
+std.T_SGROUP = std.TypePredicate(ST_SGROUP)
+std.T_SQUAD = std.TypePredicate(ST_SQUAD)
+std.T_TEAM = std.TypePredicate(ST_TEAM)
+std.T_MARKER = std.TypePredicate(ST_MARKER)
+std.T_PBG = std.TypePredicate(ST_PBG)
+std.T_UNKNOWN = std.TypePredicate(ST_UNKNOWN)
+
+--? @shortdesc Performs basic type-checking on [value]
+--? @extdesc e.g. foo = 7; std.Validate(foo, 'foo', T_NUMBER, false)
+--? @result nil; raises error when invalid
+function std.Validate(value, value_name, type_predicate, nullable)
+	-- Validate the values to the std.Validate function...
+	if (value_name == nil) then
+		error('value_name was nil', 3)
+	end
+		
+	if (type_predicate == nil) then
+		error('type_predicate was nil', 3)
+	end
+
+	if (nullable == nil) then
+		error('nullable was nil', 3)
+	end
+
+	if (std.T_STRING.Verify(value_name) == false) then
+		error('value_name must be string', 3)
+	end
+  
+	if (std.T_FUNCTION.Verify(type_predicate.Verify) == false) then
+		error('type_predicate must be a function. '..
+			'If your type is a SCARTYPE consider using one of the types defined '..
+			'in \'Standard.scar\'. e.g. \'std.T_BOOLEAN\'', 3)
+	end
+
+	if (std.T_BOOLEAN.Verify(nullable) == false) then
+		error('nullable must be boolean', 3)
+	end
+	
+	-- Now the actual value validation...
+	if (value == nil) then
+		if (nullable == false) then
+			error('non-nullable value '..value_name..' was nil', 3)
+		else
+			return -- Value is nullable and nil; don't check it further
+		end
+	end
+	
+	if (type_predicate.Verify(value) == false) then
+		error('value '..value_name..
+			' was '..type(value)..
+			' expected '..scartype_enum_tostring(type_predicate.m_type), 3)
+		return
+	end
+end
+
+--? @shortdesc Makes an assertion. If the assertion turns out to be false, raises an error.
+--? @extdesc e.g. foo = 7; assert(foo ~= nil, 'foo should not be nil!', 'If foo is nil we don't know how many bars to spawn!'')
+--? This is intended to be a more scripter friendly version of LUA assert.
+--? @result nil; raises error when assert is nil or false
+function std.Assert(assertion, what, why)
+-- TODO: build in a way to disable this based on running parameters as we do with C++ asserts
+-- 		 Perhaps this should be a C callback which uses the C++ side assert framework?
+	std.Validate(what, 'what', std.T_STRING, false)
+	std.Validate(why, 'why', std.T_STRING, false)
+
+	if (not assertion) then
+		error('Asserted that: '..what..'\n because '..why, 3)
+	end
+end
+
+function std.GetAccumulator(initial_value, append_function)
+	std.Validate(initial_value, 'initial_value', std.T_ANY, false)
+	std.Validate(append_function, 'append_function', std.T_FUNCTION, false)
+
+	local sum = initial_value
+	local append = append_function
+	return function(addendum)
+		if (addendum == nil) then
+			return sum
+		else
+			sum = append(sum, addendum)
+			return sum
+		end
+	end
+end
+
+local function AppendString(a,b)
+	std.Validate(a, 'a', std.T_STRING, false)
+	std.Validate(b, 'b', std.T_STRING, false)
+
+	return a..b
+end
+
+local function AppendNumber(a,b)
+	std.Validate(a, 'a', std.T_NUMBER, false)
+	std.Validate(b, 'b', std.T_NUMBER, false)
+
+	return a+b
+end
+
+function std.GetStringLogger()
+	return std.GetAccumulator('', AppendString)
+end
+
+function std.GetFixedCounter(initial_value, increment_amount)
+	std.Validate(initial_value, 'initial_value', std.T_ANY, false)
+	std.Validate(increment_amount, 'increment_amount', std.T_NUMBER, false)
+
+	number_accumulator = std.GetAccumulator(initial_value, AppendNumber)
+	function GetAccumulatorClosure(f)
+		return function() return f(increment_amount) end
+	end
+	
+	return GetAccumulatorClosure(number_accumulator)
+end
+
+function std.GetCounter()
+	return std.GetFixedCounter(0, 1)
+end

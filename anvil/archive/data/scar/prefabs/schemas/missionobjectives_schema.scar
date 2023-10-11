@@ -1,0 +1,82 @@
+--
+-- WorldBuilder prefab
+-- "Encounter"
+--
+
+----------------------------------------
+--GLOBAL REUSABLE OBJECTIVES--
+import("prefabs/templates/objectives_template.scar")
+
+-- Schema
+missionobjectives_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "missionobjectives",																						-- name the prefab uses to identify itself
+	description = "missionobjectives",																				-- name to display for this prefab
+	script = "missionobjectives.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+		
+		{
+			type = ST_TABLE,
+			name = "initialize",
+			description = "Any playbills or other data that should be initialized before the mission starts.",
+			multiplicity = "multiple",
+			itemSchema = {
+				{
+					type = ST_PREFAB,
+					name = "playbill",
+					description = "Linked playbill prefab",
+					default = "",
+				},
+				{
+					type = ST_STRING,
+					name = "scenref_playbill_key",
+					multiplicity = "multiple",
+					description = "Mission variant should start if any of these keys are sent",
+					default = "",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "check_entry_point",
+					description = "Checks if the entry point is correct (Use only when there are introtypes involved)",
+					default = false,
+				},
+				{
+					type = ST_NUMBER,
+					name = "entry_point",
+					description = "Entry point to check for",
+					requirement = {"check_entry_point", true},
+				}
+			},
+		},
+		
+		------------------------
+		------------------------ OBJECTIVES
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "objectives",
+			description = "Objectives for this mission type",
+			multiplicity = "multiple",
+			itemSchema = g_objectives_template,		
+		},
+		{
+			type = ST_STRING,
+			name = "scenref_playbill_key",
+			multiplicity = "multiple",
+			description = "Mission variant should start if any of these keys are sent",
+			default = "",
+		},
+		{
+			type = ST_BOOLEAN,
+			name = "enabled",
+			displayName = "Enabled",
+			description = "Should this prefab run at all?",
+			default = true,
+		},
+	},
+}

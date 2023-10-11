@@ -1,0 +1,131 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- DESIGNER LIBRARY
+-- Provides some high level functions for us to set things up simply.
+-- 
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+--? @group scardoc;DesignerLib
+
+--------------------------------------------------------------------------
+--
+-- MISCELLANEOUS FUNCTIONS
+--
+--------------------------------------------------------------------------
+
+
+--? @shortdesc Disables any resource income - useful to stop resources accruing during the opening movie
+--? @args Void
+--? @result Void
+function Resources_Disable(player)
+
+	if player == nil then
+		player = Game_GetLocalPlayer()
+	end
+	local playerID = Player_GetID(player)
+
+	-- _resourcekillers is a table which maps players to modifiers that set their income to zero.
+	if _resourcekillers == nil then
+		_resourcekillers = {}
+	end
+	
+	if _resourcekillers[playerID] == nil then
+		_resourcekillers[playerID] = {}
+		for i = RT_Begin, RT_Count do
+			_resourcekillers[playerID][i] = Modify_PlayerResourceRate(player, i, 0)
+		end
+	end
+	
+end
+
+
+--? @shortdesc Re-enables resource income. 
+--? @args Void
+--? @result Void
+function Resources_Enable(player)
+
+	if player == nil then
+		player = Game_GetLocalPlayer()
+	end
+	local playerID = Player_GetID(player)
+
+	if _resourcekillers == nil then
+		_resourcekillers = {}
+		return
+	end
+
+	if _resourcekillers[playerID] ~= nil then
+		for i = RT_Begin, RT_Count do
+			Modifier_Remove(_resourcekillers[playerID][i])
+		end
+	end
+	
+	_resourcekillers[playerID] = nil
+	
+end
+
+--? @shortdesc Checks if Resources_Disable is currently applying to a player.
+--? @args Void
+--? @result Boolean
+function Are_Resources_Disabled(player)
+
+	if player == nil then
+		player = Game_GetLocalPlayer()
+	end
+	local playerID = Player_GetID(player)
+	
+	if _resourcekillers == nil then
+		return false
+	end
+	
+	return (_resourcekillers[playerID] ~= nil)
+end
+
+--? @shortdesc Returns a string describing the Scartype
+--? @args object
+--? @result STRING
+function Debug_ScartypeToString(object)
+	
+	local typeString = ""
+
+	if (scartype(object) == ST_NIL) then
+		typeString = "ST_NIL"
+	elseif (scartype(object) == ST_BOOLEAN) then
+		typeString = "ST_BOOLEAN"
+	elseif (scartype(object) == ST_NUMBER) then
+		typeString = "ST_NUMBER"
+	elseif (scartype(object) == ST_STRING) then
+		typeString = "ST_STRING"
+	elseif (scartype(object) == ST_TABLE) then
+		typeString = "ST_TABLE"
+	elseif (scartype(object) == ST_FUNCTION) then
+		typeString = "ST_FUNCTION"
+	elseif (scartype(object) == ST_SCARPOS) then
+		typeString = "ST_SCARPOS"
+	elseif (scartype(object) == ST_EGROUP) then
+		typeString = "ST_EGROUP"
+	elseif (scartype(object) == ST_ENTITY) then
+		typeString = "ST_ENTITY"
+	elseif (scartype(object) == ST_SGROUP) then
+		typeString = "ST_SGROUP"
+	elseif (scartype(object) == ST_SQUAD) then
+		typeString = "ST_SQUAD"
+	elseif (scartype(object) == ST_TEAM) then
+		typeString = "ST_TEAM"
+	elseif (scartype(object) == ST_MARKER) then
+		typeString = "ST_MARKER"
+	elseif (scartype(object) == ST_PBG) then
+		typeString = "ST_PBG"
+	elseif (scartype(object) == ST_UNKNOWN) then
+		typeString = "ST_UNKNOWN"
+	else
+		typeString = "error: no type"
+	end
+	
+	return typeString
+	
+end

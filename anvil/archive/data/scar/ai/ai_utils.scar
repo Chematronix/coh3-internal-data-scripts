@@ -1,0 +1,155 @@
+-- Copyright 2020 SEGA Corporation, Developed by Relic Entertainment
+
+--? @shortdesc Sets the AIplayer's global tableName.parameter to given value (if table, appends/replaces pairs to existing table at tableName.parameter)
+--? @extdesc If tableName is "_G" we set the global table/parameter _G[parameter]=value.
+--? Value can be bool, string, number, table
+--? @args AIPlayer player, String tableName, String parameter, AnyType value
+function AI_SetTableParam(player, tableName, parameter, value)
+	if player == nil or tableName == nil or parameter == nil or value == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local tableName_string = tableName or "nil"
+		local parameter_string = parameter or "nil"
+
+		error("Prefab action AISetTableParam received an invalid parameter."
+			.. " player: " .. player_string
+			.. " Table Name: " .. tableName_string
+			.. " Parameter: " .. parameter_string)
+		return
+	end
+	
+	if scartype(value) == ST_BOOLEAN then
+		AI_TableSetBool(player, tableName, parameter, value)
+	elseif scartype(value)	== ST_NUMBER then
+		AI_TableSetNumber(player, tableName, parameter, value)
+	elseif scartype(value)	== ST_STRING then
+		AI_TableSetString(player, tableName, parameter, value)
+	elseif scartype(value)	== ST_TABLE then
+		AI_SetTable(player, tableName, parameter, value)
+	end
+end
+
+--? @shortdesc Returns the capture points being tracked by the military manager with the specified relation to the AIPlayer
+--? If no relation is specified will return all the capture points owned by the AIPlayer
+function AIPlayer_GetAllCapturePoints(aiPlayer, relation)
+	local egroup = EGroup_CreateIfNotFound("eg_ai_capture_points")
+	if (relation == nil) then
+		AI_GetOwnedMilitaryPointsOfType(aiPlayer, AIMTT_structure, egroup)
+	else
+		AI_GetAllMilitaryPointsOfType(aiPlayer, AIMTT_structure, relation, egroup)
+	end
+	
+	EGroup_Filter(egroup, "capture", FILTER_KEEP)
+	return egroup
+end
+
+--? @shortdesc Takes in a table and chooses the right variable for the difficulty setting. 1-4 elements. Acquires current difficulty by default.
+--? @args Player/AIPlayer aiPlayer, Table difficultyVariables[, Integer difficulty]
+--? @result Variable
+function AI_DifVar(aiPlayer, tablename, dif)
+	local player = aiPlayer
+	if scartype(aiPlayer) ~= ST_PLAYER then
+		player = AI_ConvertToSimPlayer(aiPlayer)
+	end
+	
+	if scartype(tablename) ~= ST_TABLE then
+		fatal( "AI_DifVar: invalid table")
+	end
+	if dif == nil then
+		dif = AI_GetDifficulty(player)
+	end
+	
+	return tablename[dif]	
+end
+
+
+--? @shortdesc Applies modifiers to AI players based on their difficulty level.
+function AI_SetDifficultyModifiers(player, difficultyLevel)
+	
+	local diff_mods = {
+		{	--GD_EASY
+		},
+		{	--GD_NORMAL
+		},
+		{	--GD_HARD
+		},
+		{	--GD_EXPERT
+			player_modifiers = {
+				player_rate_manpower = 1.4,
+				player_rate_munition = 1.2,
+				player_rate_fuel = 1.4,
+			},
+			ebp_modifiers = {
+				received_accuracy_modifier = 0.95,
+			},
+			sbp_modifiers = {
+				received_suppression_squad_modifier = 0.9,
+			},
+		},
+	}
+
+	__ai_difficulty_mod_ids = __ai_difficulty_mod_ids or {}
+
+	local _RemoveDifficultyModifiers = function(player)
+		if __ai_difficulty_mod_ids[Player_GetID(player)] then
+			for _, mod_id in pairs(__ai_difficulty_mod_ids[Player_GetID(player)]) do
+				Modifier_RemoveInternal(mod_id)
+			end
+			 __ai_difficulty_mod_ids[Player_GetID(player)] = nil
+		end
+	end
+
+	local _ApplyDifficultyModifier = function(player, modifier)
+		local mod_ids = Modifier_ApplyToPlayer(modifier, player, 0)
+		__ai_difficulty_mod_ids[Player_GetID(player)] = __ai_difficulty_mod_ids[Player_GetID(player)] or {}
+		for i = 1, #mod_ids do
+			table.insert(__ai_difficulty_mod_ids[Player_GetID(player)], mod_ids[i])
+		end
+	end
+
+	local _ApplyDifficultyModifierToBlueprints = function(player, blueprints, app_type, mod_type, mod_value)
+		if mod_value ~= 1 then
+			for _, blueprint in pairs(blueprints) do
+				local modifier = Modifier_Create(app_type, mod_type, MUT_Multiplication, false, mod_value, blueprint)
+				_ApplyDifficultyModifier(player, modifier)
+			end
+		end
+	end
+
+	-- Remove any existing modifiers associated with AI difficulty and apply new ones
+	_RemoveDifficultyModifiers(player)
+	if (difficultyLevel == GD_INVALID) then
+		return -- Clearing difficulty modifiers off the current player, can happen when we swap players with cheats
+	end
+	
+	local difficulty = diff_mods[difficultyLevel + 1]
+	print("SETTING DIFFICULTY MODIFIERS FOR DIFFICUTLY NUM", difficultyLevel, "FOR PLAYER", player, "returned value", difficulty)
+	if difficulty.player_modifiers then
+		for mod_type, mod_factor in pairs(difficulty.player_modifiers) do
+			_ApplyDifficultyModifier(player, Modifier_Create(MAT_Player, mod_type, MUT_Multiplication, false, mod_factor, ""))
+		end
+	end
+	if difficulty.ebp_modifiers then
+		local race = Player_GetRace(player)
+		local ebps = BP_GetEntityBlueprintsWithType_Internal({"infantry", "vehicle"}, ANY)
+		for j = #ebps, 1, -1 do 
+			if not EBP_IsOfRace(BP_GetName(ebps[j]), race) then
+				table.remove(ebps, j)
+			end
+		end
+		for mod_type, mod_factor in pairs(difficulty.ebp_modifiers) do
+			_ApplyDifficultyModifierToBlueprints(player, ebps, MAT_EntityType, mod_type, mod_factor)
+		end
+	end
+	if difficulty.sbp_modifiers then
+		local race = Player_GetRace(player)
+		local sbps = BP_GetEntityBlueprintsWithType_Internal({"infantry"}, ANY)
+		for j = #sbps, 1, -1 do 
+			if not SBP_IsOfRace(BP_GetName(sbps[j]), race) then
+				table.remove(sbps, j)
+			end
+		end
+		for mod_type, mod_factor in pairs(difficulty.sbp_modifiers) do
+			_ApplyDifficultyModifierToBlueprints(player, sbps, MAT_SquadType, mod_type, mod_factor)
+		end
+	end
+end

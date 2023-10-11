@@ -1,0 +1,4104 @@
+----------------------------------------------------------------------------------------------------------------
+-- Engine level single player scar helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+import("util.scar")
+import("Core_UnitEntry.scar")
+import("Proximity.scar")
+import("Timer.scar")
+import("Player.scar")
+import("Entity.scar")
+import("Squad.scar")
+import("Command.scar")
+import("Groups.scar")
+import("Camera.scar")
+import("Speech.scar")
+import("RuleSystem.scar")
+import("View.scar")
+import("UI.scar")
+import("SyncWeapons.scar")
+import("UID.scar")
+import("NIS.scar")
+import("Music.scar")
+import("MissionCheatMenu.scar")
+import("Blueprints.scar")
+import("designerlib.scar")
+import("Prefabs.scar")
+import("Table.scar")
+
+local originalInputEnabledFlag = Game_ConvertInputEnabledFlagEnumToInt(IEF_All)
+local originalGameVisibilityFlag = Game_ConvertVisibilityFlagEnumToInt(VF_All)
+local isCinematicMode = false
+local hasSetSkipNISCallbackInCinematicMode = false
+local exitingCinematicMode = false
+local originalAIPlayersEnabled = {}
+
+function __ScarUtil_Init()
+
+	sg_single = SGroup_CreateIfNotFound("sg_single")
+	sg_temp = SGroup_CreateIfNotFound("sg_temp")
+	sg_blah = SGroup_CreateIfNotFound("sg_blah")
+	sg_allsquads = SGroup_CreateIfNotFound("sg_allsquads")
+	
+	eg_single = EGroup_CreateIfNotFound("eg_single")
+	eg_temp = EGroup_CreateIfNotFound("eg_temp")
+	eg_blah = EGroup_CreateIfNotFound("eg_blah")
+	eg_allentities = EGroup_CreateIfNotFound("eg_allentities")
+	
+	__t_SquadIntoSGroupMapping = {}
+	
+	--Special debug boolean used to prevent any intelEvent from playing. Can only be toggled using Util_ToggleAllowIntelEvents() in -dev mode.
+	--Used to capture mission action without intelEvents triggering.
+	__g_playIntelEvents = true
+end
+
+Scar_AddInit(__ScarUtil_Init)
+
+---------------------
+-- CONSTANTS
+------------------
+DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS = {VF_ComponentSimulation, VF_ComponentTaskbar, VF_ComponentKickers, VF_ComponentChatControl}
+DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS = {VF_ComponentSimulation, VF_MiscPaused, VF_ComponentTaskbar, VF_ComponentHintPoint, VF_ComponentKickers, VF_ComponentChatControl}
+
+ALL = true
+ANY = false		-- for use in "Boolean: all" parameters
+
+HS_FURTHEST = true
+HS_CLOSEST = false
+
+-- set of offsets that are enumerated so that we don't have to memorize the numbers.
+-- numbers go CLOCKWISE around the circle.
+-- the orientation is in respect to the SGroup or object to which you desire an offeset; 
+-- here's a quick drawing for visualization
+--[[
+FRONT_LEFT  FRONT  	FRONT_RIGHT
+
+			 /\
+			/  \
+LEFT	   /_  _\        RIGHT
+			 ||
+			 ||
+			 ||
+			 
+BACK_LEFT   BACK	BACK_RIGHT
+
+]]
+OFFSET_FRONT = 0
+OFFSET_FRONT_RIGHT = 1
+OFFSET_FRONT_LEFT = 7
+OFFSET_BACK = 4
+OFFSET_BACK_RIGHT = 3
+OFFSET_BACK_LEFT = 5
+OFFSET_RIGHT = 2
+OFFSET_LEFT = 6
+
+-- use these as offsets in SGroup_IsUnderAttackFromDirection
+OFFSET_DIRECTION_FRONT = {OFFSET_FRONT_LEFT, OFFSET_FRONT, OFFSET_FRONT_RIGHT}
+OFFSET_DIRECTION_RIGHT = {OFFSET_FRONT_RIGHT, OFFSET_RIGHT, OFFSET_BACK_RIGHT}
+OFFSET_DIRECTION_BACK = {OFFSET_BACK_RIGHT, OFFSET_BACK, OFFSET_BACK_LEFT}
+OFFSET_DIRECTION_LEFT = {OFFSET_BACK_LEFT, OFFSET_LEFT, OFFSET_FRONT_LEFT}
+
+-- constants used for event priorities
+EVENT_NIS = 0
+EVENT_INTEL = 1
+EVENT_AMBIENT = 2
+
+--------------------------
+--------------------------
+
+-- Deprecate error function
+error = fatal
+
+
+
+function __DoNothing()
+	-- This function is intentionally left blank :-)
+end
+
+
+function Setup_Player(playerIndex, playerName, playerRace, team)
+
+	--if (scartype(team) ~= ST_NUMBER or team < 1 ) then
+		--fatal( "Setup_Player: team ID has to be a number starting from 1")
+	--end
+	
+	-- accept raw strings for now... convert them to LocString
+	if (scartype(playerName) == ST_STRING) then
+		playerName = LOC(playerName)
+	end
+	
+	-- get player handle
+	local playerId = World_GetPlayerAt( playerIndex )
+	
+	-- set player name and race
+	Setup_SetPlayerName(playerId, playerName)
+
+	if (scartype(playerRace) == ST_STRING) then
+		playerRace = World_GetRaceBlueprint(playerRace)
+	end
+
+	Setup_SetPlayerRace(playerId, playerRace)
+	
+	-- set player team
+	if team ~= -1 then
+		Setup_SetPlayerTeam(playerId, team)
+	end
+	
+	return playerId
+end
+
+--? @group scardoc;Util
+
+--? @shortdesc Takes in a table and chooses the right variable for the difficulty setting. 1-4 elements. Acquires current difficulty by default.
+--? @args Table difficultyVariables[, Integer difficulty]
+--? @result Variable
+function Util_DifVar(tablename, dif)
+
+	if scartype(tablename) ~= ST_TABLE then
+		fatal( "Util_DifVar: invalid table")
+	end
+	if dif == nil then
+		dif = Game_GetSPDifficulty()
+	end
+	local count = #tablename
+	if count == 0 then
+		fatal( "Util_DifVar: table.getn cannot equal zero")
+	else
+		if (dif+1) > count then
+			return tablename[count]
+		else
+			return tablename[dif+1]
+		end
+	end
+	
+end
+
+-- returns a temp egroup or sgroup containing the item (entity/squad) passed in, or nil if you couldn't follow instructions
+local __GetTempGroup = function(item)
+	local groupcaller = __GetGroupCaller(item)
+	if groupcaller then
+		local group = groupcaller.CreateIfNotFound("temp!")
+		groupcaller.ClearItems(group)
+		groupcaller.AddItem(group, item)
+		return group
+	end
+	
+end
+
+local __GarrisonNearbyUnit = function(groupcaller, sgroup, pos, radius, occupied, filter)
+
+	if pos == nil then pos = SGroup_GetPosition(sgroup) end
+	if radius == nil then radius = 9999 end
+	if occupied == nil then occupied = true end
+	
+	-- get all entities nearby
+	local grp_temp_nearby = groupcaller.Create("grp_temp_nearby")
+	groupcaller.GetItemsNearPoint(grp_temp_nearby, Util_GetPlayerOwner(sgroup), Util_GetPosition(pos), radius, OT_Ally)
+	groupcaller.GetItemsNearPoint(grp_temp_nearby, Util_GetPlayerOwner(sgroup), Util_GetPosition(pos), radius, OT_Neutral)
+
+	-- filter out any groups that the caller does not want to be occupied
+	if filter ~= nil then
+		
+		if scartype(filter) == ST_TABLE then
+			for i=1, (#filter) do
+				groupcaller.RemoveGroup(grp_temp_nearby, filter[i])
+			end
+		else
+			groupcaller.RemoveGroup(grp_temp_nearby, filter)
+		end
+	end
+	
+	-- try to find him a home
+	local closestitem
+	local closestdistance = 9999
+	print("How many items found:")
+	print(EGroup_Count(grp_temp_nearby))
+	for i = 1, groupcaller.GetSpawnedCount(grp_temp_nearby) do
+		local item = groupcaller.GetSpawnedItemAt(grp_temp_nearby, i)
+		
+		local bCanLoad = true
+		
+		-- if we don't want to consider [friendly] occupied buildings
+		if occupied == false then
+			local grp_temp_held = SGroupCaller.Create("grp_temp_held")
+			groupcaller.ItemGetSquadsHeld(item, grp_temp_held)
+			local relationship = Util_GetRelationship(sgroup, grp_temp_held)
+			SGroupCaller.Destroy(grp_temp_held)
+			if relationship == R_ALLY then
+				bCanLoad = false
+			end
+		end
+		
+		local _canLoadSgroup = function(sgid, indx, sid)
+			print(BP_GetName(Entity_GetBlueprint(item)))
+			if not groupcaller.CanItemLoadSquad(item, sid, true, false) then
+				return false
+			end
+			return true
+		end
+		
+		if not SGroup_ForEach(sgroup, _canLoadSgroup) then
+			bCanLoad = false
+		end
+		
+ 		if bCanLoad then
+			local distance = World_DistancePointToPoint(Util_GetPosition(pos), Util_GetPosition(item))
+			if distance < closestdistance then
+				closestdistance = distance
+				closestitem = item
+			end
+		end
+		
+	end
+
+	if closestitem ~= nil then	
+		local grp_temp_garrison = groupcaller.Create("grp_temp_garrison")
+		groupcaller.AddItem(grp_temp_garrison, closestitem)
+		Cmd_Garrison(sgroup, grp_temp_garrison, false, true)
+		groupcaller.Destroy(grp_temp_garrison)
+	end
+
+	groupcaller.Destroy(grp_temp_nearby)
+	return closestitem
+
+end
+
+local __GetUnitConcentration = function(player, groupcaller, bPopcapOnly, includeBPs, excludeBPs, bLeastConcentrated, marker)
+	
+	if bLeastConcentrated == nil then bLeastConcentrated = false end
+	
+	-- in this function, 'item' refers to squad or entity, based on the query being made
+	
+	if includeBPs ~= nil and excludeBPs ~= nil then
+		error("GetUnitConcentration: can't include and exclude blueprints at the same time!")
+	end
+	
+	local playersToGather = player
+	if type(player) == "table" then
+		if scartype(player) == ST_PLAYER then
+			playersToGather = { player }
+		end
+	end
+	
+	local scorefunction = function(item)
+		local score = 0
+		-- population?
+		local pop = groupcaller.GetItemPopulationScore(item)
+		score = score + pop
+		if not bPopcapOnly then
+			-- hp?
+			local health = groupcaller.GetItemHealthScore(item) / 200
+			score = score + health
+			-- resource cost?
+			local cost = groupcaller.GetItemCostScore(item) / 200
+			score = score + cost
+		end
+		return score
+	end
+	
+	local IsValidItem = function(item)
+		local valid = true
+		local bp = groupcaller.GetItemBlueprint(item)
+		local FindBP = function(bp, bptable)
+			for k,v in pairs(bptable) do
+				if bp == v then
+					return true
+				end
+			end
+		end
+		if includeBPs ~= nil then
+			valid = FindBP(bp, includeBPs)
+		end
+		if excludeBPs ~= nil then
+			valid = not FindBP(bp, excludeBPs)
+		end
+		return valid
+	end
+	
+	-- get list of items to look at
+	local grp
+	grp = groupcaller.CreateIfNotFound("GetUnitConcentration(1)")
+	groupcaller.ClearItems(grp)
+	if type(marker) == "table" then
+		if scartype(marker) == ST_MARKER then
+			marker = {marker}
+		end
+
+		for i, gatherPlayer in pairs(playersToGather) do
+			for k,v in pairs(marker) do
+				groupcaller.GetItemsNearMarker(grp, gatherPlayer, v, OT_Player)
+			end
+		end
+	else
+		for i, gatherPlayer in pairs(playersToGather) do
+			local playerItems
+			playerItems = groupcaller.GetPlayerItems(gatherPlayer)
+			groupcaller.AddGroup(grp, playerItems)
+		end
+	end
+	
+	-- prune list of items
+	local validitems = {}
+	for i = 1, groupcaller.GetSpawnedCount(grp) do
+		local item = groupcaller.GetSpawnedItemAt(grp, i)
+		if IsValidItem(item) then
+			table.insert(validitems, item)
+		end
+	end
+	
+	-- nothing to return!
+	if (#validitems) == 0 then
+		return nil
+	end
+	
+	-- get table of {item, position, selfscore}: O(N)
+	local numitems = (#validitems)
+	itemtable = {}
+	local i = 1
+	for k,v in pairs(validitems) do
+		local item = v
+		local pos = groupcaller.GetItemPosition(item)
+		local selfscore = scorefunction(item)
+		itemtable[i] = {item, pos, selfscore}
+		i = i + 1
+	end
+	
+	-- adjust scores based on proximity to other items: O(N^2)
+	for i = 1, numitems do
+		-- start with self score, and add score for being close to other items
+		local score = itemtable[i][3]
+		for j = 1, numitems do
+			if i ~= j then
+				local distance = World_DistancePointToPoint(itemtable[i][2], itemtable[j][2])
+				distance = math.max(0.5, distance)
+				if distance < 20 then
+					score = score + itemtable[j][3] / distance
+				end
+			end
+		end
+		itemtable[i][4] = score
+	end
+	
+	-- find the best item for this query: O(N)
+	local bestitem
+	local bestscore = 0
+	if bLeastConcentrated == true then bestscore = 99999 end
+	for i = 1, numitems do
+		local score = itemtable[i][4]
+		local is_best = ((score < bestscore) == bLeastConcentrated)
+		if is_best then
+			bestscore = score
+			bestitem = itemtable[i][1]
+		end
+	end
+	
+	local grpConcentrated = groupcaller.CreateIfNotFound("GetUnitConcentration(2)")
+	groupcaller.ClearItems(grpConcentrated)
+	groupcaller.AddItem(grpConcentrated, bestitem)
+	
+	return grpConcentrated
+
+end
+
+-- Check if the table is a team or not
+__isTableTeam = function(tableid)
+	local isTeam = true
+	for i = 1, (#tableid) do
+		if scartype(tableid[i]) ~= ST_PLAYER then return false end
+	end
+	return true
+end
+
+-- must be global since it's used as a callback
+__OnSpawnActionComplete = function(executer, squad, pos)
+
+	if scartype(executer) == ST_ENTITY then
+		local id = Entity_GetID(executer)
+		local groupname = __t_SquadIntoSGroupMapping[id]
+		if type(groupname) == "string" and SGroup_Exists(groupname) then
+			local sg = SGroup_FromName(groupname)
+			SGroup_Add(sg, squad)
+		end
+		-- we don't know when it's "done" spawning squads, so we can never remove the table entry
+		
+		__ApplyRoleVariation(squad)
+	end
+
+end
+
+-- special internal function that will apply an animator state
+-- to the spawned squad depending on the presets set for this particular mission
+__ApplyRoleVariation = function(sgroup)
+	
+	-- check to see if the role variation is actually a squad
+	if scartype(sgroup) == ST_SQUAD then
+		local sg = SGroup_CreateIfNotFound("_sg_rolevariation")
+		SGroup_Add(sg, sgroup)
+		sgroup = sg
+	end
+	
+	if sg ~= nil then
+		SGroup_Destroy(sg)
+	end
+
+end
+
+--? @group scardoc;Util
+
+--? @shortdesc E-mails a warning out with logfiles at the end of the game.
+--? @extdesc This is similar to fatal() only the game will continue on. Use the ErrorMessage to dump out relevent information to the scarlog
+--? @extdesc Example: bug( "This shouldn't happen, fix "..problem.here)
+--? @args ErrorMessage errormessage
+function bug(errormessage)
+	warning(errormessage)
+end
+
+
+
+
+
+--? @shortdesc Check if a position is valid or not... useful for functions that may return INVALID_POS
+--? @args Position pos
+--? @return Bool
+function Position_IsValid(pos)
+
+	if pos.x == -10000 or pos.z == -10000 then
+		return false
+	else
+		return true
+	end
+
+end
+
+
+
+--? @shortdesc Converts a 2D top down position to a 3D ScarPosition. returns Position, if y-height is nil, y-height = ground height, terrain ground or walkable
+--? @extdesc
+--? 3D ScarPositions have the x axis left to right, the z axis in to out, and the y axis down to up (y axis represents the height of the terrain).  Use this function to convert a top-down 2D position to a 3D world position.\n\n
+--? Note: (0,0) is in the center of the map.
+--? @result Position
+--? @args Real xpos, Real zpos, Real ypos
+function Util_ScarPos(xpos, zpos, ypos)
+	if ypos == nil then
+		ypos = World_GetHeightAt(xpos,zpos)
+	end
+	return World_Pos(xpos, ypos, zpos)
+end
+
+--? @shortdesc Creates a given number of entities at a location and adds them to an egroup. A PlayerID of nil will create the entities as world objects.
+--? @extdesc The skipForceConstruct parameter allows you to skip the step that normally spawns buildings fully constructed, so you can spawn buildings that self-construct.
+--? The toward parameter should be a world location that the entity should look at, NOT a direction. Leave it blank if
+--? you want the location's orientation to be used for a direction (assuming location is a marker).
+--? The useMarkerTransform parameter, if no toward is passed in, will determine if the marker's transform should be 
+--? used for the entity OR if the marker's direction should be used in which case the entity will face the same way as the marker.
+--? @args PlayerID player, EGroupID egroup, Integer blueprintID, MarkerID/Pos location, Integer numentities[, MarkerID/Pos toward, Boolean snapToGround, Boolean skipForceConstruct, Boolean useMarkerTransform]
+--? @result EGroup
+function Util_CreateEntities(playerid, egroupid, blueprintID, pos, numentities, toward, snapToGround, skipForceConstruct, useMarkerTransform)
+	
+	-- If the pos passed in is a marker, we convert it to a scarpos/marker
+	-- Using a different variable because we might still need to marker for later calcs
+	local position = Util_GetPosition(pos)
+	
+	if snapToGround == nil then
+		snapToGround = true
+	end
+	
+	if toward then
+		toward = Util_GetPosition(toward)
+	else
+		-- If we didn't pass in a toward scarpos/marker AND if pos is a marker, then we use pos' rotation vector as a toward
+		if scartype(pos) == ST_MARKER then
+			towardVec = Marker_GetDirection(pos)
+			if useMarkerTransform then
+				-- rotate 90 degrees to the left to get the direction the entity model will face with the transform of the marker
+				local newX = -towardVec.z
+				local newZ = towardVec.x
+				towardVec.x = newX
+				towardVec.z = newZ
+			end
+			toward = World_Pos(position.x, position.y, position.z) -- This initialises toward as a table scarPosition
+			toward.x = position.x + towardVec.x
+			toward.y = position.y + towardVec.y
+			toward.z = position.z + towardVec.z
+		end
+	end
+	
+	-- do some type checking
+	if (scartype(blueprintID) ~= ST_PBG) then fatal("Util_CreateEntites: Blueprint is invalid") end
+	if (scartype(position) ~= ST_SCARPOS) then fatal("Util_CreateEntites: Position/MarkerID is invalid") end
+	if (scartype(numentities) ~= ST_NUMBER) then fatal("Util_CreateEntites: Number of entities is invalid") end
+	
+	for i = 1, numentities do
+		
+		local entityid = nil
+		if playerid == nil then
+			if toward then
+				entityid = Entity_CreateENVFacing(blueprintID, position, toward, snapToGround)
+			else
+				entityid = Entity_CreateENV(blueprintID, position, snapToGround)
+			end
+		else
+			if toward then
+				entityid = Entity_CreateFacing(blueprintID, playerid, position, toward, snapToGround)		-- create the entity as a player unit
+			else
+				entityid = Entity_Create(blueprintID, playerid, position, snapToGround)		-- create the entity as a player unit
+			end
+		end
+		
+		Entity_Spawn(entityid) -- spawn the entity
+		
+		if skipForceConstruct ~= true then
+			Entity_ForceConstruct(entityid)
+		end
+		
+		if (egroupid ~= nil) then
+			if scartype(egroupid) == ST_TABLE then
+				for j = 1, #egroupid do
+					local eg = nil
+					if scartype(egroupid[j]) == ST_STRING then
+						eg = EGroup_CreateIfNotFound(egroupid[j])
+					elseif scartype(egroupid[j]) == ST_EGROUP then
+						eg = egroupid[j]
+					end
+					if eg == nil then
+						error("Entity "..BP_GetName(Entity_GetBlueprint(entityid)).." cannot be added to egroup: invalid type of egroup")
+					end
+					EGroup_Add(eg, entityid)
+				end
+			else
+				EGroup_Add(egroupid, entityid)											-- add to group
+			end
+		end
+		
+	end
+
+	return egroupid
+end
+
+--? @shortdesc High level function to create squads and give them basic orders upon spawning. Detailed explanation found in ScarUtil.scar
+--? @args PlayerID player, SGroupID/Table/String sgroup, SquadBlueprint/Table sbp, Marker/Pos/SGroup/EGroup spawn_point[, Position destination, Integer numsquads, Integer loadout, Boolean attackmove, Position dest_facing, UpgradeBlueprint/Table upgrades, Position spawn_facing, String spawntype]
+--? @extdesc
+--? PlayerID player - player who will own the squads
+--? SGroupID/Table/String sgroup - sgroup that receives the new squads. 
+--?		Can be nil if you don't need to manage the new squads or a string if you want to create a new sgroup with that name.
+--?		If a table is given, the first item will be used as the return sgroup.
+--? SquadBlueprint sbp - the blueprint for the new squads.
+--? Position location - where to spawn the squads (can be any parameter type whose position can be queried)
+--? 	SGroup - If the sgroup is a Hold Entity then the squad is spawned inside of it.
+--? 	EGroup - If the egroup is a hold entity then the squad is spawned inside of it.
+--? 	NOTE: if the hold is destroyed, or is full, or due to any other misc. failure case, then the squad is spawned at the player's map entry point.
+--? 	Pos - the squad is spawned at this location.
+--? 	Marker - the squad is spawned at the marker and facing the direciton of the marker.
+--? 
+--? Position destination - (OPTIONAL) where the squads will move to, load into, or attack
+--? 	SGroup can mean two different things, if the Sgroup is owned by the player and a hold then try to enter it.  Or if the SGroup is an enemy squad, then the spawned squad should attack move the enemy.  If neither is true, then the squad just moves to the location.
+--? 	EGroup should be treated the same as the SGroup.
+--? 	Position/Marker: the squad moves to the location.
+--? 	Sync weapon: the squad captures the sync weapon.
+--? 
+--? Integer numsquads - (OPTIONAL) how many squads to spawn
+--? Integer loadout - (OPTIONAL) max amount of units to spawn per squad
+--? Boolean attackmove - (OPTIONAL) in cases where the squads do a simple move to their destination (not attacking or loading into anything), this determines whether they attack move or not
+--? Position facing - (OPTIONAL) in cases where the squads do a simple move to their destination, this determines their facing once they reach their destination. If facing is not specified, and the squad is moving to a marker, the marker's facing is used.
+--? UpgradeBlueprint upgrades - (OPTIONAL) upgrade(s) to instantly apply to squads when they spawn
+--? Boolean useMarkerTransform -  (OPTIONAL) if no spawn_facing is passed in, this will determine if the marker's transform should be 
+--? 	used (if true) for the squad spawn OR if the marker's direction should be used in which case it will face the same way as the marker.
+--? Integer veterancy_rank - (OPTIONAL) increases the veterancy rank of the spawned squad by this amount
+--? Boolean is_silent_veterancy_promotion - (OPTIONAL) is the veterancy promotion silent (Silent means no UI/sound event will be triggered)
+--? @refs http://relicjira.thqinc.com/confluence/display/COHXP/Util_CreateSquads
+--? @result SGroup
+function Util_CreateSquads(player, sgroup, sbp, location, destination, numsquads, loadout, attackmove, dest_facing, upgrades, spawn_facing, spawntype, formationname, egroupignorelist, ignorepathfinding, useMarkerTransform, veterancy_rank, is_silent_veterancy_promotion)
+
+	if numsquads == nil then numsquads = 1 end
+	if loadout == nil then loadout = 0 end
+	local ignoreFormation = false
+	if formationname == nil then 
+		formationname = ''  
+		ignoreFormation = true
+	end
+	if ignorepathfinding == nil then ignorepathfinding = false end
+	
+	local createdTemporaryGroup = false
+	if egroupignorelist == nil then 
+		egroupignorelist = EGroup_CreateUnique() 
+		createdTemporaryGroup = true
+	end
+
+	local spawnpos
+	local spawntoward
+	local loctype = scartype(location)
+	if loctype == ST_SGROUP then
+		spawnpos = SGroup_GetPosition(location)
+		spawntoward = spawnpos
+	elseif loctype == ST_EGROUP then
+		spawnpos = EGroup_GetPosition(location)
+		spawntoward = spawnpos
+	elseif loctype == ST_MARKER then
+
+		spawnpos = Marker_GetPosition(location)
+		local dir = Marker_GetDirection(location)
+		if useMarkerTransform then
+			-- rotate 90 degrees to the left to get the direction the squad must face to have the transform of the marker
+			local newX = -dir.z
+			local newZ = dir.x
+			dir.x = newX
+			dir.z = newZ
+		end
+		spawntoward = Marker_GetPosition(location)
+		spawntoward.x = spawntoward.x + (dir.x * 100)
+		spawntoward.y = spawntoward.y + (dir.y * 100)
+		spawntoward.z = spawntoward.z + (dir.z * 100)
+		
+	elseif loctype == ST_SCARPOS then
+		spawnpos = location
+		spawntoward = spawnpos
+	else
+		fatal("Util_CreateSquads: invalid location type " .. scartype_tostring(location))
+	end
+	
+	-- allow facing override
+	if spawn_facing then
+		spawntoward = Util_GetPosition(spawn_facing)
+	end
+	
+	local GroupCanLoadSquad = function(group, squad)
+		local groupcaller = __GetGroupCaller(group)
+		for i = 1, groupcaller.GetSpawnedCount(group) do
+			local holdsquad = groupcaller.GetSpawnedItemAt(group, i)
+			if groupcaller.CanItemLoadSquad(holdsquad, squad, false, false) then
+				return true
+			end
+		end
+		return false
+	end
+	
+	
+	--Automatically create a new sgroup if received string
+	local sg_tempSgroup = nil
+	if scartype(sgroup) == ST_TABLE then
+		if(scartype(sgroup[1]) == ST_SGROUP) then
+			sg_tempSgroup = sgroup[1]
+		elseif(scartype(sgroup[1]) == ST_STRING) then
+			sg_tempSgroup = SGroup_CreateIfNotFound(sgroup[1])
+		end
+	else
+		if(scartype(sgroup) == ST_SGROUP) then
+			sg_tempSgroup = sgroup
+		elseif(scartype(sgroup) == ST_STRING) then
+			sg_tempSgroup = SGroup_CreateIfNotFound(sgroup)
+		end
+	end
+		
+	
+	for i = 1, numsquads do
+		-- spawn it
+		local bp = sbp
+		
+--~ 		local squad = Squad_CreateAndSpawnToward(bp, player, loadout, spawnpos, spawntoward)
+
+		if spawntype == nil then
+			spawntype = "none"
+			--print(spawntype)
+		end
+		local squad = Squad_CreateToward(bp, player, loadout, spawnpos, spawntoward)
+		if (not squad) then
+			return nil
+		end
+		Squad_SpawnFormationToward(
+			squad, egroupignorelist, spawnpos, spawntoward, formationname, ignoreFormation, ignorepathfinding, spawntype)
+
+
+		if squad ~= nil then
+			if veterancy_rank ~= nil and is_silent_veterancy_promotion ~= nil then
+				if veterancy_rank > 0 then
+					Squad_IncreaseVeterancyRank(squad, veterancy_rank, is_silent_veterancy_promotion)
+				end
+			end
+			
+			if(sg_tempSgroup ~= nil) then
+				SGroup_Add(sg_tempSgroup, squad)
+			end
+		
+			if scartype(sgroup) == ST_TABLE then
+				for j = 1, #sgroup do
+					local sg = nil
+					if scartype(sgroup[j]) == ST_STRING then
+						sg = SGroup_CreateIfNotFound(sgroup[j])
+					elseif scartype(sgroup[j]) == ST_SGROUP then
+						sg = sgroup[j]
+					end
+					if sg == nil then
+						error("Squad "..BP_GetName(Squad_GetBlueprint(squad)).." cannot be added to sgroup: invalid type of sgroup")
+					end
+					SGroup_Add(sg, squad)
+				end
+			end
+		
+			-- kludgy special code that will apply a special state machine to the squad entities that
+			-- will spawn during the mission and apply that role variation to the soldiers in the squad
+	--~ 		__ApplyRoleVariation(sgroup)
+		
+			local sg_util_temp = __GetTempGroup(squad)
+		
+			-- apply requested upgrades
+			if upgrades then
+				Cmd_InstantUpgrade(sg_util_temp, upgrades)
+			end
+		
+			-- load it into something (if necessary)
+			local groupcaller = __GetGroupCaller(location)
+			if groupcaller ~= nil then
+			
+				local canload = GroupCanLoadSquad(location, squad)
+				if canload == true then
+					Cmd_Garrison(sg_util_temp, location, true, true, true)
+				else
+					print("Util_CreateSquads: Squad could not be loaded into '" .. groupcaller.GetName(location) .. "'"
+						.. ". Spawning nearby instead.")
+				end
+			
+			end
+		
+			-- move it to its destination (if any)
+			if destination ~= nil then
+			
+				-- if they're not loaded, this shouldn't do anything
+				Cmd_UngarrisonSquad(sg_util_temp, destination, true)
+			
+				local groupcaller = __GetGroupCaller(destination)
+				if groupcaller ~= nil then
+					local relationship = Util_GetRelationship(player, destination)
+					if relationship == R_ALLY then
+						-- try to load into it
+						if GroupCanLoadSquad(destination, squad) then
+							Cmd_Garrison(sg_util_temp, destination, true, true)
+						else
+							destination = groupcaller.GetPosition(destination) -- just move here
+						end
+					elseif relationship == R_ENEMY then
+						-- attack enemy sgroup
+						Cmd_AttackMove(sg_util_temp, destination, true)
+					elseif relationship == nil then
+						-- check if it's an available sync weapon
+						local swid = groupcaller.GetSyncWeaponID(destination)
+						if SyncWeapon_IsOwnedByPlayer(swid, nil) then
+							Cmd_CaptureTeamWeapon(sg_util_temp, destination)
+						else
+							destination = Util_GetPosition(destination) -- just move here (syncweapon not available)
+						end
+					end
+				end
+			
+				-- convert marker to position/facing if necessary
+				if scartype(destination) == ST_MARKER then
+					if dest_facing == nil then
+						local dir = Marker_GetDirection(destination)
+						dest_facing = Marker_GetPosition(destination)
+						dest_facing.x = dest_facing.x + dir.x
+						dest_facing.y = dest_facing.y + dir.y
+						dest_facing.z = dest_facing.z + dir.z
+					end
+					destination = Marker_GetPosition(destination)
+				end
+			
+				-- fallback on a regular move (possibly attackmove)
+				if scartype(destination) == ST_SCARPOS then
+					if attackmove == true then
+						Cmd_AttackMove(sg_util_temp, destination, true)
+					else
+						Cmd_Move(sg_util_temp, destination, true, nil, dest_facing)
+					end
+				end
+			
+			end
+		
+			SGroup_Destroy(sg_util_temp)
+		end
+	end
+	
+	if (createdTemporaryGroup) then
+		EGroup_Destroy(egroupignorelist)
+	end
+	
+	return sg_tempSgroup
+
+end
+
+--? @shortdesc Sets the player owner for an entity, squad, egroup or sgroup. Also sets player owner of whatever is garrisoned inside them
+--? @args entity/squad/egroup/sgroup Object, PlayerID owner[, Boolean bApplyToSquadsHeld=true]
+--? @result Void
+function Util_SetPlayerOwner(thing, owner, bApplyToSquadsHeld)
+
+	if bApplyToSquadsHeld == nil then bApplyToSquadsHeld = true end
+	
+	tempSGroup = SGroup_CreateUnique("")
+	
+	if scartype(thing) == ST_ENTITY then
+		Entity_SetPlayerOwner(thing, owner)
+		Entity_GetSquadsHeld(thing, tempSGroup)
+	elseif scartype(thing) == ST_EGROUP then
+		EGroup_SetPlayerOwner(thing, owner)
+		EGroup_GetSquadsHeld(thing, tempSGroup)
+	elseif scartype(thing) == ST_SQUAD then
+		Squad_SetPlayerOwner(thing, owner)
+		Squad_GetSquadsHeld(thing, tempSGroup)
+	elseif scartype(thing) == ST_SGROUP then
+		SGroup_SetPlayerOwner(thing, owner)
+		SGroup_GetSquadsHeld(thing, tempSGroup)
+	else
+		fatal("Util_SetPlayerOwner: invalid type " .. scartype_tostring(thing))
+	end
+	
+	if bApplyToSquadsHeld == true then
+		local _SquadHeld = function(gid, idx, sid)
+			Squad_SetPlayerOwner(sid, owner)
+		end
+		SGroup_ForEach(tempSGroup, _SquadHeld)
+	end
+	
+	SGroup_Destroy(tempSGroup)
+	
+end
+
+--? @shortdesc Gets the relationship between two of: entity, squad, egroup, sgroup, player. for groups, the first item is used. returns R_ENEMY, R_ALLY, R_NEUTRAL, R_UNDEFINED, or nil (if world owned or invalid parameters)
+--? @args entity/squad/egroup/sgroup/player Object_1, entity/squad/egroup/sgroup/player Object_2
+--? @result Relationship
+function Util_GetRelationship(thing1, thing2)
+
+	thing1 = Util_GetPlayerOwner(thing1)
+	thing2 = Util_GetPlayerOwner(thing2)
+
+	if scartype(thing1) == ST_PLAYER and scartype(thing2) == ST_PLAYER then
+		return Player_GetRelationship(thing1, thing2)
+	else
+		return nil
+	end
+	
+end
+
+--? @shortdesc Returns a position relative to a entity/squad/egroup/sgroup/marker/position's current position and orientation.
+--? @args entity/squad/egroup/sgroup/marker/position pos, Integer offset, Real distance
+--? @result Position
+function Util_GetOffsetPosition(pos, offset, distance)
+
+	-- simplify egroup/sgroup queries to their first item
+	if scartype(pos) == ST_EGROUP then
+		pos = EGroup_GetSpawnedEntityAt(pos, 1)
+	elseif scartype(pos) == ST_SGROUP then
+		pos = SGroup_GetSpawnedSquadAt(pos, 1)
+	end
+	
+	if scartype(pos) == ST_ENTITY then
+		return Entity_GetOffsetPosition(pos, offset, distance)
+	elseif scartype(pos) == ST_SQUAD then
+		return Squad_GetOffsetPosition(pos, offset, distance)
+	elseif scartype(pos) == ST_MARKER then
+		return World_GetOffsetPosition(Marker_GetPosition(pos), Marker_GetDirection(pos), offset, distance)
+	elseif scartype(pos) == ST_SCARPOS then
+		return World_GetOffsetPosition(pos, World_Pos(0,0,1), offset, distance)
+	else
+		fatal("Util_GetOffsetPosition: unsupported type " .. scartype_tostring(pos))
+	end
+	
+end
+
+--? @shortdesc Converts a direction into a facing. 
+--? @args Position pos, Position direction
+--? @result Facing position is 10m in the direciton.
+function Util_GetFacingFromDirection(pos, direction)
+	local facing = World_Pos(pos.x, pos.y, pos.z)
+	facing.x = facing.x + direction.x * 10
+	facing.y = facing.y + direction.y * 10
+	facing.z = facing.z + direction.z * 10
+	return facing
+end
+
+--? @shortdesc Returns a relative offset position to an element
+--? @args entity/squad/egroup/sgroup/marker/position element, entity/squad/egroup/sgroup/marker/position pos
+--? @result Offset
+function Util_GetRelativeOffset(element, target)
+	
+	local _tDir = {OFFSET_BACK, OFFSET_BACK_LEFT, OFFSET_BACK_RIGHT, OFFSET_FRONT, OFFSET_FRONT_LEFT, OFFSET_FRONT_RIGHT, OFFSET_LEFT, OFFSET_RIGHT}
+	local closest = 99999999
+	local dir = nil
+	
+	for i = 1, (#_tDir) do
+		local pos = Util_GetOffsetPosition(Util_GetPosition(element), _tDir[i], 5)
+		local dist = Util_GetDistance(pos, Util_GetPosition(target))
+		if dist < closest then
+			closest = dist
+			dir = _tDir[i]
+		end
+	end
+	
+	return dir
+
+end
+
+--? @group scardoc;FOW
+
+--? @shortdesc Reveals an area the size of a given markers proximity at that markers position for a given amount of time. Pass in a duration of -1 for indefinite duration. YOU SHOULD ONLY CALL THIS ONCE FOR EACH AREA. 
+--? @extdesc This function will reveal the FOW for ALL alive players. This does not work with markers with rectangular proximity type
+--? @args MarkerID marker, Real duration
+--? @result Void
+function FOW_RevealMarker( markerid, duration )
+
+	if(markerid == nil) then
+		return;
+	end
+	
+	local radius = Marker_GetProximityRadiusOrDefault(markerid, 0)
+	if(radius == 0) then
+		return;
+	end
+	
+	local markerpos = Marker_GetPosition( markerid )
+
+	-- reveal the area
+	FOW_RevealArea( markerpos, radius, duration )
+
+end
+
+--? @shortdesc Unreveals an area the size of a given markers proximity at that markers position. YOU SHOULD ONLY CALL THIS ONCE FOR EACH AREA. 
+--? @extdesc This does not work with markers with rectangular proximity type
+--? @args MarkerID marker
+--? @result Void
+function FOW_UnRevealMarker( markerid )
+
+	if(markerid == nil) then
+		return;
+	end
+	
+	local markerpos = Marker_GetPosition( markerid )
+
+	-- reveal the area
+	FOW_UnRevealArea(markerpos)
+
+end
+
+--? @shortdesc Reveals an entity group in the FOW for alive players for a duration.
+--? @extdesc Pass in a duration of -1 for an indefinite duration.
+--? @args EGroup group, Real durationSeconds
+--? @result Void
+function FOW_RevealEGroupOnly( group, durationSeconds )
+	Modify_EnableIsVisibleInFOW( group, true, durationSeconds )
+end
+
+--? @shortdesc Reveals a squad group in the FOW for alive players for a duration.
+--? @extdesc Pass in a duration of -1 for an indefinite duration.
+--? @args SGroup group, Real durationSeconds
+--? @result Void
+function FOW_RevealSGroupOnly( group, durationSeconds )
+	Modify_EnableIsVisibleInFOW( group, true, durationSeconds )
+end
+
+--? @group scardoc;Util
+
+function _GetGroupByBP( srcID, destID, groupcaller, bp )
+	if( srcID == destID ) then
+		fatal( "Function does not support the same source and destination groups")
+	end
+	
+	local CheckBP = function( groupid, itemindex, itemid )
+		
+		if( groupcaller.GetItemBlueprint( itemid ) == bp ) then
+			-- blueprint matches, add to dest group
+			groupcaller.AddItem( destID, itemid )
+		end
+	end
+
+	groupcaller.ForEach( srcID, CheckBP )
+end
+
+--? @shortdesc Find all the squads with a given blueprint in sourcegroup and add them to destgroup.
+--? @result Void
+--? @args SGroupID sourcegroup, SGroupID destgroup, SquadBlueprint sbp
+--? @extdesc See also: SGroup_Filter()
+function Util_GetSquadsByBP( sourcegroupid, destgroupid, sbp )
+
+	_GetGroupByBPID(
+		sourcegroupid,
+		destgroupid,
+		SGroupCaller,
+		sbp
+	)
+end
+
+--? @shortdesc Find all the entities with a given blueprint in sourcegroup and add them to destgroup.
+--? @result Void
+--? @args EGroupID sourcegroup, EGroupID destgroup, EntityBlueprint ebp
+--? @extdesc See also: EGroup_Filter()
+function Util_GetEntitiesByBP( sourcegroupid, destgroupid, ebp )
+	_GetGroupByBPID(
+		sourcegroupid,
+		destgroupid,
+		EGroupCaller,
+		ebp
+	)
+end
+
+--? @shortdesc Returns trailing numbers from a string, if it exists, nil otherwise. E.G. "marker23" would return 23.
+--? @result Number
+--? @args String val
+function Util_GetTrailingNumber( val )
+
+	local trail = nil
+	for d in string.gmatch( val, "%a+(%d+)" ) do
+		trail = d
+	end
+
+	return trail
+
+end
+
+--? @shortdesc Play an events file at a given markers location
+--? @result void
+--? @args String markername, String eventfile
+function Util_MarkerFX( markername, eventfile )
+	World_FXEvent( eventfile, Marker_GetPosition( Marker_FromName( markername, "basic_marker" ) ) )
+end
+
+--? @shortdesc Play an Intel Event. These are medium priority, and will interrupt a ambient, but not an NIS.
+--? @extdesc This function should used instead of Event_Start because it handles priorities. 
+--? @result Void
+--? @args LuaFunction func, LuaFunction callback
+function Util_StartIntel( func, callback )
+
+	if(__g_playIntelEvents) then
+		
+		if _SpeechEvent_AudioMuted ~= true then
+			Sound_Play2D("mute_gameplay_all_speech")
+			_SpeechEvent_AudioMuted = true
+		end
+		
+		local completeCallback = _SpeechEvent_RestoreGameplayAudio
+		if (scartype(callback) == ST_FUNCTION) then
+			completeCallback = function()
+				callback()
+				_SpeechEvent_RestoreGameplayAudio()
+			end
+		end
+		
+		Event_StartEx(func, EVENT_INTEL, completeCallback) -- medium priority
+		
+	end
+	
+end
+
+
+function _SpeechEvent_RestoreGameplayAudio()
+
+	if Event_IsAnyRunning() == false and _SpeechEvent_AudioMuted == true then
+		Sound_Play2D("unmute_gameplay_all_speech")
+		_SpeechEvent_AudioMuted = false
+	end
+
+end
+
+
+
+
+--? @shortdesc Play Nislet Event. Starts a Nislet event, and calls back a function for post-nislet setup if the Nislet is skipped. noFadeIn stops the system from fading back into gameplay when the player skips
+--? @result Void
+--? @args LuaFunction event, LuaFunction skippedCallback, bool noFadeIn, int fadeInTime
+function Util_StartNislet(event, skippedCallback, noFadeIn, fadeInTime)	
+	if Rule_Exists(_NisletIsStarting) or Rule_Exists(_NisletIsFinished) then
+		fatal("Only one Nislet can be queued using Util_StartNislet at a time")
+	end
+
+	if(__g_playIntelEvents) then
+		Game_StartMuted(true)
+		
+		__nisletFade = noFadeIn
+		__nisletCallback = skippedCallback
+		if fadeInTime == nil then
+			fadeInTime = 3
+		end
+		__nisletFadeInTime = fadeInTime
+		
+		Rule_Add(_NisletIsStarting)
+		Event_Start( event, EVENT_NIS )
+	end
+end
+
+function _NisletIsStarting()
+	if Event_IsAnyRunning(EVENT_NIS) == true then
+		Util_SetPlayerCanSkipSequence(__nisletCallback, __nisletFade, __nisletFadeInTime)
+
+		__nisletCallback = nil
+		__nisletFade = nil
+		
+		__sequenceIsSkipped = false	
+		Rule_Add(_NisletIsFinished)
+		Rule_RemoveMe()
+	end
+end
+
+function _NisletIsFinished()
+	if Event_IsAnyRunning(EVENT_NIS) == false then
+		Util_SetPlayerUnableToSkipSequence()
+		Rule_RemoveMe()
+	end
+end
+
+--? @shortdesc Returns whether the currently running sequence has been skipped
+--? @result bool
+function Util_IsSequenceSkipped()
+	if __sequenceIsSkipped == nil then
+		__sequenceIsSkipped = false
+	end
+	return __sequenceIsSkipped
+end
+
+--? @shortdesc Sets it so that a player can skip a scripted sequence. When the skip key is pressed, calls back the given function as a post-sequence setup. noFadeIn stops the system from fading back into gameplay when finished. Call Util_SetPlayerUnableToSkipSequence() when the sequence is finished to disable
+--? @result Void
+--? @args LuaFunction event, LuaFunction skippedCallback, bool noFadeIn[, int fadeInTime]
+function Util_SetPlayerCanSkipSequence(skippedCallback, noFadeIn, fadeInTime)
+	__nisletSkippedCallback = skippedCallback
+	__playerCanSkipNislet = true
+	__nisletSkippedFade = noFadeIn
+	if fadeInTime == nil then
+		fadeInTime = 3
+	end
+	__nisletSkippedFadeInTime = fadeInTime
+end
+
+function skipNIS()
+	if __playerCanSkipNislet then 
+		Util_SetPlayerUnableToSkipSequence()
+		__sequenceIsSkipped = true
+		__playerCanSkipNislet = false
+		Rule_Remove(_NisletIsFinished)
+		
+		Game_FadeToBlack(FADE_OUT, 0) 
+		Game_EndSubTextFade()
+		Game_EndTextTitleFade()
+		Subtitle_EndAllSpeech()
+		
+		if __nisletSkippedCallback ~= nil then
+			Rule_AddOneShot(__CallNisletSkippedCallback, 0.1)
+		end		
+		
+		Rule_AddOneShot(__ResetSkippedFlag, 0.1)
+		Rule_AddOneShot(_startNislet_setCam, 0.1)
+		if __nisletSkippedFade ~= true then
+			Rule_AddOneShot(_startNislet_fadeIn, __nisletSkippedFadeInTime)
+		end
+	end
+end
+
+function __CallNisletSkippedCallback()
+	__nisletSkippedCallback()
+	__nisletSkippedCallback = nil
+end
+
+--? @shortdesc Disables Util_SetPlayerCanSkipSequence
+--? @result Void
+--? @args LuaFunction event, LuaFunction skippedCallback, bool noFadeIn
+function Util_SetPlayerUnableToSkipSequence()
+	__playerCanSkipNislet = false
+end
+
+function __ResetSkippedFlag()
+	__sequenceIsSkipped = false
+end
+
+function _startNislet_setCam()
+	Camera_ResetToDefault()
+end
+
+function _startNislet_fadeIn()
+	Game_FadeToBlack(FADE_IN, 0.5)
+	Util_NormalMode()
+end
+
+--? @shortdesc Play a quick, one-line Intel event.  These are medium priority, and will interrupt ambient, but not an NIS.
+--? @extdesc Use this when playing a single line.  For multi-line events, use Util_StartIntel 
+--? @result Void
+--? @args String actor, LocString speech
+function Util_StartQuickIntel( actor, speech )
+	local event = {}
+	
+	event.quickIntel = function()
+		CTRL.Actor_PlaySpeech(actor, speech)
+		CTRL.WAIT()
+	end
+	
+	if(__g_playIntelEvents) then
+		Event_Start( event.quickIntel, EVENT_INTEL ) 			-- medium priority
+	end
+--	Game_StartIntel(func, __Private_Util_DoNothing)
+end
+
+--? @shortdesc Play a movie.
+--? @extdesc Plays a movie file after fading out the screen. Fades back in and triggers onComplete once it ends. If fadeIn < 0, does not face back in once complete.
+--? @extdesc If onCompleteAfterMovie is true, the onComplete function will play as soon as the movie is over, instead of after the fade-in
+--? @result Void
+--? @args String name[, Integer fadeOut, Integer fadeIn, LuaFunction onComplete, Integer delay, Boolean onCompleteAfterMovie]
+function Util_PlayMovie( name, fadeOut, fadeIn, onComplete, delay, onCompleteImmediate )
+	
+	if(delay == nil) then delay = 0 end
+	if(fadeOut == nil) then fadeOut = 0 end
+	if(fadeIn == nil) then fadeIn = 1.5 end
+	if(onCompleteImmediate == nil) then onCompleteImmediate = false end
+	
+	__sitRep_name = name
+	__sitRep_fadeOut = fadeOut
+	__sitRep_fadeIn = fadeIn
+	__sitRep_onComplete = onComplete
+	__sitRep_onCompleteImmediate = onCompleteImmediate
+	__sitRep_delay = delay
+	
+	Util_StartNIS(_sitRepEvent_Internal)
+	
+end
+
+local function _sitRepEventSkipNIS_Internal()
+	Event_Skip()
+end
+
+function _sitRepEvent_Internal()
+
+	Game_FadeToBlack(FADE_OUT, __sitRep_fadeOut)
+	
+	if(__sitRep_fadeOut >0) then
+		CTRL.Event_Delay(__sitRep_fadeOut)
+		CTRL.WAIT()
+	end
+	
+	Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS, _sitRepEventSkipNIS_Internal)
+	
+	CTRL.SitRep_PlayMovie(__sitRep_name)
+	CTRL.WAIT()
+	
+	Util_ExitCinematicMode()
+	
+	if (__sitRep_onComplete ~= nil and __sitRep_onCompleteImmediate == true) then Rule_AddOneShot(__sitRep_onComplete, __sitRep_delay) end
+	
+	if scartype(__sitRep_fadeIn) == ST_NUMBER 
+	  and (__sitRep_fadeIn > 0) then
+		CTRL.Game_FadeToBlack(FADE_IN, __sitRep_fadeIn)
+		CTRL.WAIT()
+		Game_FadeToBlack(FADE_IN, 0)	-- safety, this fixes the "not properly fading back in if skipped" bug
+	else
+		Game_FadeToBlack(FADE_OUT, 0)	-- safety, this fixes the "not properly fading back in if skipped" bug
+	end
+	
+	if (__sitRep_onComplete ~= nil and __sitRep_onCompleteImmediate == false) then Rule_AddOneShot(__sitRep_onComplete, __sitRep_delay) end
+	
+
+end
+
+--? @shortdesc Play a Speech Ambient. These are the lowest priority, and will be bumped by Intel Events or NIS's.
+--? @extdesc This function should used instead of Event_Start because it handles priorities.
+--? @result Void
+--? @args LuaFunction func
+function Util_StartAmbient( func )
+	if(__g_playIntelEvents) then
+		Event_Start( func, EVENT_AMBIENT ) 			-- low priotity
+	end
+end
+
+--? @shortdesc Auto-generate an Ambient Event. These are Low priority, and will hopefully interrupt nothing.
+--? @extdesc Takes a table of Actors and LOC numbers
+--? @result Void
+--? @args Table intelEventTable
+function Util_AutoAmbient(t_events)
+
+	if scartype(t_events) ~= ST_TABLE then
+		fatal("invalid data for Util_AutoAmbient, parameter 1 must be a table")
+	end
+	
+	local count = (#t_events)
+	
+	if count == 0 then
+		
+		fatal("invalid number of speech lines for Util_AutoIntel, count = "..count)
+		
+	else
+		
+		local Intel = function()
+			
+			for k,v in pairs(t_events) do 
+				if k~=1 then
+					CTRL.Event_Delay(0.3)
+					CTRL.WAIT()
+				end
+
+				-- debug step - until LOCstring ID's are in place - deg
+				if scartype(v[2]) == 20 then
+					CTRL.Game_TextTitleFade( v[2], .5, 5, .5 )
+					CTRL.WAIT()
+				else
+					CTRL.Actor_PlaySpeechWithoutPortrait( v[1], v[2])
+					CTRL.WAIT()
+				end
+			end
+			
+		end
+		
+		if(__g_playIntelEvents) then
+			Event_Start( Intel, 3 ) -- medium priority
+		end
+		
+	end
+	
+end
+
+--? @shortdesc Auto-generate an Intel Event. These are medium priority, and will interrupt ambient, but not an NIS.
+--? @extdesc Takes a table of parameters defining speaker(s) and line(s)
+--? @result Void
+--? @args Table intelEventTable
+function Util_AutoIntel(t_events)
+
+	if scartype(t_events) ~= ST_TABLE then
+		fatal("invalid data for Util_AutoIntel, parameter 1 must be a table")
+	end
+	
+	local count = (#t_events[1])
+	
+	if count == 0 then
+		
+		fatal("invalid number of speech lines for Util_AutoIntel, count = "..count)
+		
+	else
+		
+		local Intel = function()
+			
+			for k,v in pairs(t_events) do 
+				if k~=1 then
+					CTRL.Event_Delay(0.3)
+					CTRL.WAIT()
+				end
+				
+				-- debug step - until LOCstring ID's are in place - deg
+				if scartype(v[2]) == 20 then
+					CTRL.Game_TextTitleFade( v[2], .5, 5, .5 )
+					CTRL.WAIT()
+				else
+					CTRL.Actor_PlaySpeech( v[1], v[2])
+					CTRL.WAIT()
+				end
+			end
+			
+		end
+		
+		if(__g_playIntelEvents) then
+			Event_Start( Intel, 1 ) -- medium priority
+		end
+		
+	end
+	
+end
+
+NISLET_BLACK2GAME	= 1 -- starts in black and fades up, ends in gamplay
+NISLET_GAME2GAME 	= 2 -- transitions from game play to letterbox and backto gameplay
+NISLET_GAME2BLACK	= 3 -- starts in gameplay and ends in black
+NISLET_GAME2LETTER	= 4 -- starts in gameplay and ends in letterbox mode
+NISLET_TIME 		= 1 -- use seconds to wait on camera movements
+NISLET_VO			= 2 -- use voice to wait on camera movements
+
+--? @shortdesc Auto-generate an NISlet Event, a simple NIS meant to convey mission location. These are high priority, and will interrupt ambient and Intel Events.
+--? @extdesc Takes an NISLET type and a table of parameters defining speaker(s) and line(s)
+--? NISLET_BLACK2GAME	= 1 -- starts in black and fades up, ends in gamplay
+--? NISLET_GAME2GAME 	= 2 -- transitions from game play to letterbox and backto gameplay
+--? NISLET_GAME2BLACK	= 3 -- starts in gameplay and ends in black
+--? NISLET_GAME2LETTER	= 4 -- starts in gameplay and ends in letterbox mode (for transition to sitrep)
+--? NISLET_TIME 		= 1 -- use seconds to wait on camera movements
+--? NISLET_VO			= 2 -- use voice to wait on camera movements
+--?	t_eventes.nislet_start = {
+--?		{camPos = pos1, waitType = NISLET_TIME, waitValue = 5},
+--?		{camPos = pos2, waitType = NISLET_VO, waitValue = {ACTOR.GenericAlly, 000000}},
+--?	}
+--? @result Void
+--? @args Integer nisletType, Table intelEventTable, [boolean bFOWvisible]
+function Util_AutoNISlet(nisletType, eventTable, bFOWvisible)
+
+	if scartype(eventTable) ~= ST_TABLE then
+		fatal("invalid data for Util_AutoIntel, parameter 1 must be a table")
+	end
+	
+	local count = (#eventTable)
+	
+	if count == 0 then
+		
+		fatal("invalid number of speech lines for Util_AutoNislet, count = "..count)
+		
+	else
+		if bFOWvisible == nil then
+			bFOWvisible = false
+		end
+		
+		local NISStart = function(int)
+			if int == 1 then
+				FOW_Enable(bFOWvisible)
+				Game_FadeToBlack(false, 1) -- assumes already letterboxed
+			else
+				FOW_Enable(bFOWvisible)
+				Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS) -- assumes no fade to black
+			end
+		end
+		
+		local NISEnd = function(int)
+			if int == 3 then 
+				FOW_Enable(true)
+				Game_FadeToBlack(true, 1) -- assumes already letterboxed
+			elseif int == 4 then
+				FOW_Enable(true) -- assumes no fade to black and letterbox already enabled
+			else 
+				FOW_Enable(true)
+				Util_ExitCinematicMode() -- assumes no fade to black
+			end
+		end
+		
+		local NISlet = function()
+			
+			Camera_ResetToDefault()
+			CTRL.Event_Delay(1)
+				NISStart(nisletType)
+			CTRL.WAIT()
+			
+			for k,v in pairs(eventTable) do 
+				if k~=1 then
+					
+					CTRL.Event_Delay(0.3)
+					CTRL.WAIT()
+				end
+				
+				-- brw 08/09/07 currently leaving this as a bug since it's been this way since the
+				-- start, will change later...next project?
+				-- should be scartype(v.camPos) == ST_SGROUP
+				if v.camPos == ST_SGROUP then
+					Camera_Follow(v.camPos)
+				elseif v.camPos == false then
+					-- don't move the camera
+				else
+					Camera_MoveTo(Util_GetPosition(v.camPos), true, 0.5)
+				end
+				
+				if v.waitType == 1 then
+					CTRL.Event_Delay(v.waitValue)
+					CTRL.WAIT()
+				elseif v.waitType == 2 then
+					
+					-- debug step - until LOCstring ID's are in place - deg
+					if scartype(v.waitValue[2]) == 20 then
+						CTRL.Game_TextTitleFade( v.waitValue[2], .5, 5, .5 )
+						CTRL.WAIT()
+					else
+						CTRL.Actor_PlaySpeech( v.waitValue[1], v.waitValue[2])
+						CTRL.WAIT()
+					end
+					
+				end
+				
+			end
+			
+			CTRL.Event_Delay(1)
+				NISEnd(nisletType)
+			CTRL.WAIT()
+			
+		end
+		
+		if(__g_playIntelEvents) then
+			Event_Start( NISlet, 0 ) -- high priority
+		end
+		
+	end
+	
+end
+
+--? @shortdesc Play the mission title fade.
+--? @result Void
+--? @args LocString title[, Int time_fade_in, Int lifetime, Int time_fade_out]
+function Util_MissionTitle( title, fadein, lifetime, fadout )
+	
+	-- NOTE: this function could easily be made to wait for 2 seconds if designers want to wait on it
+	local gameTitle = function()
+		-- params: loc_str, fade_in_secs, lifetime_secs, fade_out_secs
+		if fadein == nil then
+			fadein = .5
+		end
+		if lifetime == nil then
+			lifetime = 3
+		end
+		if fadeout == nil then
+			fadeout = 2
+		end
+		CTRL.Game_TextTitleFade( title, fadein, lifetime, fadeout )
+		CTRL.WAIT()
+	end
+	
+	-- we will try it as an Intel Event first
+	-- the IE's and NIS's have different sets of priorities
+	Util_StartIntel(gameTitle)
+end
+
+--? @shortdesc Library function to trigger NIS event under a certain sets of conditions.  NOTE: if checking against a marker DO NOT specify a range.  The range of the marker set in the WorldBuilder will be used.
+--? @extdesc triggering event when one of the player's squads come near a particular SGroup, EGroup, Marker, or Position and that squad is onscreen, and that squad is not in combat.
+--? @extdesc 6 arguments when using marker, 7 arguments when using position, egroup and sgroup with the additional range value
+--? @extdesc non_combat set to TRUE means the squad cannot be in combat if the event is to be triggered.
+--? @extdesc onscreen_only set to TRUE means the squad must be onscreen if the event is to be triggered.
+--? @result Void
+--? @args PlayerID playerid, Marker/EGroup/SGroup/ScarPos position, Int range, LuaFunction func, Boolean non_combat, Boolean onscreen_only, Int onscreen_duration
+
+function Util_TriggerEvent(...) 
+	local arg = {...}
+
+	-- grab the arguments
+	local playerid = arg[1]
+	local marker = nil
+	local pos
+	local egroupid
+	local sgroupid
+	local range
+	local i
+	
+	if ( scartype( playerid ) ~= ST_PLAYER ) then fatal("playerid is not a valid player ID") 				end
+
+	if ((#arg) == 6) then
+	
+		local marker = arg[2]
+		
+		if ( scartype( marker ) ~= ST_MARKER ) then fatal("MarkerID is invalid") end
+		
+		marker = pos
+		pos = nil
+		
+		i = 2
+		
+	elseif ((#arg) == 7) then
+		
+		local target = arg[2]
+		
+		-- Check what type of target is passed in
+		if (scartype(target) == ST_SCARPOS) then
+			pos = target
+		elseif (scartype(target) == ST_SGROUP) then
+			sgroupid = target
+		elseif (scartype(target) == ST_EGROUP) then
+			egroupid = target
+		else
+			fatal("target is neither ScarPos, SGroupID or EGroupID")
+		end
+
+		-- Find range
+		range = arg[3]
+	
+		if (scartype(range) ~= ST_NUMBER) then fatal("Range is invalid") end
+		
+		i = 3
+	else
+		fatal("Wrong number of arguments - should be 6 if using a marker, 7 if using a position, sgroup or egroup")
+	end
+
+	-- get the rest of the parameters
+	local event = arg[i+1]
+	local non_combat = arg[i+2]
+	local onscreen_only = arg[i+3]
+	local onscreen_duration = arg[i+4]
+	
+	-- do final parameter check
+	if ( scartype( event ) 				~= ST_FUNCTION ) 	then fatal("event is not a valid funciton") 					end
+	if ( scartype( non_combat ) 		~= ST_BOOLEAN ) 	then fatal("non_combat is not a valid boolean flag") 			end
+	if ( scartype( onscreen_only ) 		~= ST_BOOLEAN ) 	then fatal("on_screen_only is not a valid boolean flag") 		end
+	if ( scartype( onscreen_duration ) 	~= ST_NUMBER ) 		then fatal("on_screen_duration is not a valid boolean flag") 	end
+	
+	-- onscreen_duration is not used if onscreen_only is not set
+	if ( onscreen_only == false ) then
+		onscreen_duration = 0
+	end
+
+	------------------
+	-- the rule to run
+	function Rule_TriggerEvent()
+		print( onscreen_duration )
+		
+		local success = false
+		
+		-- process sgroup target
+		if (sgroupid ~= nil) then
+		
+			if ( SGroup_CountSpawned( sgroupid ) == 0 ) then
+				Rule_RemoveMe()
+				return
+			end
+			
+			squad = SGroup_GetSpawnedSquadAt( sgroupid, 1 )
+			
+			if ( Prox_PlayerSquadsInProximityOfSquads( playerid, sgroupid, range, ANY, squad ) and
+			     ( onscreen_only == false or Misc_IsSquadOnScreen( SGroup_GetSpawnedSquadAt( sgroupid, 1 ), 1.0 ) ) 
+			   ) then
+			   
+			   success = true
+			   
+			   -- if the player squads needs to be non-combat, check for this
+				if ( non_combat ) then
+					local temp_sgroup = SGroup_Create( "temp_sgroup" )
+					World_GetSquadsNearPoint( playerid, temp_sgroup, SGroup_GetPosition( sgroupid ), range, OT_Ally )
+					
+					if ( SGroup_IsUnderAttack( temp_sgroup, ANY, 2.0 ) ) then
+						success = false
+					end
+					
+					SGroup_Destroy( temp_sgroup )
+				end
+			end
+		-- process egroup target
+		elseif (egroupid ~= nil) then
+			if ( Prox_PlayerSquadsInProximityOfEntities( playerid, egroupid, range, ANY ) and
+				 ( onscreen_only == false or Misc_IsEntityOnScreen( EGroup_GetSpawnedEntityAt( egroupid, 1 ), 1.0 ) ) 
+			   ) then
+			   
+			   success = true
+			   
+			   -- if the player squads needs to be non-combat, check for this
+				if ( non_combat ) then
+					local temp_sgroup = SGroup_Create( "temp_sgroup" )
+					World_GetSquadsNearPoint( playerid, temp_sgroup, EGroup_GetPosition( egroupid ), range, OT_Ally )
+					
+					if ( SGroup_IsUnderAttack( temp_sgroup, ANY, 2.0 ) ) then
+						success = false
+					end
+					
+					SGroup_Destroy( temp_sgroup )
+				end
+			end
+		-- process marker target
+		elseif (marker ~= nil) then
+			if ( Prox_IsPlayerNearMarker( playerid, marker, ANY ) and
+				 ( onscreen_only == false or Misc_IsPosOnScreen( pos, 1.0 ) ) 
+			   ) then
+			   success = true
+			   
+			   -- if the player squads needs to be non-combat, check for this
+				if ( non_combat ) then
+					local temp_sgroup = SGroup_Create( "temp_sgroup" )
+					World_GetSquadsNearMarker( playerid, temp_sgroup, marker, OT_Ally )
+					
+					if ( SGroup_IsUnderAttack( temp_sgroup, ANY, 2.0 ) ) then
+						success = false
+					end
+					
+					SGroup_Destroy( temp_sgroup )
+				end
+			end
+		-- finally process positional target
+		elseif (pos ~= nil) then
+			if ( Prox_IsPlayerNearMarker( playerid, pos, range, ANY ) and
+				 ( onscreen_only == false or Misc_IsPosOnScreen( pos, 1.0 ) ) 
+			   ) then
+			   success = true
+			   
+			   -- if the player squads needs to be non-combat, check for this
+				if ( non_combat ) then
+					local temp_sgroup = SGroup_Create( "temp_sgroup" )
+					World_GetSquadsNearPoint( playerid, temp_sgroup, pos, range, OT_Ally )
+					
+					if ( SGroup_IsUnderAttack( temp_sgroup, ANY, 2.0 ) ) then
+						success = false
+					end
+					
+					SGroup_Destroy( temp_sgroup )
+				end
+			end
+		end
+		
+		if ( success ) then
+						
+			-- count down the duration if successful
+			onscreen_duration = onscreen_duration - 1
+					
+			if ( onscreen_duration <= 0 ) then
+				Util_StartNIS(event)
+			end
+		else
+			-- failed to keep the target on screen, will quit
+			onscreen_duration = 0
+		end
+			
+		--
+		if ( onscreen_duration <= 0 ) then
+			Rule_RemoveMe()
+		end
+		
+	end
+	
+	Rule_AddInterval( Rule_TriggerEvent, 1 )
+end
+
+--? @shortdesc Try to garrison a loadable building within radius that is closer to the first squad of the sgroup than enemy
+--? @extdesc Returns the entity id of the building that the squad try to garrison into. Return nil if nothing is found
+--? @extdesc The squad suppression would be resetted before fallling back so that they would not succumb to pinned state
+--? @result EntityID
+--? @args SGroupID sgroupid, Int radius
+function Util_FallBackToGarrisonBuilding( sgroupid, radius )
+
+	-- check if the sgroup is empty or not
+	if ( SGroup_CountSpawned( sgroupid ) == 0 ) then
+		
+		print("*** WARNING in Util_FallBackToGarrisonBuilding: SGroup is empty ***")
+		
+	else
+		-- get the first squad of the sgroup 
+		local squad = SGroup_GetSpawnedSquadAt( sgroupid, 1 )
+		
+		-- get the sgroup owner player
+		local player = Util_GetPlayerOwner( sgroupid )
+		
+		-- get sgroup centre position
+		local centre = SGroup_GetPosition( sgroupid )
+		
+		-- find all loadable buildings within the radius
+		local eg = EGroup_Create( "temp" )
+		World_GetEntitiesNearPoint( player, eg, centre, radius, OT_Neutral )
+		World_GetEntitiesNearPoint( player, eg, centre, radius, OT_Ally )
+		
+		--print( "Entities found: "..EGroup_Count( eg ) )
+		
+		local building = nil
+		
+		local CheckEntity = function( groupid, itemindex, itemid )
+			
+			-- skip entities that are not loadable
+			if ( Entity_CanLoadSquad( itemid, squad, true, false ) == false ) then
+				--print( "Entity cannot load squad. Next!" )
+				return false
+			end
+			
+			local sg = SGroup_Create( "temp" )
+			
+			-- find the number of enemies near the building
+			local numEnemies = World_GetSquadsNearPoint( player, sg, Entity_GetPosition( itemid ), radius, OT_Enemy )
+			
+			SGroup_Destroy( sg )		
+			
+			-- If the building doesn't have enemy near it, then the squad is save to load
+			if ( numEnemies == 0 ) then
+				
+				-- print( "No enemy found nearby. Garrisoning..." )
+				
+				-- save the building EntityID
+				building = itemid 
+				
+				local eg_building = EGroup_Create( "temp2" )
+				EGroup_Add( eg_building, itemid )
+				
+				-- make sure the squad is not pinned right now
+				SGroup_SetSuppression( sgroupid, 0 )
+				
+				-- garrison this building here
+				Cmd_Garrison( sgroupid, eg_building, false )
+				
+				EGroup_Destroy( eg_building )
+				
+				-- do not continue the for loop
+				return true
+			end
+			
+			-- print( "Enemy nearby the building. Next!" )
+			
+			return false
+		end
+		
+		EGroup_ForEach( eg, CheckEntity )
+		
+		EGroup_Destroy( eg )
+		
+		return building
+		
+	end
+	
+end
+
+--? @shortdesc Reloads the running scar script. Current running rules would also be updated to the redefined functioin.
+function Util_ReloadScript()
+
+	-- reload scar script and refresh the rule systems
+	Scar_ReloadScripts()
+	Rule_Refresh()
+
+end
+
+--? @shortdesc Play sound on the centermost squad in the sgroup
+--? @result Integer
+--? @args String soundpathname, SGroupID/Squad sgroupid
+function Sound_PlayOnSquad( soundpathname, sgroupid)
+	
+	local squad = nil
+	
+	if scartype(sgroupid) == ST_SQUAD then
+		squad = sgroupid
+	elseif scartype(sgroupid) == ST_SGROUP then
+		if SGroup_CountSpawned( sgroupid ) <= 0 then
+			return
+		end
+
+		local centerPos = Util_GetPosition(sgroupid)
+		squad = SGroup_GetClosestSquad( sgroupid, centerPos )
+	else
+		fatal("Invalid type used in Sound_PlayOnSquad(). Must be sgroupid or squad.")
+	end
+
+	if Squad_Count( squad ) <= 0 then
+		return
+	end
+	
+	local entity = Squad_EntityAt( squad, 0 )
+	
+	return Sound_Play3D( soundpathname, entity )
+	
+end
+
+
+FADE_OUT = true
+FADE_IN = false
+
+--? @shortdesc Fades the screen to black - FADE_OUT to fade to black, FADE_IN to fade back in
+--? @result Void
+--? @args Bool direction, Real length
+function Game_FadeToBlack(direction, length)
+	
+	if (direction == FADE_OUT) then
+		UI_ScreenFade(0, 0, 0, 1, length, true)
+	elseif (direction == FADE_IN) then
+		UI_ScreenFade(0, 0, 0, 0, length, true)
+	end
+
+end
+
+--? @group scardoc;World
+
+--? @shortdesc Returns the closest object from the table of marker/pos/egroup/sgroup to the closest marker/pos/egroup/sgroup specified
+--? @extdesc The table may mix together objects of different types.
+--? @args Variable var, LuaTable/SGroup/EGroup items
+--? @result Variable
+function World_GetClosest(var, items)
+	
+	local dist
+	local closest = 99999
+	local result
+
+	if scartype(items) == ST_TABLE then
+		for i=1, (#items) do 
+			
+			if (scartype(items[i]) ~= ST_EGROUP and scartype(items[i]) ~= ST_SGROUP)
+			or (scartype(items[i]) == ST_EGROUP and EGroup_IsEmpty(items[i]) == false)
+			or (scartype(items[i]) == ST_SGROUP and SGroup_IsEmpty(items[i]) == false)
+			or (scartype(items[i]) == ST_ENTITY and Entity_IsAlive(items[i]) == false) then
+			
+				dist = World_DistancePointToPoint(Util_GetPosition(var), Util_GetPosition(items[i]))
+				if dist < closest then
+					closest = dist
+					result = items[i]
+				end
+			end
+			
+		end
+	elseif scartype(items) == ST_SGROUP then
+		local _findClosest = function(gid, idx, sid)
+			dist = World_DistancePointToPoint(Util_GetPosition(var), Util_GetPosition(sid))
+			if dist < closest then
+				closest = dist
+				result = sid
+			end
+		end
+		
+		SGroup_ForEach(items, _findClosest)
+	elseif scartype(items) == ST_EGROUP then
+		local _findClosest = function(gid, idx, eid)
+			dist = World_DistancePointToPoint(Util_GetPosition(var), Util_GetPosition(eid))
+			if dist < closest then
+				closest = dist
+				result = eid
+			end
+		end
+		
+		EGroup_ForEach(items, _findClosest)
+	end
+	
+	return result
+
+end
+
+--? @shortdesc Returns the furthest object from the table of marker/pos/egroup/sgroup to the furthest marker/pos/egroup/sgroup specified.
+--? @extdesc The table may mix together objects of different types.
+--? @args Variable var, LuaTable items
+--? @result Variable
+function World_GetFurthest(var, items)
+	
+	local dist
+	local furthest = 0
+	local result
+
+	for i=1, (#items) do 
+		dist = World_DistancePointToPoint(Util_GetPosition(var), Util_GetPosition(items[i]))
+		if dist > furthest then
+			furthest = dist
+			result = items[i]
+		end
+	end
+	
+	return result
+
+end
+
+--? @shortdesc Returns whether ANY or ALL of the squads in the group are owned by the world (i.e. neutral)
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function World_OwnsSGroup(sgroup, all)
+
+	local _CheckSquad = function(gid, idx, sid)
+		return World_OwnsSquad(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+--? @shortdesc Returns whether ANY or ALL of the entities in the group are owned by the world (i.e. neutral)
+--? @args EGroupID egroup, Boolean all
+--? @result Boolean
+function World_OwnsEGroup(egroup, all)
+
+	local _CheckEntity = function(gid, idx, eid)
+		return World_OwnsEntity(eid)
+	end
+	
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckEntity)
+	
+end
+
+--? @shortdesc Kill off a specific player's dead bodies (enter ALL to clean them all up)
+--? @result Void
+--? @args PlayerID player
+function World_CleanUpTheDead(player)
+
+	local _CleanUpPlayerDeadBodies = function (gid, idx, eid)
+		if (Entity_IsBuilding(eid) == false) and (Entity_IsAlive(eid) == 0 or Entity_GetHealth(eid) == 0) then
+			Entity_Destroy(eid)
+		end
+	end
+	
+	if (player == ALL) then
+		for n = 1, World_GetPlayerCount() do
+			local deadbodiestempgroup = Player_GetEntities(World_GetPlayerAt(n))
+			EGroup_ForEach(deadbodiestempgroup, _CleanUpPlayerDeadBodies)
+			EGroup_Destroy(deadbodiestempgroup)
+		end
+	else
+		local deadbodiestempgroup = Player_GetEntities(player)
+		EGroup_ForEach(deadbodiestempgroup, _CleanUpPlayerDeadBodies)
+		EGroup_Destroy(deadbodiestempgroup)
+	end
+	
+end
+
+--? @shortdesc Kill off a specific player's dead bodies (enter ALL to clean them all up) in a marker radius
+--? @result Void
+--? @args PlayerID player, MarkerID marker
+function Marker_CleanUpTheDead(player, marker)
+	
+	local _CleanUpPlayerDeadBodies = function (gid, idx, eid)
+		if (Entity_IsBuilding(eid) == false) and (Entity_IsAlive(eid) == 0 or Entity_GetHealth(eid) == 0) then
+			Entity_Destroy(eid)
+		end
+	end
+	
+	if (player == ALL) then
+		for n = 1, World_GetPlayerCount() do
+			local __theDead = EGroup_CreateIfNotFound("__theDead")
+			Player_GetAllEntitiesNearMarker(World_GetPlayerAt(n), __theDead, marker)
+			
+			EGroup_ForEach(__theDead, _CleanUpPlayerDeadBodies)
+			EGroup_Destroy(__theDead)
+		end
+	else
+		local __theDead = EGroup_CreateIfNotFound("__theDead")
+		Player_GetAllEntitiesNearMarker(player, __theDead, marker)
+		
+		EGroup_ForEach(__theDead, _CleanUpPlayerDeadBodies)
+		EGroup_Destroy(__theDead)
+	end
+	
+end
+
+--? @group scardoc;Util
+
+--? @shortdesc Returns true if given entity/marker/pos/egroup/sgroup/squad has a position; if false, Util_GetPosition will fail.
+--? @args Variable var
+--? @result Boolean
+function Util_HasPosition(variable)
+
+	if variable == nil then
+		return false
+	end
+	
+	local type = scartype(variable)
+	
+	if type == ST_ENTITY then
+		return true
+	elseif type == ST_MARKER then
+		return true
+	elseif type == ST_SCARPOS then
+		return true
+	elseif type == ST_EGROUP then
+		return EGroup_CountSpawned(variable) > 0
+	elseif type == ST_SGROUP then
+		return SGroup_CountSpawned(variable) > 0
+	elseif type == ST_SQUAD then
+		return true
+	else
+		return false
+	end
+end
+
+--? @shortdesc Returns if the random number generated succeeds the comparison with the supplied value
+--? @args Int min, Int max, Int comparisonValue, Enum comparisonOperator
+--? @result Boolean
+function Util_GetCompareRandomNumberGenerated(min, max, comparisonValue, comparisonOperator)
+	
+	local randNumber = World_GetRand(min, max)
+	
+	return Util_Comparison(randNumber, comparisonOperator, comparisonValue)
+end
+
+--? @shortdesc Returns a random position within an area that is not near a player
+--? @extdesc Useful for dropping artillery NEAR a player, but not on him, for example.  
+--? @extdesc searchRadius is the area to look for the location in.  Distance is how far from the player's units the position must be.
+--? @args MarkerID/Pos/EGroupID/SGroupID pos, PlayerID player, [Integer searchRadius, Integer distance]
+--? @result Position
+function Util_GetPositionAwayFromPlayer(pos, player, radius, distance)
+	
+	local count = 0
+	
+	if radius == nil then
+		radius = 10
+	end
+	
+	if scartype(pos) ~= ST_SCARPOS then
+		pos = Util_GetPosition(pos)
+	end
+	
+	if distance == nil then
+		distance = 5
+	end
+	
+	local _sgTemp = SGroup_CreateIfNotFound("_sgTemp")	
+	local foundPos = nil 
+	
+	local isMarker = scartype(pos) == ST_MARKER
+	
+	while foundPos == nil and count < 10 do
+		if isMarker == true then
+			foundPos = Marker_GetRandomPositionInternal(pos)
+		else
+			foundPos = Util_GetRandomPosition(pos, radius)
+		end
+		
+		Player_GetAllSquadsNearMarker(player, _sgTemp, foundPos, distance)
+		if SGroup_IsEmpty(_sgTemp) == false then
+			foundPos = nil
+			count = count + 1
+		else
+			return foundPos
+		end
+	end
+	
+	if count >= 10 then
+		print("Util_GetPositionAwayFromPlayer: Cound not find valid location!")
+	end
+	
+end
+
+--? @shortdesc Returns a random position either within the marker's proximity or with a pos and range provided. Range is ignored for rectangular markers
+--? @result Pos
+--? @args MarkerID/ScarPos [, Real range, Boolean hidden]
+function Util_GetRandomPosition(marker, range, hidden)
+
+	local pos
+	local hidden = hidden or false
+	
+	if scartype(marker) == ST_MARKER then
+		
+		return Marker_GetRandomPositionInternal(marker)
+		
+	elseif scartype(marker) == ST_SCARPOS then
+		
+		pos = marker
+		if range == nil then
+			range = 0
+		end
+		
+		local dir = World_GetRand(1, math.floor(2000*math.pi)) / 1000
+		local offset = World_GetRand(1, (range * 1000)) / 1000
+		
+		local x = pos.x + (math.cos(dir) * offset)
+		if math.abs(x) > World_GetWidth()/2 then
+			if x < 0 then 
+				x = (World_GetWidth()/2 - 1) * -1
+			else
+				x = World_GetWidth()/2 - 1
+			end
+		end
+		
+		local z = pos.z + (math.sin(dir) * offset)
+		if math.abs(z) > World_GetLength()/2 then
+			if z < 0 then 
+				z = (World_GetLength()/2 - 1) * -1
+			else
+				z = World_GetLength()/2 - 1
+			end			
+		end
+		
+		return World_Pos(x, pos.y, z)
+		
+	end
+	
+end
+
+--? @shortdesc Returns a formatted localized string.
+--? @extdesc Use this function to format localized text. ie %1PLAYERNAME% is going to win. It accepts up to 9 additional values as parameters.
+--? @args Integer FormatID[, argc parameters]
+--? @result LocString
+function Loc_FormatText(LocID, ...)
+	
+	local arg = {...}
+	
+	return Loc_FormatTextInternal(LocID, arg)
+	
+end
+
+--? @shortdesc Kills ALL world entities near a marker
+--? @args MarkerID marker
+--? @result Void
+function World_KillAllNeutralEntitesNearMarker(marker)
+
+	egTemp = EGroup_CreateIfNotFound("egTemp_World_KillNeutralEntitesNearMarker")
+	World_GetNeutralEntitiesNearMarker(egTemp, marker)
+	
+	local _KillEntity = function(gid, idx, eid)
+		Entity_Kill(eid)
+	end
+	
+	EGroup_ForEach(egTemp, _KillEntity)
+
+end
+
+--? @shortdesc Returns the closest MarkerID to the entity/marker/pos/egroup/sgroup/squad from the table of markers provided
+--? @args Variable var, Table markers
+--? @result MarkerID
+function Util_GetClosestMarker(var, markers) 
+
+	local dist
+	local closest = 99999
+	local result
+
+	for i=1, (#markers) do 
+		dist = World_DistancePointToPoint(Util_GetPosition(var), Marker_GetPosition(markers[i]))
+		if dist < closest then
+			closest = dist
+			result = markers[i]
+		end
+	end
+	
+	return result
+end
+
+--? @group scardoc;UI
+
+--? @shortdesc Returns true if ANY or ALL of the SGroup is selected
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function Misc_IsSGroupSelected(sgroup, all)
+
+	local _CheckSquad = function(gid, idx, sid)
+		return Misc_IsSquadSelected(sid)
+	end
+
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL of the EGroup is selected
+--? @args EGroupID egroup, Boolean all
+--? @result Boolean
+function Misc_IsEGroupSelected(egroup, all)
+
+	local _CheckEntity = function(gid, idx, eid)
+		return Misc_IsEntitySelected(eid)
+	end
+
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckEntity)
+	
+end
+
+--? @shortdesc Select (or deselect) all the squads in an SGroup
+--? @args SGroupID sgroup, Boolean selected
+function Misc_SelectSGroup(sgroup, selected)
+	
+	local _Squad = function(gid, idx, sid)
+		Misc_SelectSquad(sid, selected)
+	end
+	SGroup_ForEach(sgroup, _Squad)
+
+end
+
+--? @shortdesc Select all the entities in an EGroup
+--? @args EGroupID egroup
+function Misc_SelectEGroup(egroup)
+	
+	local _Entity = function(gid, idx, eid)
+		Misc_SelectEntity(eid)
+	end
+	EGroup_ForEach(egroup, _Entity)
+
+end
+
+--? @shortdesc Allow all squads in an SGroup to be selectable (or not)
+--? @args SGroupID sgroup, Boolean selectable
+function Misc_SetSGroupSelectable(sgroup, selectable)
+	
+	local _Squad = function(gid, idx, sid)
+		Misc_SetSquadSelectable(sid, selectable)
+	end
+	SGroup_ForEach(sgroup, _Squad)
+
+end
+
+--? @shortdesc Allow all entities in an EGroup to be selectable (or not)
+--? @args EGroupID egroup, Boolean selectable
+function Misc_SetEGroupSelectable(egroup, selectable)
+	
+	local _Entity = function(gid, idx, eid)
+		Misc_SetEntitySelectable(eid, selectable)
+	end
+	EGroup_ForEach(egroup, _Entity)
+
+end
+
+--? @group scardoc;SGroup
+
+--? @shortdesc Grabs the selected squads/entities and returns them in a group. Only works with -dev.
+--? @extdesc Tries to return an SGroup first. If it's empty, it will return an EGroup. (Both types can't be selected at the same time)
+--? @args Boolean subselect
+--? @result Sgroup/Egroup Group containing selection
+function Util_Grab(subSelect)
+	
+	local sg_grabbed = SGroup_CreateIfNotFound("")
+	Misc_GetSelectedSquads(sg_grabbed, subSelect or false)
+	
+	local eg_grabbed = EGroup_CreateIfNotFound("")
+	Misc_GetSelectedEntities(eg_grabbed, subSelect or false)
+	
+	if(SGroup_Count(sg_grabbed) > 0) then
+		return sg_grabbed
+	else
+		return eg_grabbed
+	end
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL of the squads in an SGroup are carrying some kind of team weapon
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_HasTeamWeapon(sgroup, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_HasTeamWeapon(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+--? @group scardoc;Util
+
+--? @shortdesc Ends the single player game (win/lose).
+--? @args Boolean win[, WinReason winReason, Boolean nis, Boolean sandmap]
+--? @result Void
+function Game_EndSP(win, winReason, nis, sandmap)
+	print("Game_EndSP. Win: " .. tostring(win));
+	
+	-- remember control groups, to be able to restore them for counterattack (in __SetupCounterattack)
+	t_control_groups = {}
+	for i = 0, 9 do
+		local sg = SGroup_CreateIfNotFound("sg_saved_control_group" .. i)
+		local eg = EGroup_CreateIfNotFound("eg_saved_control_group" .. i)
+		SGroup_Clear(sg)
+		EGroup_Clear(eg)
+		
+		Misc_GetControlGroupContents(i, sg, eg)
+		
+		table.insert(t_control_groups, {sg, eg})
+	end
+	
+	-- fail everything you haven't completed
+	if __t_Objectives ~= nil then
+		for k, v in pairs(__t_Objectives) do
+			if Obj_GetState(v.ID) == OS_Incomplete and Objective_IsStarted(v) then
+				v.PreFail = nil
+				v.OnFail = nil
+				Objective_Fail(v, false, false)
+			end
+		end
+	end
+	-- profiler
+	if Rule_Exists(_CountAvg_Track) then
+		_CountAvg_Report()
+	end
+
+	-- defaults to 'win'
+	if win == nil then
+		win = true
+	end
+	
+	if winReason == nil then
+		winReason = -1
+	end
+	
+	if sandmap == nil then
+		sandmap = true
+	end
+	
+	-- local NIS
+	local GameOverNIS = function()
+		
+		Util_FullscreenMode(DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS)
+		FOW_Enable(false)
+		UI_ToggleDecorators()
+		Misc_SetDefaultCommandsEnabled(false)
+		Misc_SetSelectionInputEnabled(false)
+		
+		World_EndSP(win, winReason)
+	end
+	
+	local ViewMapDelay = function()
+		
+		-- rotate around current position
+		Util_FullscreenMode(DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS)
+		UI_ToggleDecorators()
+		
+		local text = LOC("MISSON COMPLETE - Press PAUSE to view the map.")
+		CTRL.Game_TextTitleFade( text, .5, 5, .5 )
+		CTRL.WAIT()
+		local text = LOC("Press ESC to skip past this mode.")
+		CTRL.Game_TextTitleFade( text, .5, 5, .5 )
+		CTRL.Event_Delay(10)
+		CTRL.WAIT()
+		
+		if nis == true and __g_playIntelEvents then
+			Event_Start(GameOverNIS, 0)
+		else
+			World_EndSP(win, winReason)
+		end
+		
+	end
+	
+	-- special debug command so that the designers can view the map before the mission end screen appears
+	if Misc_IsCommandLineOptionSet("delay_endsp") and __g_playIntelEvents then
+		Event_Start(ViewMapDelay, 0)
+	-- play NIS
+	elseif nis ~= false and __g_playIntelEvents then
+		Event_Start(GameOverNIS, 0)
+	-- otherwise don't play the NIS, just end it
+	else
+		Util_FullscreenMode(DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS)
+		World_EndSP(win, winReason)
+	end
+end
+
+--? @shortdesc If there's a squad under the mouse cursor, this adds it to a unique SGroup. Return value is the SGroup it was added to, or nil if there was no squad under the mouse cursor. Pass in true for 'clearGroup' to clear the sgroup before adding the squad.
+--? @args [Boolean clearGroup]
+--? @result SGroupID
+function Util_AddMouseoverSquadToSGroup(clearGroup)
+
+	local sg = Util_GetMouseoverSGroup()
+		
+	if (Misc_IsMouseOverEntity()) then
+		
+		local entity = Misc_GetMouseOverEntity()
+		if (Entity_IsPartOfSquad( entity )) then
+			
+			local squad = Entity_GetSquad(entity)
+			if clearGroup == true then
+				SGroup_Clear(sg)
+			end
+			SGroup_Add(sg, squad)
+			return sg
+			
+		end
+	end
+	
+	-- is this redundant in Lua?
+	return nil
+	
+end
+
+--? @shortdesc Returns a unique SGroup used to hold mouseover squads obtained from Util_AddMouseoverSquadToSGroup
+--? @result Void
+function Util_GetMouseoverSGroup()
+	if sg_mouseover == nil then
+		sg_mouseover = SGroup_CreateIfNotFound("sg_mouseover")
+	end
+	
+	return sg_mouseover
+end
+
+--? @shortdesc Hides all of a player's squads and/or buildings
+--? @extdesc Doesn't hide buildings a player is in, or any base structures. Only items like sandbags, tanktraps, mg nests, etc. Put multiple playerIDs in a table to hide many players together, or use ALL for the playerID to apply to all players at once.
+--? @args PlayerID player, Bool hide
+--? @result Void
+function Util_HidePlayerForNIS(player, hide)
+
+	if scartype(player) == ST_PLAYER then
+		
+		player = {player}
+		
+	elseif player == ALL then
+		
+		player = {}
+		for n = 1, World_GetPlayerCount() do
+			table.insert(player, World_GetPlayerAt(n))
+		end
+		
+	end
+	
+	local _sg_hideplayerfornis = SGroup_CreateIfNotFound("_sg_hideplayerfornis")
+	local _eg_hideplayerfornis = EGroup_CreateIfNotFound("_eg_hideplayerfornis")
+	
+	for n = 1, (#player) do
+		Player_GetAll(player[n], _sg_hideplayerfornis, _eg_hideplayerfornis)
+		SGroup_Hide(_sg_hideplayerfornis, hide)
+	end
+	SGroup_Destroy(_sg_hideplayerfornis)
+	EGroup_Destroy(_eg_hideplayerfornis)
+end
+
+
+--? @shortdesc ReSpawns or DeSpawns sgroups (and egroups) for all players or the indicated player.
+--? @args Boolean despawn, Boolean allPlayers [or Int playerNum], Boolean egroups
+--? @result Void
+--? @extdesc examples: Util_DespawnAll(true, true, false) or Util_DespawnAll(true, 1, false) or Util_DespawnAll(false, true, false)
+function Util_DespawnAll(boolean, everybody, everything)
+	local SGspawnFunction = function(sgroup)
+		if boolean == true then
+			SGroup_DeSpawn(sgroup)
+		else
+			SGroup_ReSpawn(sgroup)
+		end
+	end
+	local EGspawnFunction = function(egroup)
+		if boolean == true then
+			EGroup_DeSpawn(egroup)
+		else
+			EGroup_ReSpawn(egroup)
+		end
+	end
+	
+	if everybody == true then
+		for i = 1, World_GetPlayerCount() do 
+			Player_GetAll(World_GetPlayerAt(i))
+			SGspawnFunction(sg_allsquads)
+			if everything == true then
+				EGspawnFunction(eg_allentities)
+			end
+		end
+	elseif everybody ~= nil and everybody <= World_GetPlayerCount() then
+		Player_GetAll(World_GetPlayerAt(everybody))
+		SGspawnFunction(sg_allsquads)
+		if everything == true then
+			EGspawnFunction(eg_allentities)
+		end
+	end
+
+end
+
+--? @shortdesc Checks the entity count for the world and returns true or false depending on the result. A specific value can be passed in to override the default amount.
+--? @args [Integer entityLimit]
+--? @result Boolean
+function Util_EntityLimit(int)
+	if int == nil then
+		int = 290
+	end
+	if Util_UnitCounts(true).entity <= int then
+		return true
+	else
+		return false
+	end
+end
+--[[
+Example:
+function now()
+	local t = Util_UnitCounts(player1)
+	print(t.squad)
+	print(t.entity)
+	print(t.vehicle)
+	if t.squad < 50 then
+		print("yippee")
+	else
+		print("darn")
+	end
+end
+]]
+
+--? @shortdesc Returns a table containing either the total or a specific player's squad count, entity count, and vehicle count.
+--? @extdesc table can be accessed as scene below
+--? Get Player Example:\n
+--? local t = Util_UnitCounts(player1)\n
+--? print(t.squad)\n
+--? print(t.entity)\n
+--? print(t.vehicle)\n
+--? Get World Example:\n
+--? local t = Util_UnitCounts(true)\n
+--? print(t.squad)\n
+--? print(t.entity)\n
+--? print(t.vehicle)\n
+--? Alternate Format:\n
+--? print(Util_UnitCounts(true).squad)\n
+--? @args Boolean world OR playerID player
+--? @result Lua Table
+function Util_UnitCounts(countWho)
+	
+	-- true means return for all players
+	if countWho == true then
+		
+		-- each player
+		local playercount = World_GetPlayerCount()
+		local total_squadcount = 0
+		local total_entitycount_actual = 0
+		local total_entitycount_reported = 0 -- count vehicles as 5
+		local total_vehiclecount = 0
+		
+		for i = 1, playercount do
+			
+			local thisplayer = World_GetPlayerAt(i)
+			local thisplayer_name = Player_GetRaceName(thisplayer)
+			local thisplayer_squadcount = Player_GetSquadCount(thisplayer)
+			local sgroupID = Player_GetSquads(thisplayer)
+			
+			local thisplayer_entitycount_actual = 0
+			local thisplayer_entitycount_reported = 0 -- counts vehicles as 5 entities
+			local thisplayer_vehiclecount = 0
+			
+			local _EachSquad = function(gid, idx, sid)
+				-- count how many vehicles in this squad
+				local thissquad_vehiclecount = 0
+				for i = 1, Squad_Count(sid) do
+					local entity = Squad_EntityAt(sid, i - 1)
+					if Entity_IsVehicle(entity) then
+						thissquad_vehiclecount = thissquad_vehiclecount + 1
+					end
+				end
+				
+				thisplayer_entitycount_actual = thisplayer_entitycount_actual + Squad_Count(sid)
+				thisplayer_vehiclecount = thisplayer_vehiclecount + thissquad_vehiclecount
+			end
+			
+			SGroup_ForEach(sgroupID, _EachSquad)
+			
+			thisplayer_entitycount_reported = thisplayer_entitycount_actual
+			thisplayer_entitycount_reported = thisplayer_entitycount_reported + (thisplayer_vehiclecount * 4) -- each vehicle adds 4 extra entities
+			
+			total_squadcount = total_squadcount + thisplayer_squadcount
+			total_entitycount_actual = total_entitycount_actual + thisplayer_entitycount_actual
+			total_entitycount_reported = total_entitycount_reported + thisplayer_entitycount_reported
+			total_vehiclecount = total_vehiclecount + thisplayer_vehiclecount
+		end
+		
+		-- player totals
+		local str = "Total: " .. total_squadcount .. " squads, " .. total_entitycount_reported .. " entities"
+		if total_vehiclecount > 0 then
+			str = str .. " (" .. total_vehiclecount .. " vehicles)"
+		end
+		print(str)
+		return {squad = total_squadcount, entity = total_entitycount_reported, vehicle = total_vehiclecount}
+		
+		--[[ leftover world-owned entities
+		local num_worldentities = World_GetNumEntities() - total_entitycount_actual
+		str = "World-owned entities: " .. num_worldentities
+		ypos = ypos + 0.02
+		dr_text2d("unit_count", xpos, ypos, str, 255, 255, 255)
+		]]
+		
+	elseif countWho ~= nil then
+		
+		--[[ start the work on just one ]]
+			local thisplayer = countWho
+			local thisplayer_name = Player_GetRaceName(thisplayer)
+			local thisplayer_squadcount = Player_GetSquadCount(thisplayer)
+			local sgroupID = Player_GetSquads(thisplayer)
+			
+			local thisplayer_entitycount_actual = 0
+			local thisplayer_entitycount_reported = 0 -- counts vehicles as 5 entities
+			local thisplayer_vehiclecount = 0
+			
+			local _EachSquad = function(gid, idx, sid)
+				-- count how many vehicles in this squad
+				local thissquad_vehiclecount = 0
+				for i = 1, Squad_Count(sid) do
+					local entity = Squad_EntityAt(sid, i - 1)
+					if Entity_IsVehicle(entity) then
+						thissquad_vehiclecount = thissquad_vehiclecount + 1
+					end
+				end
+				
+				thisplayer_entitycount_actual = thisplayer_entitycount_actual + Squad_Count(sid)
+				thisplayer_vehiclecount = thisplayer_vehiclecount + thissquad_vehiclecount
+			end
+			
+			SGroup_ForEach(sgroupID, _EachSquad)
+			
+			thisplayer_entitycount_reported = thisplayer_entitycount_actual
+			thisplayer_entitycount_reported = thisplayer_entitycount_reported + (thisplayer_vehiclecount * 4) -- each vehicle adds 4 extra entities
+			
+			local str = thisplayer_name .. ": " .. thisplayer_squadcount .. " squads, " .. thisplayer_entitycount_reported .. " entities"
+			if thisplayer_vehiclecount > 0 then
+				str = str .. " (" .. thisplayer_vehiclecount .. " vehicles)"
+			end
+			print(str)
+			return {squad = thisplayer_squadcount, entity = thisplayer_entitycount_reported, vehicle = thisplayer_vehiclecount}
+			
+		--[[ end of just one ]]
+	else
+		fatal("Util_UnitCounts: 'countWho' is neither 'true' nor a valid playerID")
+	end
+end
+
+-- Entity Count Util Functions 
+function _CountAvg_Track()
+	
+	local t = Util_UnitCounts(true)
+	
+	if _avg == nil then
+		_avg = t.entity
+	else
+		_avg = (_avg+t.entity)/2
+	end
+	
+	if _high == nil then
+		_high = {}
+	end
+	
+	if t.entity >= 250 then
+		table.insert(_high, {count = t.entity, time = World_GetGameTime()})
+	end
+	
+end
+
+-- Entity Count Util Functions 
+function _CountAvg_Report()
+	-- the average
+	if _avg ~= nil then
+		print("CountAvg_Report: the Average Unit Count = ".._avg)
+	end
+	
+	-- the highs
+	if _high ~= nil then
+		for k,v in pairs(_high) do
+			print(k.." - "..v.count.." entities counted at time "..v.time)
+		end
+	end
+	
+	print("Report Time:"..World_GetGameTime())
+end
+
+--? @shortdesc Clears vehicle wrecks from a given area.
+--? @extdesc Area can be a marker (with or without a range override), a position and range combo, or a territory sector ID. Uses EBP.WRECKED_VEHICLES unless wrecksList is defined.
+--? @args MarkerID/Pos/SectorID position[, Real range, Table wrecksList]
+--? @result Void
+function Util_ClearWrecksFromMarker(pos, range, wrecksList)
+	if(wrecksList == nil) then
+		wrecksList = EBP.WRECKED_VEHICLES --Defined in LuaConstAuto
+	end
+	
+	eg_clearwrecksgroup = EGroup_CreateIfNotFound("eg_clearwrecksgroup")
+	
+	-- get all the neutral entitied (different methods for different class types)
+	if scartype(pos) == ST_MARKER then
+		if range == nil then
+			World_GetNeutralEntitiesNearMarker(eg_clearwrecksgroup, pos)
+		else
+			World_GetNeutralEntitiesNearPoint(eg_clearwrecksgroup, Marker_GetPosition(pos), range)
+		end
+	elseif scartype(pos) == ST_SCARPOS then
+		World_GetNeutralEntitiesNearPoint(eg_clearwrecksgroup, pos, range)
+	elseif scartype(pos) == ST_NUMBER then
+		World_GetNeutralEntitiesWithinTerritorySector(eg_clearwrecksgroup, pos)
+	end
+	
+	-- filter out anything that isn't a wreck, and destroy all entities that are left\
+	EGroup_Filter(eg_clearwrecksgroup, wrecksList, FILTER_KEEP)
+	EGroup_Kill(eg_clearwrecksgroup)
+end
+
+
+--? @shortdesc Plays music from the Data:Sound folder, and stores the music track so it can be resumed after a save/load
+--? @extdesc The new music will phase out the old one. There can only be one music playing at anytime.
+--? @args String name
+--? @result Void
+function Util_PlayMusic(name)
+
+	Sound_Play2D(name)
+	_current_music_filename = name	
+
+end
+
+
+--? @shortdesc Resumes playing the music track that was last triggered i.e. after a save/load
+--? @args Void
+--? @result Void
+function Util_RestoreMusic()
+	
+	if _current_music_filename ~= nil then
+		Sound_Play2D(_current_music_filename)
+	end
+
+end
+
+--? @shortdesc Finds the greatest (or least) concentration of squads owned by a team.
+--? @extdesc This function is slow, so don't call it very often
+--? @args TeamID team[, Boolean popcapOnly, Table includeBlueprints, Table excludeBlueprints, Boolean bLeastConcentrated, MarkerID/Table onlyInThisMarker]
+--? @result SGroup
+function Team_GetSquadConcentration(team, bPopcapOnly, includeBPs, excludeBPs, bLeastConcentrated, marker)
+	local players = Team_GetPlayers(team)
+	return __GetUnitConcentration(players, SGroupCaller, bPopcapOnly, includeBPs, excludeBPs, bLeastConcentrated, marker)
+end
+
+--? @shortdesc Finds the greatest (or least) concentration of entities owned by a team.
+--? @extdesc This function is slow, so don't call it very often
+--? @args TeamID team[, Boolean popcapOnly, Table includeBlueprints, Table excludeBlueprints, Boolean bLeastConcentrated, MarkerID/Table onlyInThisMarker]
+--? @result EGroup
+function Team_GetEntityConcentration(team, bPopcapOnly, includeBPs, excludeBPs, bLeastConcentrated, marker)
+	local players = Team_GetPlayers(team)
+	return __GetUnitConcentration(players, SGroupCaller, bPopcapOnly, includeBPs, excludeBPs, bLeastConcentrated, marker)
+end
+
+--? @shortdesc Finds a nearby building to garrison. can ignore occupied [friendly] buildings. return ID of entity it found, or nil if not found
+--? @args SGroupID sgroup, Position pos, Real radius[, Boolean occupied,  SGroup/Table filter]
+--? @extdesc Can also filter out groups not to occupy
+--? @result EntityID
+function Util_GarrisonNearbyBuilding(sgroup, pos, radius, occupied, filter)
+	return __GarrisonNearbyUnit(EGroupCaller, sgroup, pos, radius, occupied, filter)
+end
+
+--? @shortdesc Finds a nearby vehicle to garrison. can ignore occupied [friendly] vehicles. return ID of vehicle it found, or nil if not found,
+--? @extdesc Can also filter out groups not to occupy
+--? @args SGroupID sgroup, Position pos, Real radius[, Boolean occupied, SGroup/Table filter]
+--? @result SquadID
+function Util_GarrisonNearbyVehicle(sgroup, pos, radius, occupied, filter)
+	return __GarrisonNearbyUnit(SGroupCaller, sgroup, pos, radius, occupied, filter)
+end
+
+--? @shortdesc Returns true if any event is currently running [at or below (more important than) the priority threshold. If not specified, ignores threshold.]
+--? @args [Integer priority_threshold]
+--? @result Boolean
+function Event_IsAnyRunning(threshold)
+
+	if threshold == nil then
+		threshold = 999
+	end
+	
+	return Event_IsAnyRunningAtOrBelowPriority(threshold)
+	
+end
+
+--? @shortdesc Prints out the entire contents of an Object
+--? @extdesc This is most useful when used in conjunction with fatal() or bug() to populate the log file.
+--? @extdesc Objects can be anything (Player, SGroup, Int, Table, String, etc.), but this is most useful for Tables
+--? @args Object obj[, Int max_depth, String data_type, Function print_func]
+--? @result Void
+function Util_PrintObject(obj, max_depth, data_type, print_func)
+
+	local iPrintObjectDepth = 0
+	local PrintTableStack = {}
+
+	if( print_func == nil ) then
+		print_func = print
+	end
+		
+	local function _PrintObject(tabs, obj, max_depth, data_type)
+
+		if( max_depth and max_depth > 0 and iPrintObjectDepth > max_depth ) then
+			return
+		end
+		
+		if( type(obj) =="table" ) then
+			if( Util_TableContains(PrintTableStack, obj) ) then
+				print_func( "Recursive Printing Error Detected." )
+				return
+			end
+			
+			table.insert( PrintTableStack, obj )
+			
+			print_func(tabs.. "{")
+			iPrintObjectDepth = iPrintObjectDepth + 1
+			local indent = tabs.." "
+			for k,v in pairs(obj) do
+				if (type(v) == "table") then
+					print_func(indent.."[" .. tostring(k) .. "]("..tostring(type(v))..") = ")
+					_PrintObject(indent.." ", v, max_depth, data_type, print_func)
+				else
+					if( data_type == nil or type(v) == data_type ) then
+						print_func(indent.."[" .. tostring(k) .. "]("..tostring(type(v))..") = "..tostring(v)..",")
+					end
+				end
+			end
+			iPrintObjectDepth = iPrintObjectDepth - 1
+			print_func(tabs.. "},")
+			
+			table.remove(PrintTableStack,(#PrintTableStack))
+			
+		else
+			if( data_type == nil or type(obj) == data_type ) then
+				print_func(tabs..tostring(obj))
+			end
+		end
+	end
+	
+	_PrintObject("", obj, max_depth, data_type)
+end
+
+function PrintObject(obj, max_depth, data_type, print_func)
+	Util_PrintObject(obj, max_depth, data_type, print_func)
+end
+
+--? @shortdesc Checks the first layer of a table and looks for a specified Object, returns true if found.
+--? @extdesc Objects can be anything (Player, SGroup, Int, Table, String, etc.)
+--? @args Table targetTable, Object obj
+--? @result Boolean
+function Util_TableContains(targetTable, obj)
+	local contains = false
+	for k, v in pairs(targetTable) do
+		if v == obj then
+			contains = true
+		end
+	end
+	
+	return contains
+end
+
+--? @shortdesc Following a path from origin to destination, finds the HS_CLOSEST/HS_FURTHEST hidden position to/from the destination
+--? @extdesc If no position is found, returns origin
+--? @args Position origin, Position destination, Boolean furthest
+--? @result Position 
+function Util_FindHiddenSpawn(origin, destination, furthest)
+	
+	if furthest == nil then
+		furthest = HS_FURTHEST
+	end
+	
+	if furthest == HS_FURTHEST then
+		local start = Util_GetPosition(origin)
+		local finish = Util_GetPosition(destination)
+		local curr = start
+		
+		while Player_CanSeePosition(player1, curr) == false do
+			curr = Util_GetPositionFromAtoB(curr, finish, 1)
+			if curr == start or World_DistancePointToPoint(curr, finish) <= 2 then
+				return curr
+			end
+		end
+		
+		if (curr == start) then
+			return start
+		else
+			local spawn = Util_GetPositionFromAtoB(curr, start, 10)
+			if Player_CanSeePosition(player1, spawn) then
+				return start
+			else
+				return spawn
+			end
+		end
+	
+	else
+		local start = Util_GetPosition(destination)
+		local finish = Util_GetPosition(origin)
+		local curr = start
+		
+		while Player_CanSeePosition(player1, curr) == true do
+			curr = Util_GetPositionFromAtoB(curr, finish, 1)
+			if curr == start or World_DistancePointToPoint(curr, finish) <= 2 then
+				return curr
+			end
+		end
+		
+		if (curr == start) then
+			return start
+		else
+			local spawn = Util_GetPositionFromAtoB(curr, finish, 10)
+			if Player_CanSeePosition(player1, spawn) then
+				return finish
+			else
+				return spawn
+			end
+		end
+		
+	end
+	
+end
+
+--? @shortdesc Following a path from origin to destination, finds the HS_CLOSEST/HS_FURTHEST visible position to/from the destination
+--? @extdesc If no position is found, returns destination
+--? @args Position origin, Position destination, Boolean furthest
+--? @result Position 
+function Util_FindVisibleSpawn(origin, destination, furthest)
+	
+	if furthest == nil then
+		furthest = HS_FURTHEST
+	end
+	
+	if furthest == HS_FURTHEST then
+		local start = Util_GetPosition(origin)
+		local finish = Util_GetPosition(destination)
+		local curr = start
+		
+		while Player_CanSeePosition(player1, curr) == false do
+			curr = Util_GetPositionFromAtoB(curr, finish, 1)
+			if curr == start or World_DistancePointToPoint(curr, finish) <= 2 then
+				return curr
+			end
+		end
+		
+		if (curr == start) then
+			return start
+		else
+			local spawn = Util_GetPositionFromAtoB(curr, finish, 3)
+			if Player_CanSeePosition(player1, spawn) == false then
+				return finish
+			else
+				return spawn
+			end
+		end
+	else
+		local start = Util_GetPosition(destination)
+		local finish = Util_GetPosition(origin)
+		local curr = start
+		
+		while Player_CanSeePosition(player1, curr) == true do
+			curr = Util_GetPositionFromAtoB(curr, finish, 1)
+			if curr == start or World_DistancePointToPoint(curr, finish) <= 2 then
+				return curr
+			end
+		end
+		
+		if (curr == start) then
+			return start
+		else
+			local spawn = Util_GetPositionFromAtoB(curr, start, 3)
+			if Player_CanSeePosition(player1, spawn) == false then
+				return start
+			else
+				return spawn
+			end
+		end
+	end
+	
+end
+
+--? @shortdesc Finds a hidden position based on what the local player can and can't see
+--? @extdesc If no position is found, returns nil
+--? @args Position/EGroup/Entity/SGroup/Squad items
+--? @result Position/EGroup/Entity/SGroup/Squad 
+function Util_FindHiddenItem(items)
+	
+	local validPositions = {}
+	
+	for i = 1, (#items) do
+		if scartype(items[i]) == ST_SCARPOS then
+			if Player_CanSeePosition(Game_GetLocalPlayer(), items[i]) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_EGROUP then
+			if Player_CanSeeEGroup(Game_GetLocalPlayer(), items[i], ALL) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_ENTITY then
+			if Player_CanSeeEntity(Game_GetLocalPlayer(), items[i]) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_SGROUP then
+			if Player_CanSeeSGroup(Game_GetLocalPlayer(), items[i], ALL) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_SQUAD then
+			if Player_CanSeeSquad(Game_GetLocalPlayer(), items[i]) == false then
+				table.insert(validPositions, items[i])
+			end
+		end
+	end
+	
+	local size = (#validPositions)
+	
+	if size > 0 then
+		local rand = World_GetRand(1, size)
+		
+		return validPositions[rand]
+	else
+		return nil
+	end
+	
+end
+
+--? @shortdesc Finds a hidden position based on what the local player can and can't see
+--? @extdesc If no position is found, returns nil
+--? @args Position/EGroup/Entity/SGroup/Squad items
+--? @result Position/EGroup/Entity/SGroup/Squad 
+function Util_GetRandomHiddenPosition(items)
+	
+	local validPositions = {}
+	
+	for i = 1, (#items) do
+		if scartype(items[i]) == ST_SCARPOS then
+			if Player_CanSeePosition(Game_GetLocalPlayer(), items[i]) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_EGROUP then
+			if Player_CanSeeEGroup(Game_GetLocalPlayer(), items[i], ALL) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_ENTITY then
+			if Player_CanSeeEntity(Game_GetLocalPlayer(), items[i]) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_SGROUP then
+			if Player_CanSeeSGroup(Game_GetLocalPlayer(), items[i], ALL) == false then
+				table.insert(validPositions, items[i])
+			end
+		elseif scartype(items[i]) == ST_SQUAD then
+			if Player_CanSeeSquad(Game_GetLocalPlayer(), items[i]) == false then
+				table.insert(validPositions, items[i])
+			end
+		end
+	end
+	
+	local size = (#validPositions)
+	
+	if size > 0 then
+		local rand = World_GetRand(1, size)
+		
+		return validPositions[rand]
+	else
+		return nil
+	end
+	
+end
+
+--? @shortdesc Determines the health percentage of a given object
+--? @extdesc Returns average health if the object is a group
+--? @args Squad/Entity/Sgroup/Egroup var
+--? @result Percentage health [0,1] 
+function Util_GetHealth(var)
+	if(scartype(var) == ST_ENTITY) then
+		return Entity_GetHealthPercentage(var)
+	elseif(scartype(var) == ST_SQUAD) then
+		return Squad_GetHealthPercentage(var, true)
+	elseif(scartype(var) == ST_SGROUP) then
+		return SGroup_GetAvgHealth(var)
+	elseif(scartype(var) == ST_EGROUP) then
+		return EGroup_GetAvgHealth(var)
+	else
+		fatal("Tried to get health on an unvalid scartype (" .. scartype_tostring(var) .. ")")
+	end
+end
+
+--? @shortdesc Kills a given object
+--? @args Player/Squad/Entity/Sgroup/Egroup var
+--? @result Void
+function Util_Kill(var)
+	if (scartype(var) == ST_PLAYER) then
+		SGroup_Kill(Player_GetSquads(var))
+	elseif(scartype(var) == ST_EGROUP) then
+		EGroup_Kill(var)
+	elseif(scartype(var) == ST_SGROUP) then
+		SGroup_Kill(var)
+	elseif(scartype(var) == ST_SQUAD) then
+		Squad_Kill(var)
+	elseif(scartype(var) == ST_ENTITY) then
+		Entity_Kill(var)
+	else
+		fatal("Invalid type (" .. scartype_tostring(var) .. "). Must be Entity/Squad/EGroup/Egroup")
+	end
+end
+
+--? @shortdesc Determines the object is alive
+--? @extdesc Returns true if object is alive
+--? @args Squad/Entity/Sgroup/Egroup var
+--? @result bool
+function Util_IsAlive(var)
+	if(scartype(var) == ST_ENTITY) then
+		return Entity_IsAlive(var)
+	elseif(scartype(var) == ST_SQUAD) then
+		return Squad_IsAlive(var)
+	elseif(scartype(var) == ST_SGROUP) then
+		return SGroup_IsAlive(var)
+	elseif(scartype(var) == ST_EGROUP) then
+		return EGroup_GetAvgHealth(var) > 0
+	else
+		fatal("Tried to get alive status on an unvalid scartype (" .. scartype_tostring(var) .. ")")
+	end
+end
+
+--? @shortdesc Forces all squads given to retreat, regardless of whether they are on team weapons or not. Disables aiEncounters input (true disables all encounters).
+--? @args SGroup sgroup, Marker marker, Marker, deleteAtMarker, Bool/AIEncounter aiEncounterDisable
+function Util_ForceRetreatAll(sgroup, marker, deleteAtMarker, aiEncounterDisable)
+	if aiEncounterDisable == true then 		
+		AI_DisableAllEncounters()
+	elseif scartype(aiEncounterDisable) == ST_TABLE then
+		for k,enc in ipairs(aiEncounterDisable) do
+			enc:Disable()
+		end
+	elseif aiEncounterDisable ~= nil then
+		aiEncounterDisable:Disable()
+	end
+	
+	Cmd_AbandonTeamWeapon(sgroup, true)
+	
+	Rule_AddOneShot(_ForceRetreatAll2, 0.5, {sgroup = sgroup, marker = marker, deleteAtMarker = deleteAtMarker})
+end
+
+function _ForceRetreatAll2(id, data) 
+	Cmd_Retreat(data.sgroup, data.marker, data.deleteAtMarker)
+end
+
+--? @group scardoc;Marker
+
+--? @shortdesc Builds a table of MarkerIDs that are named in a sequence. i.e. a name of "spot" will find markers "spot1", "spot2" and so on, up until it looks for a marker that isn't there.
+--? @args String name, String type
+--? @result Table
+function Marker_GetSequence(name, markerType)
+
+	local num = 1
+	local result = {}
+	
+	if(markerType == nil) then markerType = "" end
+	
+	while Marker_Exists(name..num, markerType) do
+		table.insert(result, Marker_FromName(name..num, markerType))
+		num = num + 1
+	end
+	
+	if num >= 2 then
+		print("Retrieved sequence of Markers: "..name.."1 to "..name..(num-1))
+	end
+	
+	return result
+	
+end
+
+--? @group scardoc;Util
+
+--? @shortdesc Returns true if a Player/Team can see any or all of an SGroup/Squad/EGroup/Entity/Position/Marker
+--? @args PlayerID/TeamID playerID/teamID, SGroupID/EGroupID/EntityID/SquadID/MarkerID/Position element[, ALL])
+--? @result Boolean
+function Util_ElementCanSee(element1, element2, all)
+	if all == nil then all = ALL end
+	
+	if scartype(element1) == ST_PLAYER then
+		if scartype(element2) == ST_SGROUP then
+			if Player_CanSeeSGroup(element1, element2, all) then	
+				return true
+			end
+		elseif scartype(element2) == ST_EGROUP then	
+			if Player_CanSeeEGroup(element1, element2, all) then	
+				return true
+			end		
+		elseif scartype(element2) == ST_ENTITY then
+			if Player_CanSeeEntity(element1, element2) then	
+				return true
+			end		
+		elseif scartype(element2) == ST_SQUAD then				
+			if Player_CanSeeSquad(element1, element2, all) then	
+				return true
+			end
+		elseif scartype(element2) == ST_MARKER then
+			if Player_CanSeePosition(element1, Util_GetPosition(element2)) then		
+				return true
+			end
+		elseif scartype(element2) == ST_SCARPOS then
+			if Player_CanSeePosition(element1, element2)	then
+				return true
+			end		
+		end
+	elseif scartype(element1) == ST_TABLE then
+		for i = 1, (#element1) do
+			if scartype(element2) == ST_SGROUP then
+				
+				if Player_CanSeeSGroup(element1[i], element2, all) then	
+					return true
+				end
+			elseif scartype(element2) == ST_EGROUP then	
+				if Player_CanSeeEGroup(element1[i], element2, all) then	
+					return true
+				end		
+			elseif scartype(element2) == ST_ENTITY then
+				if Player_CanSeeEntity(element1[i], element2) then	
+					return true
+				end		
+			elseif scartype(element2) == ST_SQUAD then				
+				if Player_CanSeeSquad(element1[i], element2, all) then	
+					return true
+				end
+			elseif scartype(element2) == ST_MARKER then
+				if Player_CanSeePosition(element1[i], Util_GetPosition(element2)) then		
+					return true
+				end
+			elseif scartype(element2) == ST_SCARPOS then
+				if Player_CanSeePosition(element1[i], element2)	then
+					return true
+				end		
+			end
+		end	
+	end
+end
+
+function Util_SetStateModelTarget(state_model_owner, state_model_key, value)
+	local state_model_owner_type = scartype(state_model_owner)
+	local target_type = scartype(value)
+	
+	if target_type ~= ST_SQUAD and target_type ~= ST_ENTITY then
+		error("Util_SetStateModelTarget got unsupported state model value type")
+	end
+	
+	if state_model_owner_type == ST_SQUAD then
+		if target_type == ST_SQUAD then
+			Squad_SetStateModelSquadTarget(state_model_owner, state_model_key, value)
+		elseif target_type == ST_ENTITY then
+			Squad_SetStateModelEntityTarget(state_model_owner, state_model_key, value)
+		end
+	elseif state_model_owner_type == ST_ENTITY then
+		if target_type == ST_SQUAD then
+			Entity_SetStateModelSquadTarget(state_model_owner, state_model_key, value)
+		elseif target_type == ST_ENTITY then
+			Entity_SetStateModelEntityTarget(state_model_owner, state_model_key, value)
+		end
+	elseif state_model_owner_type == ST_PLAYER then
+		if target_type == ST_SQUAD then
+			Player_SetStateModelSquadTarget(state_model_owner, state_model_key, value)
+		elseif target_type == ST_ENTITY then
+			Player_SetStateModelEntityTarget(state_model_owner, state_model_key, value)
+		end
+	else
+		error("Util_SetStateModelTarget got unsupported state model owner type")
+	end
+end
+
+--? @shortdesc Tracks a syncweapon ID and destroys it (by default) or makes it uncapturable (if kill is set to false)
+--? @args SGroupID syncweapon[, Boolean kill]
+--? @result Void
+function Util_LogSyncWpn(sgroup, kill)
+	if __KillSyncWpn == nil then
+		__KillSyncWpn = {}
+	end
+	
+	if kill == nil then kill = true end
+	
+	local _CheckSquad = function(gid, idx, sid)
+		
+		for n = 1, Squad_Count(sid) do
+			local isNewSyncWeap = true
+			local eid = Squad_EntityAt(sid, n-1)
+--~ 			print("Squad index is: "..n)
+--~ 			print(Entity_IsSyncWeapon(eid))
+			if Entity_IsSyncWeapon(eid) == true then
+				syncid = Entity_GetID(eid)
+				for i = 1, #(__KillSyncWpn) do 
+					if syncid == __KillSyncWpn[i].wpnID then
+						isNewSyncWeap = false
+						break
+					end
+				end
+				if isNewSyncWeap == true then
+					local t = {}
+					t.wpnID = syncid
+					t.kill = kill
+					table.insert(__KillSyncWpn, t)
+				end
+			end
+		end
+		
+	end
+	
+	if SGroup_IsEmpty(sgroup) == false then
+		SGroup_ForEach(sgroup, _CheckSquad)
+	end
+	
+	if #(__KillSyncWpn) > 0 then
+		if Rule_Exists(__Util_KillSyncWpn) == false then
+			Rule_AddInterval(__Util_KillSyncWpn, 0)
+		end
+	end
+end
+
+function __Util_KillSyncWpn()
+	local count = (#__KillSyncWpn)
+	if count > 0 then
+		for k, v in pairs(__KillSyncWpn) do
+--~ 		for i = count, 1, -1 do 
+			local syncw = v.wpnID
+			if SyncWeapon_Exists(syncw) == false then
+				table.remove(__KillSyncWpn, k)
+				return
+			end
+			
+			if SyncWeapon_IsOwnedByPlayer(syncw, nil) then
+				local entity = SyncWeapon_GetEntity(syncw)
+				local egroup = EGroup_CreateIfNotFound("eg_OPkillentity"..k)
+				EGroup_Add(egroup, entity)
+				if v.kill == true then
+					EGroup_Kill(egroup)
+				else
+					EGroup_SetSelectable(egroup, false)
+					Entity_SetRecrewable(entity, false)
+					UI_EnableEntityDecorator(entity, false)
+				end
+				table.remove(__KillSyncWpn, k)
+			end
+		end
+	end	
+end
+
+--? @shortdesc Loads a scar file if it hasn't been loaded yet
+--? @args String Path
+--? @result nil
+_imports = {}
+function Import_Once(path)
+	if(_imports[path] == nil)then
+		import(path)
+		_imports[path] = 1
+	end
+end
+
+--? @shortdesc Returns a table of positions sorted from closest to furthest (or furthes to closest if reverse is true) from the origin
+--? @args SGroupID/EGroupID/EntityID/SquadID/MarkerID/Position origin, Table positions[, reverse])
+--? @result Table
+function Util_SortPositionsByClosest(origin, positions, reverse)
+	local returnTable = {}
+	if reverse == nil then
+		reverse = false
+	end
+	
+	while (#positions) > 0 do
+		local index = Util_GetClosestMarker(origin, positions)
+		
+		for i = 1, (#positions) do
+			if index == positions[i] then
+				index = i
+			end
+		end
+		
+		local tablePos = (#returnTable)+1
+		if reverse then
+			tablePos = 1
+		end
+		
+		table.insert(returnTable, tablePos, positions[index])
+		table.remove(positions, index)
+	end
+	
+	return returnTable
+	
+end
+
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+_cloneTableStack = {}
+
+--? @shortdesc Clones a table allowing for unadulterated use of the data. By default this cloning is done recursively, but that can be changed with the optional recursive flag.
+--? @args Table data[, Boolean recursive]
+--? @result Table 
+function Clone(original, recursive)
+
+	if recursive == nil then
+		recursive = true
+	end
+	
+	if scartype(original) == ST_TABLE then
+		
+		-- check we aren't cloning something cyclically
+		if recursive == true then
+			if Table_Contains(_cloneTableStack, original)  then
+				fatal("Clone: Recursive cyclical cloning error detected.")
+			end    
+			table.insert(_cloneTableStack, original)
+		end
+		
+		-- create the copy
+		local new = {}
+		
+		for key, value in pairs(original) do
+			if scartype(value) == ST_TABLE and recursive == true then 
+				new[key] = Clone(value, true)	-- if it's a subtable, recursively create a copy of that
+			else
+				new[key] = value
+			end
+		end
+		
+		setmetatable( new, Clone(getmetatable(original)) )
+		
+		-- if it's recursive, pop the last entry on the tracking table
+		if recursive == true then
+			table.remove(_cloneTableStack, #_cloneTableStack)
+		end
+		
+		return new
+		
+	else
+		return original
+	end
+	
+end
+
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+function TableCount(tbl)
+
+	local count = 0
+
+	if( type(tbl) == "table" ) then
+		for k,v in pairs(tbl) do
+			count = count+1
+		end
+	end
+	
+	return count
+end
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+function DoesTableContain(tbl, value)
+
+	local count = 0
+
+	if( type(tbl) == "table" ) then
+		for k,v in pairs(tbl) do
+			if( v == value ) then
+				return true
+			end
+		end
+	end
+	
+	return false
+end
+
+
+
+--? @shortdesc Helper function to process comparisons that use the Comparison enum... i.e. return true if value1 IS_LESS_THAN value2
+--? @extdesc Comparison type can be IS_EQUAL, IS_LESS_THAN, IS_LESS_THAN_OR_EQUAL, IS_GREATER_THAN, IS_GREATER_THAN_OR_EQUAL or IS_NOT_EQUAL
+--? @args Real value1, Comparison comparison, Real value2
+--? @return Bool
+function Util_Comparison(value1, comparison, value2)
+	
+	if comparison == IS_EQUAL then
+		return value1 == value2
+	elseif comparison == IS_LESS_THAN then
+		return value1 < value2
+	elseif comparison == IS_LESS_THAN_OR_EQUAL then
+		return value1 <= value2
+	elseif comparison == IS_GREATER_THAN then
+		return value1 > value2
+	elseif comparison == IS_GREATER_THAN_OR_EQUAL then
+		return value1 >= value2
+	elseif comparison == IS_NOT_EQUAL then
+		return value1 ~= value2 
+	end
+	
+end
+
+
+
+-- Player triggered save of the game for the player. The savegame name is built using the abbreviated mission name + checkpoint. 
+-- Not included in ScarDoc as this is called by the player by pressing a key combo (currently Shift+F5).
+-- Scripts should instead call Util_AutoSave() which also checks the player's "autosave enabled" setting.
+function Util_Quicksave()
+	if not Event_IsAnyRunning() then
+		Game_Quicksave()
+	else
+		Rule_Add(_Util_Quicksave_WaitForEventsToFinish)	-- defer the save until after all speech events have finished
+	end
+end
+function _Util_Quicksave_WaitForEventsToFinish()
+	if not Event_IsAnyRunning() then
+		Rule_RemoveMe()
+		Game_Quicksave()
+	end
+end
+
+
+
+--? @shortdesc Automatically save the game for the player. The savegame name is built using the abbreviated mission name + checkpoint. You can optionally have it wait until the player is out of combat.
+--? @extdesc This function checks the user setting regarding autosaves (so you don't have to!), and does nothing if the player has them disabled. 
+--? @args [Bool waitUntilOutOfCombat, Bool onlyCareAboutCombatOnScreen, Real maxWaitTime]
+--? @result void 
+function Util_AutoSave(waitUntilOutOfCombat, onlyCareAboutCombatOnScreen, maxWaitTime)
+
+	if UI_GetAutoSaveEnabled() == true then 							-- if the player has autosaves switched off, do nothing!
+
+		if Rule_Exists(_Util_AutoSave_WaitUntilOutOfCombat) then 		-- if there is a previous autosave request still being processed, remove the rules from that one and just go with the new one
+			Rule_Remove(_Util_AutoSave_WaitUntilOutOfCombat)		
+		end
+		if Rule_Exists(_Util_AutoSave_WaitForEventsToFinish) then 
+			Rule_Remove(_Util_AutoSave_WaitForEventsToFinish)		
+		end
+
+		if waitUntilOutOfCombat == true then 
+			
+			if Event_IsAnyRunning() == false and _Util_AutoSave_CheckCurrentlyInCombat(onlyCareAboutCombatOnScreen) == false then
+				Game_Autosave()
+			else 
+				Rule_AddInterval(_Util_AutoSave_WaitUntilOutOfCombat, 1, {count = 1, onlyCareAboutCombatOnScreen = onlyCareAboutCombatOnScreen, maxWaitTime = maxWaitTime or 45})
+			end
+			
+		else
+			
+			if Event_IsAnyRunning() == false then
+				Game_Autosave()
+			else
+				Rule_Add(_Util_AutoSave_WaitForEventsToFinish)			-- defer the save until after all speech events have finished
+			end
+			
+		end
+		
+	end
+end
+function _Util_AutoSave_WaitUntilOutOfCombat(context, data)
+	
+	if Event_IsAnyRunning() == false and (data.count >= data.maxWaitTime or _Util_AutoSave_CheckCurrentlyInCombat(data.onlyCareAboutCombatOnScreen) == false) then 
+		Rule_RemoveMe()
+		Game_Autosave()
+	end
+	
+	data.count = data.count + 1
+
+end
+function _Util_AutoSave_WaitForEventsToFinish()
+	if Event_IsAnyRunning() == false then
+		Rule_RemoveMe()
+		Game_Autosave()
+	end
+end
+
+function _Util_AutoSave_CheckCurrentlyInCombat(onlyCareAboutCombatOnScreen)
+
+	local player = Game_GetLocalPlayer()
+	Player_GetAll(player)
+
+	if onlyCareAboutCombatOnScreen == true then 			
+		SGroup_FilterOnScreen(sg_allsquads, 0.95, FILTER_KEEP)			-- filter units to on-screen units only, if that flag was set
+	end
+		
+	return SGroup_IsUnderAttack(sg_allsquads, ANY, 2.5) or SGroup_IsDoingAttack(sg_allsquads, ANY, 2.5)
+
+end
+
+
+
+--? @shortdesc Simply prints out everything in a table including nested tables
+--? @result nil
+function Util_PrintTable(toPrint, indent)
+	
+	indent = indent or 0
+	
+	local indent_string = ""
+	for i=1,indent do
+		indent_string = indent_string .. "\t"
+	end
+
+	for k,v in pairs(toPrint) do
+		if (type(v) ~= "table") then
+			print(indent_string .. tostring(k)..' = '..tostring(v))
+		else
+			print(indent_string .. tostring(k)..' = ')
+			Util_PrintTable(v, indent + 1)
+		end
+	end
+end
+
+
+--? @shortdesc Splits a string into a table of substrings based on a given separator.
+--? 	Comma is used as the default separator if none is provided. 
+--? @result table
+function Util_StringSplit(str, sep)
+	sep = sep or ","
+	local reg = string.format("([^%s]+)", sep)
+	local t={} 
+	for s in string.gmatch(str, reg) do
+		table.insert(t, s)
+	end
+	return t
+end
+
+
+--? @shortdesc Debug function used to toggle whether or not IntelEvents are played. Only works with -dev parameter
+--? @result void 
+function Util_ToggleAllowIntelEvents()
+	if(Misc_IsCommandLineOptionSet("dev")) then
+		__g_playIntelEvents = not __g_playIntelEvents
+	end
+end
+
+
+--? @shortdesc Calls UI_NewHUDFeature() as an IntelEvent. Will get queued as any other event. See UI_NewHUDFeature() for parameter details.
+--? @args HUDFeatureType newHUDFeature, LocString featureText, String featureIcon, Real duration
+--? @result void 
+function Util_NewHUDFeatureEvent(HUDFeature, text, icon, duration)
+	local event = function()
+		CTRL.UI_NewHUDFeature(HUDFeature, text, icon, duration)
+		CTRL.WAIT()
+	end
+	Util_StartIntel(event)
+end
+
+
+
+--? @group scardoc;Debug
+
+--Sets up the debug table/iterator needed to debug the list of intel events.
+function _IntelDebug()
+	if Misc_IsCommandLineOptionSet("dev") then
+		print("IntelEvent Debugger - Initializing...")
+		Rule_RemoveAll()
+		__t_intelDebugTable = {}
+		__t_intelDebugIterator = 0
+		for k,v in pairs(EVENTS) do
+			table.insert(__t_intelDebugTable, {name = k, event = v})
+		end
+	end
+end
+
+--? @shortdesc Replays the last intel event that was debugged. 
+--? @result void 
+function _IntelDebugReplay()
+
+	if Misc_IsCommandLineOptionSet("dev") then
+		
+		if(__t_intelDebugTable == nil) then
+			_IntelDebug()
+			__t_intelDebugIterator = 1
+		end
+		
+		local debugtitle = "IntelEvent Debugger - "..__t_intelDebugIterator.." of "..#__t_intelDebugTable
+		local eventtitle = "EVENTS."..__t_intelDebugTable[__t_intelDebugIterator].name
+		
+		_IntelDebugPlay(__t_intelDebugTable[__t_intelDebugIterator].event, debugtitle, eventtitle)
+		
+	end
+end
+
+--? @shortdesc Plays the next intel event in the debug queue.  IntelEvents are played sequentially as they are defined in a mission's .events file.
+--? @result void 
+function _IntelDebugNext()
+	if Misc_IsCommandLineOptionSet("dev") then
+	
+		if(__t_intelDebugTable == nil) then
+			_IntelDebug()
+		end
+		
+		__t_intelDebugIterator = math.min(__t_intelDebugIterator + 1, #__t_intelDebugTable)
+		
+		local debugtitle = "IntelEvent Debugger - "..__t_intelDebugIterator.." of "..#__t_intelDebugTable
+		local eventtitle = "EVENTS."..__t_intelDebugTable[__t_intelDebugIterator].name
+		
+		if(__t_intelDebugIterator == #__t_intelDebugTable) then
+			debugtitle = LOC("IntelEvent Debugger - "..__t_intelDebugIterator.." of "..#__t_intelDebugTable.." - FINAL")
+		end
+		
+		_IntelDebugPlay(__t_intelDebugTable[__t_intelDebugIterator].event, debugtitle, eventtitle)
+		
+	end
+end
+
+--? @shortdesc Plays the next intel event in the debug queue. IntelEvents are played sequentially as they are defined in a mission's .events file.
+--? @result void 
+function _IntelDebugPrev()
+	if Misc_IsCommandLineOptionSet("dev") then
+	
+		if(__t_intelDebugTable == nil) then
+			_IntelDebug()
+		end
+		
+		__t_intelDebugIterator = math.max(__t_intelDebugIterator - 1, 1)
+		
+		local debugtitle = "IntelEvent Debugger - "..__t_intelDebugIterator.." of "..#__t_intelDebugTable
+		local eventtitle = "EVENTS."..__t_intelDebugTable[__t_intelDebugIterator].name
+		
+		if(__t_intelDebugIterator == #__t_intelDebugTable) then
+			debugtitle = LOC("IntelEvent Debugger - "..__t_intelDebugIterator.." of "..#__t_intelDebugTable.." - FINAL")
+		end
+		
+		_IntelDebugPlay(__t_intelDebugTable[__t_intelDebugIterator].event, debugtitle, eventtitle)
+		
+	end
+end
+
+
+function _IntelDebugPlay(event, line1, line2)
+
+	local _IntelDebug_TempEvent = function()
+		
+		local text = LOC(line1.."\n"..line2)
+		
+		UI_SystemMessageShow(text)
+
+		event()
+		
+		UI_SystemMessageHide(text)
+		
+	end
+	
+	Event_Skip()
+	Util_StartIntel(_IntelDebug_TempEvent)
+	
+end
+
+
+
+function HideEntityVisual(executer, targetEntity)
+	Entity_VisHide(targetEntity, true);
+end
+
+function ShowEntityVisual(executer, targetEntity)
+	Entity_VisHide(targetEntity, false);
+end
+
+-- catch all for adding to sgroups
+-- parameter 'sgroup' can be a table, an sgroup or a string
+-- parameter 'toAdd' can be an sgroup or a squad
+function Util_SGroupAdd(sgroup, toAdd)
+	-- First we need to resolve the sgroup parameter
+	if scartype(sgroup) == ST_TABLE then
+		for k, value in pairs(sgroup) do
+			-- yay recursive
+			Util_SGroupAdd(value, toAdd)
+		end
+	
+	elseif scartype(sgroup) == ST_STRING then
+		local lsgroup = SGroup_CreateIfNotFound(sgroup)
+		Util_SGroupAdd(lsgroup, toAdd)	
+		
+	elseif scartype(sgroup) == ST_SGROUP then
+		
+		-- now that we've resolved sgroup to an actual sgroup, resolve toAdd
+		
+		if scartype(toAdd) == ST_SGROUP then
+			print("Adding group (" .. tostring(toAdd) .. ") to group " .. tostring(sgroup))
+			SGroup_AddGroup(sgroup, toAdd)
+		elseif scartype(toAdd) == ST_SQUAD then
+			print("Adding squad to group " .. tostring(sgroup))
+			SGroup_Add(sgroup, toAdd)
+		else
+			print("Warning: Util_SGroupAdd: Tried to add an invalid object to an sgroup")
+		end
+		
+	else
+		print("Warning: Util_SGroupAdd: Tried to add to an invalid object")
+	end	
+end
+
+
+
+
+
+
+
+
+
+--? @shortdesc Adds a function and set of arguments to be automatically called during restore from a saved game. Maxiumum of 9 parameters. Callback will be called like this: Callback(arg[1], arg[2], ...)
+--?	@args Function callback, [parmeter1, parameter2, ...]
+--? @result Void
+function Game_SetGameRestoreCallback(...)
+	local arg = {...}
+
+	if __defaultGameRestoreSavedCallbacks == nil then
+		__defaultGameRestoreSavedCallbacks = {}
+	end
+
+	if (#arg > 10) then
+		fatal("Game_SetGameRestoreCallback can take a maxiumum of 10 arguments")
+	end
+
+	if (scartype(arg[1]) == ST_FUNCTION) then
+		table.insert(__defaultGameRestoreSavedCallbacks, arg)
+	else
+		fatal("Game_SetGameRestoreCallback must recieve a function to callback")
+	end
+end
+--? @shortdesc Removes a callback from being called on game restore
+--?	@args Function callback
+--? @result Void
+function Game_RemoveGameRestoreCallback(callback)
+	if __defaultGameRestoreSavedCallbacks ~= nil and (#__defaultGameRestoreSavedCallbacks) > 0 then
+		for k=(#__defaultGameRestoreSavedCallbacks), 1, -1 do
+			if __defaultGameRestoreSavedCallbacks[k][1] == callback then
+				table.remove(__defaultGameRestoreSavedCallbacks, k)
+			end
+		end
+	end
+end
+
+--? @shortdesc Checks whether a callback 
+--?	@args Function callback
+--? @result Void
+function Game_GetGameRestoreCallbackExists(callback)
+	if __defaultGameRestoreSavedCallbacks == nil or (#__defaultGameRestoreSavedCallbacks) < 1 then
+		return false
+	else
+		for k,v in pairs(__defaultGameRestoreSavedCallbacks) do
+			if v == callback then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+--? @shortdesc Restores various aspects of the single player game after loading a mission from a save game
+--?	@args Void
+--? @result Void
+function Game_DefaultGameRestore()
+	
+	if (__defaultGameRestoreSavedCallbacks ~= nil) then
+		local callbacks = {}		
+		for k,v in pairs(__defaultGameRestoreSavedCallbacks) do
+			table.insert(callbacks, v)
+		end	
+		
+		for k,v in pairs(callbacks) do
+			local numParams = (#v)
+			if numParams == 1 then			
+				v[1]() 
+			elseif numParams == 2 then			
+				v[1](v[2]) 
+			elseif numParams == 3 then			
+				v[1](v[2], v[3]) 
+			elseif numParams == 4 then			
+				v[1](v[2], v[3], v[4]) 
+			elseif numParams == 5 then			
+				v[1](v[2], v[3], v[4], v[5]) 
+			elseif numParams == 6 then			
+				v[1](v[2], v[3], v[4], v[5], v[6]) 
+			elseif numParams == 7 then			
+				v[1](v[2], v[3], v[4], v[5], v[6], v[7]) 
+			elseif numParams == 8 then			
+				v[1](v[2], v[3], v[4], v[5], v[6], v[7], v[8]) 
+			elseif numParams == 9 then			
+				v[1](v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]) 
+			elseif numParams == 10 then			
+				v[1](v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10]) 
+			end
+		end	
+	end
+end
+
+--? @shortdesc This is a global function that needs to exist for other things to work correctly. It used to be in module_defend.scar, but wasn't relevant to that particular chunk!
+--? @args TABLE data
+--? @result NIL
+function _idleBehaviour_stop(data)
+	for k,v in pairs(data) do
+		if v.data.idle_behaviour ~= nil then
+			Cmd_Stop(v.sgroup)
+		end
+	end
+end
+
+
+--? @shortdesc Wrapper function for command line arguments. DO NOT USE MORE THAN ONCE PER ARGUMENT.
+--? 	It is impossible for them to change after application start, so save the result and reuse it.
+--? @args string key of the argument you want to query 
+--? @result NIL, if the command line argument is not set
+--? 	Otherwise it returns a const char* representation of the value
+function Util_GetCommandLineArgument(key)
+	local received_argument = Misc_IsCommandLineOptionSet(key)
+	if (received_argument) then
+		return Misc_GetCommandLineString(key)
+	else
+		return nil
+	end
+end
+
+
+--? @shortdesc
+--?		Reverses the entries of the table that is passed to the function
+--?		
+--?	@extdesc 
+--?		This function will iterate over a 1D array/table and flip it, so that the first 
+--?		element is the last, the last is the first, and so on.
+--? 
+--?	@args
+--?		table list_to_reverse
+
+function Util_ReverseList(t_list_to_reverse)
+    local i, j = 1, #t_list_to_reverse
+    
+    while i < j do
+        t_list_to_reverse[i], t_list_to_reverse[j] = t_list_to_reverse[j], t_list_to_reverse[i]
+        
+        i = i + 1
+        j = j - 1
+    end
+end
+
+--? @shortdesc Enters Cinematic mode 
+--? @args Table [GameUICore VisibilityFlag Enums] hiddenGameComponentFlags: List of GameUICore VisibilityFlag enums to hide in cinematic mode. Pass
+--? in an empty table or nil to not hide any game components. Pass in the constant "DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS" for a default set of game components to hide.
+--? 
+--? @args Function skipNISCallback (optional): Skip NIS callback to set.
+function Util_EnterCinematicMode(hiddenGameComponentFlags, skipNISCallback, inputFlags)
+	if isCinematicMode then
+		return
+	end
+	
+	-- disable inputs
+	originalInputEnabledFlag = Game_GetInputEnabledFlag()
+	Game_SetInputEnabledFlag(Game_ConvertInputEnabledFlagEnumToInt(inputFlags or IEF_None))
+	
+	-- disable pause menu
+	UI_SetEnablePauseMenu(false)
+	
+	-- set letterbox
+	UI_LetterboxFade(0,0,0,1,0,21/9,true)
+	
+	-- first, show all game components
+	originalGameVisibilityFlag = Game_GetVisibilityFlag()
+	Game_SetVisibilityFlag(Game_ConvertVisibilityFlagEnumToInt(VF_All))
+	
+	-- then hide the specified game components to hide
+	if scartype(hiddenGameComponentFlags) == ST_TABLE and #hiddenGameComponentFlags > 0 then
+		for index, flag in pairs(hiddenGameComponentFlags) do
+			Game_SetVisibility(flag, false)
+		end
+	end
+	
+	-- set the specified NIS skip callback if one is specified
+	if type(skipNISCallback) == "function" then
+		UI_SetSkipNISCallback(skipNISCallback)
+		hasSetSkipNISCallbackInCinematicMode = true
+	else
+		hasSetSkipNISCallbackInCinematicMode = false
+	end
+	
+	isCinematicMode = true
+	World_SetStateModelBool("is_cinematic_mode", isCinematicMode)
+end
+
+--? @shortdesc Exits Cinematic mode
+function Util_ExitCinematicMode()
+	if not isCinematicMode or exitingCinematicMode then
+		return
+	end
+	
+	exitingCinematicMode = true
+	
+	local letterboxFadeDuration = 0.5
+		
+	-- remove letterbox
+	local letterbox_id = UI_LetterboxFade(--[[red]]0, --[[green]]0, --[[blue]]0, --[[alpha]]0, letterboxFadeDuration,
+		--[[aspect_ratio]]21/9, --[[persistent]]false)
+	
+	Rule_Add(ExitCinematicModeAfterFinishingTransition, {letterbox_id = letterbox_id})
+end
+
+function ExitCinematicModeAfterFinishingTransition(context, data)
+	if UI_HasTransitionFinished(data.letterbox_id) then
+		
+		-- restore the input state
+		Game_SetInputEnabledFlag(originalInputEnabledFlag)
+		
+		-- restore the game visibility flag
+		Game_SetVisibilityFlag(originalGameVisibilityFlag)
+		
+		-- enable pause menu
+		UI_SetEnablePauseMenu(true)
+		
+		-- clear the try-to-skip-NIS callback if it was set when entering cinematic mode
+		if hasSetSkipNISCallbackInCinematicMode then
+			UI_ClearSkipNISCallback()
+		end
+		
+		isCinematicMode = false
+		exitingCinematicMode = false
+		World_SetStateModelBool("is_cinematic_mode", isCinematicMode)
+		
+		Rule_RemoveMe()
+	end
+end
+
+--? @shortdesc Returns whether cinematic mode is active
+--? @result Boolean
+function Util_IsCinematicMode()
+	return isCinematicMode
+end
+
+--? @shortdesc Enters Normal mode
+function Util_NormalMode()
+	if isCinematicMode then
+		Util_ExitCinematicMode()
+	end
+	
+	if exitingCinematicMode then
+		-- wait for cinematic mode to finish
+		Rule_Add(_EnterNormalMode)
+	elseif not isCinematicMode then
+		_SetNormalModeInputFlags()
+	end
+end
+
+--? NOTE: this function should only be used by Util_NormalMode(). It is needed as a rule in order to wait for 
+--? cinematic mode to finish before entering normal mode.
+function _EnterNormalMode()
+	if not isCinematicMode then
+		_SetNormalModeInputFlags()
+		Rule_RemoveMe()
+	end
+end
+
+--? NOTE: this function should only be used by Util_NormalMode().
+function _SetNormalModeInputFlags()
+	if Game_IsPaused() then
+		Game_SetInputEnabledFlag(Game_ConvertInputEnabledFlagEnumToInt(IEF_None))
+	else
+		Game_SetInputEnabledFlag(Game_ConvertInputEnabledFlagEnumToInt(IEF_All))
+	end
+	
+	Game_SetVisibilityFlag(Game_ConvertVisibilityFlagEnumToInt(VF_All))
+end
+
+--? @shortdesc Enters Fullscreen mode
+--? @args Table [GameUICore VisibilityFlag Enums] hiddenGameComponentFlags: List of GameUICore VisibilityFlag enums to hide in fullscreen mode. Pass
+--? in an empty table or nil to not hide any game components. Pass in the constant "DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS" for a default set of game components to hide.
+function Util_FullscreenMode(hiddenGameComponentFlags)
+	if isCinematicMode then
+		Util_ExitCinematicMode()
+	end
+	
+	if exitingCinematicMode then
+		-- wait for cinematic mode to finish
+		Rule_Add(_EnterFullscreenMode, {hiddenGameComponentFlags = hiddenGameComponentFlags})
+	else
+		_EnterFullscreenMode(nil, {hiddenGameComponentFlags = hiddenGameComponentFlags})
+	end
+end
+
+--? NOTE: this function should only be used by Util_FullscreenMode(). It is needed as a rule in order to wait for 
+--? cinematic mode to finish before entering fullscreen mode.
+function _EnterFullscreenMode(context, data)
+	if not isCinematicMode then
+		Game_SetInputEnabledFlag(Game_ConvertInputEnabledFlagEnumToInt(IEF_None))
+	
+		-- first, show all game components
+		originalGameVisibilityFlag = Game_GetVisibilityFlag()
+		Game_SetVisibilityFlag(Game_ConvertVisibilityFlagEnumToInt(VF_All))
+		
+		-- then hide the specified game components to hide
+		if scartype(data.hiddenGameComponentFlags) == ST_TABLE and #data.hiddenGameComponentFlags > 0 then
+			for index, flag in pairs(data.hiddenGameComponentFlags) do
+				Game_SetVisibility(flag, false)
+			end
+		end
+		
+		Rule_RemoveMe()
+	end
+end

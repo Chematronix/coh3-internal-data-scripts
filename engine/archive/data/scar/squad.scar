@@ -1,0 +1,200 @@
+----------------------------------------------------------------------------------------------------------------
+-- Squad helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+--? @group scardoc;Squad
+
+----------------------------------------------------------------------------------------------------------------
+-- Squad helper functions
+
+
+--? @shortdesc Checks whether a squad is of any of the Blueprints or SquadTypes specified.
+--? @extdesc Blueprint can be a single Blueprint, a single SquadType, or a table of multiple Blueprints or SquadTypes. If you want to see if a squad has ALL of a set of SquadTypes, then wrap them all in a sub-table.
+--? @args SquadID squad, SBP/SquadType/Table blueprints
+--? @result Boolean
+function Squad_HasBlueprint(squad, blueprints)
+
+	if scartype(blueprints) ~= ST_TABLE then
+		blueprints = {blueprints}
+	end
+	
+	local squadBP = Squad_GetBlueprint(squad)
+	
+	for index, item in pairs(blueprints) do 
+		
+		if scartype(item) == ST_PBG then								-- this item is a SBP
+			
+			if squadBP == item then
+				return true
+			end
+			
+		elseif scartype(item) == ST_STRING then							-- this item is a SquadType
+			
+			if Squad_IsOfType(squad, item) == true then 
+				return true 
+			end
+			
+		elseif scartype(item) == ST_TABLE then							-- this item is a table of SquadTypes, so we only want to return true if the squad matches ALL the SquadTypes in it
+			
+			local result = true 
+			
+			for i = 1, #item do 
+				if Squad_IsOfType(squad, item[i]) == false then 
+					result = false 
+					break
+				end
+			end
+			
+			if result == true then 
+				return true
+			end
+			
+		end
+		
+	end
+	
+	-- not found, so return false
+	return false
+
+end
+
+
+
+
+--? @shortdesc Returns true if ALL or ANY troopers in a squad are in cover.
+--? @extdesc Set all to true to check if all troopers are in cover or set to false to check if any.
+--? @args SquadID squadId, Boolean all
+--? @result Boolean
+function Squad_IsInCover( squadId, all )
+	local n = Squad_Count( squadId )
+	local i
+	for i = 1, n do
+		if( Squad_GetCoverType( squadId, n-1 ) == CT_None ) then
+			if( all ) then return false end
+		else
+			if( any ) then return true end
+		end
+	end
+	
+	return all
+end
+
+
+--? @shortdesc Warps a squad immediately to a new position
+--? @args SquadID squad, Position pos
+--? @result Void
+function Squad_WarpToPos(squad, pos)
+
+	Squad_SetPosition(squad, pos, pos)
+	
+end
+
+--? @shortdesc Set invulnerability on the squad. Reset time is in seconds. If it is non-negative, the invulnerability will expire after this time.
+--? @args SquadID squad, Bool enable, Float reset_time
+--? @result Void
+function Squad_SetInvulnerable(squad, enable, reset_time)
+
+	local cap
+	if ( enable == true ) then
+		cap = 1.0
+	elseif (enable == false) then
+		cap = 0.0
+	else
+		cap = enable
+	end
+	
+	Squad_SetInvulnerableMinCap( squad, cap, reset_time )
+end
+
+
+--? @shortdesc Check if the squad is invulnerable or not
+--? @args SquadID squad
+--? @result Bool
+function Squad_GetInvulnerable(squad)
+
+	return ( Squad_GetInvulnerableMinCap( squad ) == 1.0 )
+end
+
+
+--? @shortdesc Returns a position relative to a squad's current position and orientation. see ScarUtil.scar for explanation of 'offset' parameter.
+--? @args SquadID squad, Integer offset, Real distance
+--? @result Position
+function Squad_GetOffsetPosition(squad, offset, distance)
+	return World_GetOffsetPosition(Squad_GetPosition(squad), Squad_GetHeading(squad), offset, distance)
+end
+
+--? @shortdesc Returns whether ANY entity in the squad is camouflaged
+--? @args SquadID squad
+--? @result Boolean
+function Squad_IsCamouflaged(squad)
+
+	for i = 1, Squad_Count(squad) do
+		local entity = Squad_EntityAt(squad, i - 1)
+		if Entity_IsCamouflaged(entity) then
+			return true
+		end
+	end
+	
+	return false
+
+end
+
+--? @shortdesc Set animation state of a state machine for a squad. Please only use this for simple animations
+--? @args SquadID squadid, String stateMachineName, String stateName
+--? @result Void
+function Squad_SetAnimatorState(squadid, stateMachineName, stateName)
+	for n = 1, Squad_Count(squadid) do
+		local eid = Squad_EntityAt(squadid, n-1)
+		if (Entity_IsSyncWeapon(eid) == false) then
+			Entity_SetAnimatorState(eid, stateMachineName, stateName)
+		end
+	end
+end
+
+
+--? @shortdesc Trigger animation action for a squad. Please only use this for simple animations
+--? @args SquadID squadid, String actionName
+--? @result Void
+function Squad_SetAnimatorAction(squadid, actionName)
+	for n = 1, Squad_Count(squadid) do
+		local eid = Squad_EntityAt(squadid, n-1)
+		if (Entity_IsSyncWeapon(eid) == false) then
+			Entity_SetAnimatorAction(eid, actionName)
+		end
+	end
+end
+
+
+--? @shortdesc Trigger animation event for a squad. Please only use this for simple animations
+--? @args SquadID squadid, String actionName
+--? @result Void
+function Squad_SetAnimatorEvent(squadid, eventName)
+	for n = 1, Squad_Count(squadid) do
+		local eid = Squad_EntityAt(squadid, n-1)
+		if (Entity_IsSyncWeapon(eid) == false) then
+			Entity_SetAnimatorEvent(eid, eventName)
+		end
+	end
+end
+
+
+
+
+
+--? @shortdesc Test whether a squad can be ordered to do this ability on any member of the target SGroup
+--? @args SquadID caster, AbilityBlueprint ability, SGroup target_sgroup
+function Squad_CanCastAbilityOnSGroup(caster, ability, target_sgroup)
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_CanCastAbilityOnSquad(caster, ability, sid)
+	end
+	return SGroup_ForEachAllOrAny(target_sgroup, ANY, _CheckSquad)
+end
+
+--? @shortdesc Test whether a squad can be ordered to do this ability on any member of the target EGroup
+--? @args SquadID caster, AbilityBlueprint ability, EGroup target_egroup
+function Squad_CanCastAbilityOnEGroup(caster, ability, target_egroup)
+	local _CheckEntity = function(gid, idx, eid)
+		return Squad_CanCastAbilityOnEntity(caster, ability, eid)
+	end
+	return EGroup_ForEachAllOrAny(target_egroup, ANY, _CheckEntity)
+end

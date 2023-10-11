@@ -1,0 +1,1600 @@
+import("anvil_scoring_util.scar")
+
+-- use function result as a percent bonus instead of multiplying in as a scaler
+-- result of returned function is 1 + maxBonusPercent * result of scoringFunction
+function ScoringFunctions_Bonus(aiPlayer, maxBonusPercent, scoringFunction)
+	return AIProductionScoring_AddListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, function() return 1 end, "ConstantUtility"),
+			AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+				{
+					AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, function() return maxBonusPercent end, "ConstantScale"),
+					scoringFunction
+				}
+			),
+		}
+	)
+end
+
+function ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	local boost = combatRatingBoost or 1; 
+	local scale = combatRatingScale or 1;
+	local weight = timeToAcquireScale or 0.5;
+	local constantUtility = function(aiPlayer, prodGroupID, pbg)
+		return boost;
+	end
+	local constantScale = function(aiPlayer, prodGroupID, pbg)
+		return scale;
+	end
+	local constantWeight = function(aiPlayer, prodGroupID, pbg)
+		return weight;
+	end
+	local result = 
+	{
+		AIProductionScoring_AddListScoringFunction(aiPlayer,
+			{
+				AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, constantUtility, "ConstantUtility"),
+				AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+					{
+						AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, constantScale, "ConstantScale"),
+						AIProductionScoring_ImprovesCombatRating(aiPlayer, 0.5, 1.0),
+					}
+				),
+			}
+		),
+		AIProductionScoring_MultiplyListScoringFunction(aiPlayer, 
+			{
+				AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, constantWeight, "ConstantWeight"),
+				AIProductionScoring_TimeToAcquire(aiPlayer, 300, 0.15, true, true, true),
+			}
+		),
+		AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, TechFocusUtility, "TechFocusUtility"),
+		AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, InfantryFocusUtility, "InfantryFocusUtility")
+	}
+
+	return result
+end
+
+function ScoringFunctions_TechCommon(aiPlayer)
+	local result = 
+	{
+		AIProductionScoring_MinimumGameTime(aiPlayer, 30),
+		AIProductionScoring_TimeToAcquire(aiPlayer, 300.0, 0.05, true, true, true),
+		AIProductionScoring_OnlyProduceOneAtATime(aiPlayer), -- TODO: This relies on AITasks, we still produce upgrades with tasks
+		AIProductionScoring_TargetScoreScoringFunction(aiPlayer, 0, AIProductionScoring_AlliedCombatFitness(aiPlayer, 0.3, 1.0))
+	}
+	return result
+end
+
+function ScoringFunctions_TechUp(aiPlayer)
+	local combatRatingBoost = 1
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 1
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	return result
+end
+
+function ScoringFunctions_BreadAndButter(aiPlayer)
+	local combatRatingBoost = 1
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.25
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	return result
+end
+
+function ScoringFunctions_BreadAndButterVariant(aiPlayer)
+	local combatRatingBoost = 1
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local squadName = BP_GetName(pbg)
+		local perUnitScale = 0.333
+		if string.find(squadName, "engineer") ~= nil then
+			perUnitScale = 0.25
+		end
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local randomScaleUtility = function(aiPlayer, prodGroupID, pbg)
+		local productionGroup = AI_ProductionGroupPBGs(aiPlayer, prodGroupID)
+		local selectedIndex = GetProductionVariantInt(aiPlayer, #productionGroup) 
+		local selectedScale = 1.0
+		local defaultScale = 0.0
+		return SelectedPBGUtility(aiPlayer, prodGroupID, pbg, selectedIndex, selectedScale, defaultScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, randomScaleUtility, "RandomScaleUtility")
+
+	return result
+end
+
+function ScoringFunctions_ScoutAfrikaKorps(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 1
+		local perUnitScaleProduced = 1
+		local maxCurrent = 1
+		local maxTotalProduced = 2
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced, maxCurrent, maxTotalProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_MaximumGameTime(aiPlayer, 600)
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	return result
+end
+
+function ScoringFunctions_ScoutAmerican(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.75
+		local perUnitScaleProduced = 0.75
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	local constantUtility = function(aiPlayer, prodGroupID, pbg)
+		return 1.25;
+	end
+
+	result[#result + 1] = AIProductionScoring_MaximumGameTime(aiPlayer, 600)
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_NotProducedRecently(aiPlayer, 120)
+	
+	-- If no heavy armor is present, boost the final score by constant utility.
+	-- As vehicles appear score boost drops to 0, turning off scout units
+	result[#result + 1] = AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, constantUtility, "ConstantUtility"),
+			AIProductionScoring_TargetScoreScoringFunction(aiPlayer,  0,
+				AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+					{
+						heavy_armor = {
+							weight = 1,
+							squad_type = true,
+						},
+						anti_tank = {
+							weight = 1,
+							squad_type = true,
+						},
+					},
+					true,
+					true
+				)
+			)
+		}
+	)
+
+	-- Counter snipers
+	result[#result + 1] = AIProductionScoring_AddListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, function() return 1 end, "ConstantUtility"),
+			AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+				{
+					AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, function() return 0.25 end, "ConstantUtility"),
+					AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+						{
+							sniper = {
+								weight = 1.0,
+								squad_type = true,
+							},
+						},
+						true,
+						true
+						)
+				}
+			)
+		}
+	)
+	
+	-- Has enough infantry
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			teamweapon = {
+				weight = 0.75,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+			elite_infantry = {
+				weight = 0.75,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	
+	-- Doesnt have other vehicles
+	result[#result + 1] = AIProductionScoring_TargetScoreScoringFunction(aiPlayer,  0,
+		AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+			{
+				heavy_armor = {
+					weight = 1.0,
+					squad_type = true,
+				},
+				vehicle = {
+					weight = 0.5,
+					squad_type = false,
+				},
+				light_vehicle = {
+					weight = 0.1,
+					squad_type = false,
+				},
+			},
+			true
+		)
+	)
+	
+	return result
+end
+
+function ScoringFunctions_ScoutBritish(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.75
+		local perUnitScaleProduced = 0.75
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	local constantUtility = function(aiPlayer, prodGroupID, pbg)
+		return 1.25;
+	end
+
+	result[#result + 1] = AIProductionScoring_MaximumGameTime(aiPlayer, 600)
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_NotProducedRecently(aiPlayer, 120)
+	
+	-- If no heavy armor is present, boost the final score by constant utility.
+	-- As vehicles appear score boost drops to 0, turning off scout units
+	result[#result + 1] = AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, constantUtility, "ConstantUtility"),
+			AIProductionScoring_TargetScoreScoringFunction(aiPlayer,  0,
+				AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+					{
+						heavy_armor = {
+							weight = 1,
+							squad_type = true,
+						},
+						anti_tank = {
+							weight = 1,
+							squad_type = true,
+						},
+					},
+					true,
+					true
+				)
+			)
+		}
+	)
+
+	-- Counter snipers
+	result[#result + 1] = AIProductionScoring_AddListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, function() return 1 end, "ConstantUtility"),
+			AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+				{
+					AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, function() return 0.25 end, "ConstantUtility"),
+					AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+						{
+							sniper = {
+								weight = 1.0,
+								squad_type = true,
+							},
+						},
+						true,
+						true
+						)
+				}
+			)
+		}
+	)
+	
+	-- Has enough infantry
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			teamweapon = {
+				weight = 0.75,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+			elite_infantry = {
+				weight = 0.75,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	
+	-- Doesnt have other vehicles
+	result[#result + 1] = AIProductionScoring_TargetScoreScoringFunction(aiPlayer,  0,
+		AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+			{
+				heavy_armor = {
+					weight = 1.0,
+					squad_type = true,
+				},
+				vehicle = {
+					weight = 0.5,
+					squad_type = false,
+				},
+				light_vehicle = {
+					weight = 0.1,
+					squad_type = false,
+				},
+			},
+			true
+		)
+	)
+	
+	return result
+end
+
+function ScoringFunctions_ScoutGerman(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = 0.25
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	local constantUtility = function(aiPlayer, prodGroupID, pbg)
+		return 1.25;
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_NotProducedRecently(aiPlayer, 120)
+	
+	-- If no heavy armor is present, boost the final score by constant utility.
+	-- As vehicles appear score boost drops to 0, turning off scout units
+	result[#result + 1] = AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, constantUtility, "ConstantUtility"),
+			AIProductionScoring_TargetScoreScoringFunction(aiPlayer,  0,
+				AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+					{
+						heavy_armor = {
+							weight = 1,
+							squad_type = true,
+						},
+						anti_tank = {
+							weight = 1,
+							squad_type = true,
+						},
+					},
+					true,
+					true
+				)
+			)
+		}
+	)
+	
+	-- Has enough infantry
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			teamweapon = {
+				weight = 0.75,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+			elite_infantry = {
+				weight = 0.75,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	
+	-- Doesnt have other vehicles
+	result[#result + 1] = AIProductionScoring_TargetScoreScoringFunction(aiPlayer,  0,
+		AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+			{
+				heavy_armor = {
+					weight = 1.0,
+					squad_type = true,
+				},
+				vehicle = {
+					weight = 0.5,
+					squad_type = false,
+				},
+				light_vehicle = {
+					weight = 0.1,
+					squad_type = false,
+				},
+			},
+			true
+		)
+	)
+	
+	return result
+end
+
+function ScoringFunctions_PowerUnits(aiPlayer)
+	local combatRatingBoost = 1.0;
+	local combatRatingScale = 2;
+	local timeToAcquireScale = 0.25
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.25
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	return result
+end
+
+function ScoringFunctions_RepairVehicles(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	result[#result + 1] = AIProductionScoring_AddListScoringFunction(aiPlayer,
+		{
+			AIProductionScoring_PresenceOfWrecks(aiPlayer, 
+				{
+					heavy_armor = {
+						weight = 0.2,
+						squad_type = true,
+					},
+					
+					medium_armor = {
+						weight = 0.1,
+						squad_type = true,
+					},
+				},
+				false
+				),
+			
+			AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+				{
+					heavy_armor = {
+						weight = 0.1,
+						squad_type = true,
+					},
+					medium_armor = {
+						weight = 0.065,
+						squad_type = true,
+					},
+					vehicle = {
+						weight = 0.035,
+						squad_type = false,
+					},
+					ultra_light = {
+						exclude = true,
+						squad_type = false,
+					},
+				},
+				true
+				),
+			
+			AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+				{
+					heavy_armor = {
+						weight = 0.1,
+						squad_type = true,
+					},
+					medium_armor = {
+						weight = 0.065,
+						squad_type = true,
+					},
+					vehicle = {
+						weight = 0.035,
+						squad_type = false,
+					},
+					ultra_light = {
+						exclude = true,
+						squad_type = false,
+					},
+				},
+				true,
+				true
+				)
+		}
+		)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0
+		local perUnitScaleProduced = 0.75
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+		
+	return result
+end
+
+function ScoringFunctions_BuildersUtility(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			heavy_armor = {
+				weight = 1,
+				squad_type = true,
+			},
+			vehicle = {
+				weight = 0.75,
+				squad_type = false,
+			},
+			light_vehicle = {
+				weight = 0.75,
+				squad_type = false,
+			}
+		},
+		true
+	)
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	return result
+end
+
+function ScoringFunctions_HMGs(aiPlayer)
+	local combatRatingBoost = 0.5;
+	local timeToAcquireScale = 0.5;
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.25
+		local perUnitScaleProduced = 0.25
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_MinimumGameTime(aiPlayer, 120)
+	return result
+end
+
+function ScoringFunctions_HMGsBritish(aiPlayer)
+	local combatRatingBoost = 0.5;
+	local timeToAcquireScale = 0.5;
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.25
+		local perUnitScaleProduced = 0.25
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_MinimumGameTime(aiPlayer, 60)
+	return result
+end
+
+function ScoringFunctions_InfantrySupport(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+		
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = -1
+		local perUnitScaleProduced = 0.8
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.2,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			}
+		},
+		true
+	)
+	result[#result + 1] = AIProductionScoring_NotProducedRecently(aiPlayer, 300)
+	return result
+end
+
+function ScoringFunctions_Snipers(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.25
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+		{
+			teamweapon = {
+				weight = 0.5,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+			elite_infantry = {
+				weight = 0.5,
+				squad_type = true,
+			},
+		},
+		true,
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_MidGamePower(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 1.5;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.75
+		local perUnitScaleProduced = 0.75
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = 0.5
+		local perPBGEverScale = 0.33
+		local maxPBGsFromGroupCurrent = 2
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	return result
+end
+
+function ScoringFunctions_MidGamePowerAfrikaKorps(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.75
+		local perUnitScaleProduced = 0.5
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = 0.5
+		local perPBGEverScale = 0.25
+		local maxPBGsFromGroupCurrent = 2
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	return result
+end
+
+function ScoringFunctions_MidGamePowerBritish(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = 0
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = 0.5
+		local perPBGEverScale = 0.25
+		local maxPBGsFromGroupCurrent = 3
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	return result
+end
+
+function ScoringFunctions_MidGamePowerGerman(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 1.5;
+	local timeToAcquireScale = 0.75
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = 0.25
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local randomScaleUtility = function(aiPlayer, prodGroupID, pbg)
+		local productionGroup = AI_ProductionGroupPBGs(aiPlayer, prodGroupID)
+		local selectedIndex = GetProductionVariantInt(aiPlayer, #productionGroup)
+		local selectedScale = 1.25
+		local defaultScale = 0.2
+		return SelectedPBGUtility(aiPlayer, prodGroupID, pbg, selectedIndex, selectedScale, defaultScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, randomScaleUtility, "RandomScaleUtility")
+	
+	return result
+end
+
+function ScoringFunctions_AntiTank(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 2;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = 0.5
+		local perPBGEverScale = -1
+		local maxPBGsFromGroupCurrent = 2
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility")
+	
+	result[#result + 1] = AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+		{
+			heavy_armor = {
+				weight = 1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.65,
+				squad_type = true,
+			},
+			vehicle = {
+				weight = 0.35,
+				squad_type = false,
+			},
+			light_armor = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			light_vehicle = {
+				weight = 0.25,
+				squad_type = false,
+			},
+			ultra_light = {
+				exclude = true,
+				squad_type = false,
+			},
+		},
+		true,
+		true
+	)
+	
+	result[#result + 1] = ScoringFunctions_Bonus(aiPlayer, 0.15,
+		AIProductionScoring_MultiplyListScoringFunction(aiPlayer,
+			{
+				AIProductionScoring_TimeToAcquire(aiPlayer, 300, 0, true, true, true),
+				AIProductionScoring_AlliedCombatFitness(aiPlayer, 0, 0.4)
+			}
+			)
+		)
+	
+	return result
+end
+
+function ScoringFunctions_AntiTankInfantry(aiPlayer)
+	local combatRatingBoost = 1.2;
+	local combatRatingScale = 2;
+	local timeToAcquireScale = 1.0
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+
+	-- Dont desire AT infantry if we got something that fills that role
+	result[#result + 1] = AIProductionScoring_TargetScoreScoringFunction(aiPlayer, 0,
+		AIProductionScoring_PresenceOfMyTypes(aiPlayer,
+			{
+				anti_tank = {
+					weight = 1,
+					squad_type = true,
+				},
+			},
+			true
+			)
+		)
+	
+	result[#result + 1] = AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+		{
+			heavy_armor = {
+				weight = 1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.65,
+				squad_type = true,
+			},
+			vehicle = {
+				weight = 0.35,
+				squad_type = false,
+			},
+			light_armor = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			light_vehicle = {
+				weight = 0.25,
+				squad_type = false,
+			},
+			ultra_light = {
+				exclude = true,
+				squad_type = false,
+			},
+		},
+		true,
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_AntiTankUpgrades(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 2;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_TechCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.5
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = 0.5
+		local perPBGEverScale = -1
+		local maxPBGsFromGroupCurrent = 2
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility")
+	
+	result[#result + 1] = AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+		{
+			heavy_armor = {
+				weight = 1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.65,
+				squad_type = true,
+			},
+			vehicle = {
+				weight = 0.35,
+				squad_type = false,
+			},
+			light_armor = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			light_vehicle = {
+				weight = 0.25,
+				squad_type = false,
+			},
+			ultra_light = {
+				exclude = true,
+				squad_type = false,
+			},
+		},
+		true,
+		true
+	)
+	-- Boost our own at-gun score when we build vehicles
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			heavy_armor = {
+				weight = 1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.65,
+				squad_type = true,
+			},
+			light_armor = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			light_vehicle = {
+				weight = 0.25,
+				squad_type = false,
+			},
+			ultra_light = {
+				exclude = true,
+				squad_type = false,
+			},
+		},
+		true
+	)
+	
+	-- not as important if we already have some AT
+	result[#result + 1] = AIProductionScoring_TargetScoreScoringFunction(aiPlayer, 0,
+		AIProductionScoring_PresenceOfMyTypes(aiPlayer,
+			{
+				anti_tank = {
+					weight = 0.25,
+					squad_type = true,
+				},
+			},
+			true
+			)
+		)
+	
+	return result
+end
+
+function ScoringFunctions_Mortars(aiPlayer)
+	local combatRatingBoost = 0.75;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = -1
+		local perUnitScaleProduced = 0.75
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_MinimumGameTime(aiPlayer, 120)
+	
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer,
+		{
+			vehicle = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			artillery = {
+				squad_type = true,
+				exclude = true,
+			},
+			vehicle_artillery = {
+				squad_type = true,
+				exclude = true,
+			},
+			mortar = {
+				squad_type = true,
+				exclude = true,
+			},
+			
+		},
+		true
+	)
+	
+	local constantUtility = function(aiPlayer, prodGroupID, pbg)
+		return 1.0;
+	end
+	
+	result[#result + 1] = ScoringFunctions_Bonus(aiPlayer, 1.0,
+		AIProductionScoring_PresenceOfEnemyTypes(aiPlayer,
+			{
+				teamweapon = {
+					weight = 0.2,
+					squad_type = true,
+				},
+				building = {
+					weight = 0.1,
+					squad_type = false,
+				},
+				base_defense = {
+					squad_type = false,
+					exclude = true,
+				},
+			},
+			true,
+			true
+			)
+		)
+	
+	return result
+end
+
+function ScoringFunctions_SpecialInfantry(aiPlayer)
+	local combatRatingBoost = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = -1
+		local perUnitScaleProduced = -1
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	result[#result + 1] = AIProductionScoring_PresenceOfEnemyTypes(aiPlayer, 
+		{
+			teamweapon = {
+				weight = 0.5,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+			infantry = {
+				weight = 0.5,
+				squad_type = true,
+			},
+			elite_infantry = {
+				weight = 0.5,
+				squad_type = true,
+			},
+		},
+		true,
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesGerman(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = -1
+		local perPBGEverScale = 1.0/5.0
+		local maxPBGsFromGroupCurrent = -1
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	
+	-- how does it improve our combat rating
+	result[#result + 1] = ScoringFunctions_Bonus(aiPlayer, 0.5, AIProductionScoring_MilitaryPlayerUpgrade(aiPlayer, 1))
+	
+	-- don't build upgrades if we don't have units	
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			light_armor = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.15,
+				squad_type = true,
+			},
+			heavy_armor = {
+				weight = 0.2,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			combat_engineer = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_PlayerUpgrades(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = -1
+		local perPBGEverScale = 1.0/7.0
+		local maxPBGsFromGroupCurrent = -1
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	
+	-- how does it improve our combat rating
+	result[#result + 1] = ScoringFunctions_Bonus(aiPlayer, 0.5, AIProductionScoring_MilitaryPlayerUpgrade(aiPlayer, 1))
+	
+	-- don't build upgrades if we don't have units	
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			light_armor = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.15,
+				squad_type = true,
+			},
+			heavy_armor = {
+				weight = 0.2,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			combat_engineer = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_SquadUpgrades(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local addedWeaponUtility = function(aiPlayer, prodGroupID, pbg)
+		local perWeaponScore = 0.1
+		return AddedWeaponUtility(aiPlayer, pbg, perWeaponScore)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, addedWeaponUtility, "AddedWeapon")
+	return result
+end
+
+function ScoringFunctions_SquadUpgradesAfrikaKorps(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local addedWeaponUtility = function(aiPlayer, prodGroupID, pbg)
+		local perWeaponScore = 0.1
+		return AddedWeaponUtility(aiPlayer, pbg, perWeaponScore)
+	end
+	
+	-- Look for any improvements from the upgrade
+	result[#result + 1] = AIProductionScoring_MaxScoringFunction(aiPlayer, {
+			AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, addedWeaponUtility, "AddedWeapon"),
+			AIProductionScoring_LegacyUpgradeUtility(aiPlayer)
+		})
+	return result
+end
+
+function ScoringFunctions_SquadUpgradesAmerican(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local addedWeaponUtility = function(aiPlayer, prodGroupID, pbg)
+		local perWeaponScore = 0.1
+		return AddedWeaponUtility(aiPlayer, pbg, perWeaponScore)
+	end
+	
+	local minSquadCountUtility = function(aiPlayer, prodGroupID, pbg)
+		local upgradeName = BP_GetName(pbg)
+		
+		local scale = 1
+		if string.find(upgradeName, "rifleman") then
+			local numCurrent = AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("riflemen_us"))
+			if numCurrent < 3 then
+				scale = 0
+			end
+		elseif string.find(upgradeName, "engineer") then
+			local numCurrent = AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("engineer_us"))
+			if numCurrent < 3 then
+				scale = 0
+			end
+		end
+		return scale
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, addedWeaponUtility, "AddedWeapon")
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, minSquadCountUtility, "MinSquadCount")
+	return result
+end
+
+function ScoringFunctions_SquadUpgradesBritish(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local addedWeaponUtility = function(aiPlayer, prodGroupID, pbg)
+		local perWeaponScore = 0.1
+		return AddedWeaponUtility(aiPlayer, pbg, perWeaponScore)
+	end
+	
+	local minSquadCountUtility = function(aiPlayer, prodGroupID, pbg)
+		local upgradeName = BP_GetName(pbg)
+		
+		local scale = 1
+		if string.find(upgradeName, "tommy") ~= nil then
+			local numCurrent =
+				AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("tommy_uk")) +
+				AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("tommy_africa_uk"))
+			if numCurrent < 3 then
+				scale = 0
+			end
+		elseif string.find(upgradeName, "sapper") ~= nil then
+			local numCurrent =
+				AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("sapper_uk")) +
+				AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("sapper_africa_uk"))
+			if numCurrent < 3 then
+				scale = 0
+			end
+		end
+		return scale
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, addedWeaponUtility, "AddedWeapon")
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, minSquadCountUtility, "MinSquadCount")
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesAfrikaKorps(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = -1
+		local perPBGEverScale = 1.0/7.0
+		local maxPBGsFromGroupCurrent = -1
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	
+	-- how does it improve our combat rating
+	result[#result + 1] = ScoringFunctions_Bonus(aiPlayer, 0.5, AIProductionScoring_MilitaryPlayerUpgrade(aiPlayer, 1))
+	
+	-- don't build upgrades if we don't have units
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer,
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			light_armor = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.15,
+				squad_type = true,
+			},
+			heavy_armor = {
+				weight = 0.2,
+				squad_type = true,
+			},
+		},
+		true
+		)
+	
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesAmerican(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local minSquadCountUtility = function(aiPlayer, prodGroupID, pbg)
+		local upgradeName = BP_GetName(pbg)
+		
+		local scale = 1
+		if string.find(upgradeName, "riflemen") then
+			local numCurrent = AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("riflemen_us"))
+			if numCurrent < 3 then
+				scale = 0
+			end
+		end
+		return scale
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, minSquadCountUtility, "MinSquadCount")
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesAmericanAdditional(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	local groupUtility = function(aiPlayer, prodGroupID, pbg)
+		local perPBGCurrentScale = -1
+		local perPBGEverScale = 1.0/5.0
+		local maxPBGsFromGroupCurrent = -1
+		return GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, groupUtility, "GroupUtility") 
+	
+	-- how does it improve our combat rating
+	result[#result + 1] = ScoringFunctions_Bonus(aiPlayer, 0.25, AIProductionScoring_MilitaryPlayerUpgrade(aiPlayer, 1))
+	
+	-- don't build upgrades if we don't have units
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer,
+		{
+			infantry = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			light_armor = {
+				weight = 0.1,
+				squad_type = true,
+			},
+			medium_armor = {
+				weight = 0.15,
+				squad_type = true,
+			},
+			heavy_armor = {
+				weight = 0.2,
+				squad_type = true,
+			},
+		},
+		true
+		)
+	
+	local minSquadCountUtility = function(aiPlayer, prodGroupID, pbg)
+		local upgradeName = BP_GetName(pbg)
+		
+		local scale = 1
+		if string.find(upgradeName, "riflemen") then
+			local numCurrent = AIPlayer_GetNumPBG(aiPlayer, Count_Current, BP_GetSquadBlueprint("riflemen_us"))
+			if numCurrent < 3 then
+				scale = 0
+			end
+		end
+		return scale
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, minSquadCountUtility, "MinSquadCount")
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesBritish(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			combat_engineer = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesBritishAdditional(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	
+	-- should have solid fuel income
+	result[#result + 1] = AIProductionScoring_ResourceIncomeAdvantage(aiPlayer, World_GetResourceTypeByName("fuel"), -10, 20)
+	
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesBritishAdditionalInfantry(aiPlayer)
+	local result = ScoringFunctions_PlayerUpgradesBritishAdditional(aiPlayer)
+	
+	-- don't build upgrades if we don't have units
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			infantry = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			combat_engineer = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesBritishAdditionalLightVehicles(aiPlayer)
+	local result = ScoringFunctions_PlayerUpgradesBritishAdditional(aiPlayer)
+	
+	-- don't build upgrades if we don't have units
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			light_armor = {
+				weight = 0.3,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesBritishAdditionalMediumVehicles(aiPlayer)
+	local result = ScoringFunctions_PlayerUpgradesBritishAdditional(aiPlayer)
+	
+	-- don't build upgrades if we don't have units
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			medium_armor = {
+				weight = 0.3,
+				squad_type = true,
+			},
+			heavy_armor = {
+				weight = 0.3,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_PlayerUpgradesBritishAdditionalTeamWeapons(aiPlayer)
+	local result = ScoringFunctions_PlayerUpgradesBritishAdditional(aiPlayer)
+	
+	-- don't build upgrades if we don't have units
+	result[#result + 1] = AIProductionScoring_PresenceOfMyTypes(aiPlayer, 
+		{
+			teamweapon = {
+				weight = 0.25,
+				squad_type = true,
+			},
+			base_defense = {
+				exclude = true,
+				squad_type = true,
+			},
+			auto_builder = {
+				exclude = true,
+				squad_type = true,
+			},
+		},
+		true
+	)
+	return result
+end
+
+function ScoringFunctions_ConversionUpgrades(aiPlayer)
+	local result = ScoringFunctions_TechCommon(aiPlayer)
+	result[#result + 1] = AIProductionScoring_LegacyUpgradeUtility(aiPlayer)
+	return result
+end
+
+function ScoringFunctions_SupportVehiclesBritish(aiPlayer)
+	local combatRatingBoost = 1;
+	local combatRatingScale = 1;
+	local timeToAcquireScale = 0.5
+	local result = ScoringFunctions_CombatCommon(aiPlayer, timeToAcquireScale, combatRatingBoost, combatRatingScale)
+	
+	local instanceUtility = function(aiPlayer, prodGroupID, pbg)
+		local perUnitScale = 0.0
+		local perUnitScaleProduced = 0.333
+		return InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced)
+	end
+
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, instanceUtility, "InstanceUtility")
+	
+	-- Use the same scaling to match "Bread and Butter Infantry (British)"
+	-- So we combine either tommy+dingo or sapper+cwt
+	local randomScaleUtility = function(aiPlayer, prodGroupID, pbg)
+		local productionGroup = AI_ProductionGroupPBGs(aiPlayer, prodGroupID)
+		local selectedIndex = GetProductionVariantInt(aiPlayer, #productionGroup) 
+		local selectedScale = 1
+		local defaultScale = 0.2
+		return SelectedPBGUtility(aiPlayer, prodGroupID, pbg, selectedIndex, selectedScale, defaultScale)
+	end
+	
+	result[#result + 1] = AIProductionScoring_LuaScoringFunctionNamed(aiPlayer, randomScaleUtility, "RandomScaleUtility")
+	return result
+end

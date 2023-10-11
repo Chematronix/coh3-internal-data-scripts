@@ -1,0 +1,111 @@
+import("anvil.scar")
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("ProtoEasyMode")
+
+-----------------------------------------------------------------------
+
+local humanPlayer = Game_GetLocalPlayer()
+local enemyTeam = Player_GetTeam(World_GetPlayerAt(2))
+local allPlayerEntities = {}
+local allEnemyEntities = {}
+
+
+function ProtoEasyMode_Start()
+	if Misc_IsCommandLineOptionSet("buffplayer") or Misc_IsCommandLineOptionSet("casual") then
+		Rule_AddGlobalEvent(ProtoEasyMode_OnPlayerDamageReceived, GE_DamageReceived)
+	end
+	if Misc_IsCommandLineOptionSet("nerfenemy") or Misc_IsCommandLineOptionSet("casual") then
+		Rule_AddGlobalEvent(ProtoEasyMode_OnEnemyDamageReceived, GE_DamageReceived)
+	end
+	if Misc_IsCommandLineOptionSet("cashflow") or Misc_IsCommandLineOptionSet("casual") then
+		ProtoEasyMode_ResourceCheat()
+	end
+	if Misc_IsCommandLineOptionSet("fastdeploy") or Misc_IsCommandLineOptionSet("casual") then
+		ProtoEasyMode_ModifySquadProductionRate(2)
+	end
+end
+
+-- Global event callback for GE_DamageReceived
+function ProtoEasyMode_OnPlayerDamageReceived(context)
+	if context.victim ~= nil and context.attacker ~= nil then
+		if not Table_Contains(allPlayerEntities, context.attacker) and not World_OwnsEntity(context.victim) and not World_OwnsEntity(context.attacker) then
+			if Entity_IsValid(Entity_GetID(context.attacker)) and Entity_IsValid(Entity_GetID(context.victim)) and context.damage > 0  then
+				
+				local victimOwner = Entity_GetPlayerOwner(context.victim)
+				local attackerOwner = Entity_GetPlayerOwner(context.attacker)
+				
+				if Player_GetTeam(victimOwner) == enemyTeam and attackerOwner == humanPlayer then
+					
+					table.insert(allPlayerEntities, context.attacker)
+					Difficulty_ApplyPlayerModifiers(context.attacker, .75, 1.5)
+					
+				end
+				
+			end
+		end
+	end
+end
+
+-- Global event callback for GE_DamageReceived
+function ProtoEasyMode_OnEnemyDamageReceived(context)
+	if context.victim ~= nil and context.attacker ~= nil then
+		if not Table_Contains(allEnemyEntities, context.victim) and not World_OwnsEntity(context.victim) and not World_OwnsEntity(context.attacker) then
+			if Entity_IsValid(Entity_GetID(context.attacker)) and Entity_IsValid(Entity_GetID(context.victim)) and context.damage > 0  then
+				
+				local victimOwner = Entity_GetPlayerOwner(context.victim)
+				local attackerOwner = Entity_GetPlayerOwner(context.attacker)
+				
+				if Player_GetTeam(victimOwner) == enemyTeam and attackerOwner == humanPlayer then
+					
+					table.insert(allEnemyEntities, context.victim)
+					Difficulty_ApplyEnemyModifiers(context.victim, 1.5, 0.75)
+					
+				end
+			end
+		end
+	end
+end
+
+function Difficulty_ApplyPlayerModifiers(entity, rdMod, accMod)
+	if Entity_IsOfType(entity, "infantry") or Entity_IsOfType(entity, "vehicle") then 
+		local modifier = Modifier_Create(MAT_Entity, "received_damage_modifier", MUT_Multiplication, false, rdMod, "")
+		if Entity_IsAlive(entity) then
+			Modifier_ApplyToEntity(modifier, entity, 0)
+		end
+	
+		local modifier = Modifier_Create(MAT_Weapon, "accuracy_weapon_modifier", MUT_Multiplication, false, accMod, "hardpoint_01")
+		if Entity_IsAlive(entity) and Entity_GetWeaponHardpointCount(entity) > 0 then
+			Modifier_ApplyToEntity(modifier, entity, 0)
+		end
+	end
+end
+
+function Difficulty_ApplyEnemyModifiers(entity, rdMod, accMod)
+	if Entity_IsOfType(entity, "infantry") or Entity_IsOfType(entity, "vehicle") then 
+		local modifier = Modifier_Create(MAT_Entity, "received_damage_modifier", MUT_Multiplication, false, rdMod, "")
+		if Entity_IsAlive(entity) then
+			Modifier_ApplyToEntity(modifier, entity, 0)
+		end
+		
+		local modifier = Modifier_Create(MAT_Weapon, "accuracy_weapon_modifier", MUT_Multiplication, false, accMod, "hardpoint_01")
+		if Entity_IsAlive(entity) and Entity_GetWeaponHardpointCount(entity) > 0 then
+			Modifier_ApplyToEntity(modifier, entity, 0)
+		end
+	end
+end
+
+function ProtoEasyMode_ResourceCheat()
+
+	Anvil_SetPlayerResources(humanPlayer, 370, 30, 20)
+	
+end
+	
+function ProtoEasyMode_ModifySquadProductionRate(mult)
+
+	Modify_PlayerProductionRate(humanPlayer, mult)
+	
+end

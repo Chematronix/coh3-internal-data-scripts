@@ -1,0 +1,23 @@
+
+--? @shortdesc Place an SGroup or table of SGroups in formation
+--? @args SGroup/Table sgroup, Position position, Position direction
+function Formation_PlaceSquadGroupsInFormation(sgroups, spawn_location, spawn_direction)
+	local formation_squads = sgroups
+	local position = spawn_location
+	local direction = spawn_direction or Util_ScarPos(1, 0)
+	
+	if (type(formation_squads) == "table") then
+		formation_squads = SGroup_Create("Formation_SGroup")
+		for i, group in ipairs(sgroups) do
+			SGroup_AddGroup(formation_squads, group)
+		end
+	end
+	
+	if (scartype(position) == ST_MARKER) then
+		position = Marker_GetPosition(spawn_location)
+		direction = Marker_GetDirection(spawn_location)
+	end
+	
+	Formation_PlaceSquadsInFormation(formation_squads, position, direction)
+	SGroup_Destroy(formation_squads)
+end

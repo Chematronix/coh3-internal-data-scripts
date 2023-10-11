@@ -1,0 +1,152 @@
+import("anvil.scar")
+
+--------------------------------------------------------------------------------------------------------------------------------
+--- FWS Cheats -- Extra cheat hotkeys added for the "Fire Without Smoke" trailer contractors and now used by our marketing team
+--------------------------------------------------------------------------------------------------------------------------------
+
+-- drops a single artillery shell at the cursor location
+local function ShootArtilleryAtMouse(weapon, origin)
+	
+	-- get mouse over position
+	local target = Misc_GetMouseOnTerrain()
+	local origin = origin or 30
+	local originPos = target
+	if scartype(origin) == ST_NUMBER then
+		originPos.y = originPos.y + origin
+	elseif scartype(origin) == ST_SCARPOS then
+		originPos = origin
+	end
+	
+	Entity_SpawnLiveMunition(weapon, 0, originPos, target)
+	 
+end
+
+function Drop75mmArtilleryAtMouse()
+	local weapon = BP_GetWeaponBlueprint("75mm_howitzer_scott_us") -- P47 rocket stopped working in April 2021
+	ShootArtilleryAtMouse(weapon)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+1]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+1]], [[Scar_DoString('Drop75mmArtilleryAtMouse()')]])")
+
+function Drop105mmArtilleryAtMouse()
+	local weapon = BP_GetWeaponBlueprint("105mm_howitzer_us")
+	local origin = Player_GetStartingPosition(Game_GetLocalPlayer())
+	origin.y = origin.y + 65
+	ShootArtilleryAtMouse(weapon, origin)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+2]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+2]], [[Scar_DoString('Drop105mmArtilleryAtMouse()')]])")
+
+function DropB25bombAtMouse()
+	local weapon = BP_GetWeaponBlueprint("325lb_bomb_b25j_us")
+	ShootArtilleryAtMouse(weapon)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+3]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+3]], [[Scar_DoString('DropB25bombAtMouse()')]])")
+
+function DropSmokeBombAtMouse()
+	local weapon = BP_GetWeaponBlueprint("smoke_bomb_p47_us")
+	ShootArtilleryAtMouse(weapon)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+4]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+4]], [[Scar_DoString('DropSmokeBombAtMouse()')]])")
+
+function DropGrenadeAtMouse()
+	local weapon = BP_GetWeaponBlueprint("grenade_rifleman_us")
+	ShootArtilleryAtMouse(weapon,0)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+5]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+5]], [[Scar_DoString('DropGrenadeAtMouse()')]])")
+
+function DropSatchelChargeAtMouse()
+	local weapon = BP_GetWeaponBlueprint("satchel_charge_paratrooper_us")
+	ShootArtilleryAtMouse(weapon,0)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+6]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+6]], [[Scar_DoString('DropSatchelChargeAtMouse()')]])")
+
+function DropTimeBombAtMouse()
+	local weapon = BP_GetWeaponBlueprint("timed_demo_charge_devils_brigade_us")
+	ShootArtilleryAtMouse(weapon,0)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+7]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+7]], [[Scar_DoString('DropTimeBombAtMouse()')]])")
+
+function DropMortarAtMouse()
+	local weapon = BP_GetWeaponBlueprint("81mm_mortar_us")
+	local origin = Player_GetStartingPosition(Game_GetLocalPlayer())
+	origin.y = origin.y + 65
+	ShootArtilleryAtMouse(weapon, origin)	
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+8]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+8]], [[Scar_DoString('DropMortarAtMouse()')]])")
+
+local _bombCenterPos = World_Pos(0,0,0)
+function DoBombardmentAtMouse()
+	if Rule_Exists(_doBombardmentShot) then
+		Rule_Remove(_doBombardmentShot)
+	else
+		_bombCenterPos = Misc_GetMouseOnTerrain()
+		Rule_AddInterval(_doBombardmentShot, 3)
+	end
+	
+end
+
+-- drops a single artillery shell at the cursor location
+function _doBombardmentShot()
+	
+	local weapon = BP_GetWeaponBlueprint("105mm_howitzer_us")
+	
+	-- get mouse over position
+	local dist = World_GetRand(5,30)
+	local target = Util_GetRandomPosition(_bombCenterPos, dist, false)
+	local origin = target
+	
+	origin.y = origin.y + 65
+	
+	Entity_SpawnLiveMunition(weapon, 0, origin, target)
+	Rule_ChangeInterval(_doBombardmentShot, World_GetRand(25,40)/10)
+	 
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+9]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+9]], [[Scar_DoString('DoBombardmentAtMouse()')]])")
+
+local _isHoldingFire = false
+function _doCeaseFire()
+	local stance = STANCE_CeaseFire
+	if _isHoldingFire then
+		_isHoldingFire = false
+		stance = STANCE_Attack
+		Game_TextTitleFade("RESUME FIRE",0, 1.25, 0)
+	else
+		_isHoldingFire = true
+		Game_TextTitleFade("CEASE FIRE",0, 1.25, 0)
+	end
+	
+	for i = 1, World_GetPlayerCount() do
+		local squads = Player_GetSquads(World_GetPlayerAt(i))
+		if SGroup_IsEmpty(squads) == false then
+			LocalCommand_SquadSetCombatStance(World_GetPlayerAt(i), squads, stance, false)
+		end
+	end
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+H]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+H]], [[Scar_DoString('_doCeaseFire()')]])")
+
+function _increasePlayer1PopCap()
+	local popCap = Player_GetMaxPopulation(Game_GetLocalPlayer(), CT_Personnel)
+	Player_SetPopCapOverride(Game_GetLocalPlayer(), popCap + 100)
+end
+
+Scar_DebugConsoleExecute("unbind([[ALT+SHIFT+P]])")
+Scar_DebugConsoleExecute("bind([[ALT+SHIFT+P]], [[Scar_DoString('_increasePlayer1PopCap()')]])")

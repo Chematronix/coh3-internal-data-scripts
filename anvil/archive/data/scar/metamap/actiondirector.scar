@@ -1,0 +1,101 @@
+import("prefabs.scar")
+import("narrative/soldier_stories.scar")
+
+__actiondirector_pause_count = 0
+
+function ActionDirector_HandleScarData()
+	local actiondirector_scar_data = World_ConsumeActionDirectorScarData()
+	
+	-- Trigger Playbills
+	local playbill_target_pairs = actiondirector_scar_data.playbills
+	if playbill_target_pairs ~= nil then
+		local maxPlaybills = #playbill_target_pairs
+		for i=1, maxPlaybills do
+			local pair = playbill_target_pairs[i]
+			local name = pair.playbill_name
+			local playbill_target = pair.playbill_target
+			local context = Context_CreateContextFromTarget(playbill_target)
+			local instance = Prefab_GetInstance(name)
+			if instance ~= nil then
+				Prefab_DoAction(instance, "Trigger", nil, context)
+			end
+		end
+	end
+	
+	-- Trigger Dynamic Narrative
+	local dynamic_narrative = actiondirector_scar_data.dynamic_narrative
+	if dynamic_narrative ~= nil then
+		local maxNodes = #dynamic_narrative
+		for i=1, maxNodes do
+			local nodeName = dynamic_narrative[i]
+			ExecuteDynamicNarrativeNode(nodeName)
+		end
+	end
+	
+	-- Activate the first skirmish story that was triggered
+	if not IsSoldierStorySet() then
+		local skirmish_stories = actiondirector_scar_data.skirmish_stories
+		if skirmish_stories ~= nil then
+			local idx, story_name = next(skirmish_stories)
+			if story_name ~= nil then
+				SetNextSkirmishStory(story_name)
+			end
+		end
+	end
+	
+	local clear_stories = actiondirector_scar_data.clear_stories
+	if clear_stories == true then
+		ClearNextSkirmishStory()
+	end
+	
+	-- Trigger SCAR Function
+	local scar_functions = actiondirector_scar_data.scar_function 
+	if scar_functions ~= nil then
+		local maxNodes = #scar_functions
+		for i=1, maxNodes do
+			local func_string = scar_functions[i]
+			if func_string ~= nil then
+				local func = load(func_string)
+				if func ~= nil then
+					func()
+				else
+					error("Function string ["..func_string.."] passed is nil")
+				end
+			end
+		end
+	end
+	
+	-- Stop playbills
+	local playbills_to_stop = actiondirector_scar_data.playbills_to_stop 
+	if playbills_to_stop ~= nil then
+		local maxNodes = #playbills_to_stop
+		for i=1, maxNodes do
+			StopPrefabPlaybillCommon(playbills_to_stop[i])
+		end
+	end
+end
+
+--? @shortdesc If there is no soldier story set, then evaluate & execute the scripted phase of the event director
+function ActionDirector_ExecuteScriptedPreSkirmishPhase()
+	if not IsSoldierStorySet() then
+		
+		-- Evaluate the scripted phase events
+		World_EvaluateScriptedActionDirectorPhase()
+		
+		-- Handle the resulting scar data immediately
+		ActionDirector_HandleScarData()
+	end
+end
+
+function ActionDirector_Pause()
+	__actiondirector_pause_count = __actiondirector_pause_count + 1
+	World_PauseActionDirector(true)
+end
+
+function ActionDirector_Unpause()
+	__actiondirector_pause_count = __actiondirector_pause_count - 1
+	if __actiondirector_pause_count < 1 then
+		__actiondirector_pause_count = 0
+		World_PauseActionDirector(false)
+	end
+end

@@ -1,0 +1,993 @@
+--
+-- "Intro Type"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("missionomatic/missionomatic.scar")
+
+local LOCAL_PLAYER_DATA_INDEX = 1
+local AI_PLAYER_DATA_INDEX = 2
+local ALLY_PLAYER_DATA_INDEX = 3
+
+--? @group scardoc;Prefabs
+
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function introtype_Init(data)
+
+end
+
+function introtype_Initialize(data)
+	local instance = Prefab_GetInstance(data)
+	
+	if player1 == nil then
+		player1 = World_GetPlayerAt(1)
+	end
+	g_enemy_team = g_enemy_team or Core_GetTeamsEntryFromIndex(2)
+	
+	MissionPrint("Intro Type Prefab is Initializing")
+	
+	-- SETUP OBJECTIVE and DATA TABLE
+	local objective = {}
+	objective.variantData = MissionOMatic_PickVariant(instance.objectives)
+	objective.prefabData = instance.objectives
+	objective.prefabData.camera = instance.camera
+	objective.prefabData.units = instance.units
+	
+	objective.enable_wait_on_end = instance.objectives.enable_wait_on_end
+	
+	local entry_race = nil
+	
+	local affectors = Affectors_GetTable()
+	if affectors and affectors.player_company_bp_name then
+		local bp_name = affectors.player_company_bp_name
+		local race_count = BP_GetSquadTypeExtRaceCount(bp_name)
+		if race_count == 0 then
+			error("Squad of BP: "..bp_name.." contains no race. Please have 1 race associated to the BP")
+		elseif race_count > 1 then
+			error("Squad of BP: "..bp_name.." contains more than 1 race. Please just have 1 race associated to the BP")
+		end
+		
+		-- The index starts at 0
+		-- Assuming a squad has only one race associated to it
+		entry_race = BP_GetSquadTypeExtRaceBlueprintAtIndex(bp_name, 0)
+		
+		-- Get the RTS version of the race (removing _campaign from the bp name)
+		local rts_race_name = Anvil_GetRtsRaceFromMetamapRace(entry_race)
+		entry_race = World_GetRaceBlueprint(rts_race_name)
+	end
+	
+	if entry_race == nil then
+		entry_race = Player_GetRace(player1)
+	end
+	
+	-- Overwrites the race if the command line argument is present
+	if Misc_IsCommandLineOptionSet("entry_race") then
+		entry_race = Misc_GetCommandLineString("entry_race")
+		entry_race = World_GetRaceBlueprint(entry_race)
+	end
+	
+	local race_specific = instance.race_specific
+	
+	objective.prefabData.company_units = instance.company_units
+	
+	-- Setting up race-specific conditions and units
+	objective.prefabData.race_specific_spawnables = {}
+	
+	local race_specific_unique = {}
+	
+	for i = 1, #race_specific do
+		if race_specific[i].race == entry_race then
+			if race_specific_unique.entry_race == entry_race then
+				error("Multiple spawnables of race: ".. BP_GetName(entry_race)..". Please create 1 race-specific each.")
+			end
+			race_specific_unique.entry_race = entry_race
+		end
+	end
+	
+	for i = 1, #race_specific do
+		if race_specific[i].race == entry_race then
+			for j = 1, #race_specific[i].spawnables do
+				table.insert(objective.prefabData.race_specific_spawnables, race_specific[i].spawnables[j])
+			end
+		end
+	end
+	
+	objective.beatType = "intro"
+	
+	objective.variantType = objective.variantData.variantType:gsub("^%l", string.upper)
+	objective.objectiveID = instance.objectives.objective_id
+	
+	local tempTitle = objective.prefabData.title
+	
+	-- if it cannot return a valid LocString
+	
+	if Loc_GetString(tempTitle) == Loc_Empty() then
+		
+		tempTitle = objective.variantData.objective_name
+		
+	end
+	
+	objective.instanceName = instance.instanceName
+	
+	objective.objectiveData = {
+		Title = tempTitle,
+		Description = "Locate and Destroy",
+	}
+	
+	objective.objectiveData.Intel_Start = objectiveutil_CreateNarrativeEvent(objective.prefabData.start_narrative_event)
+	
+	objective.objectiveData.Intel_Complete = objectiveutil_CreateNarrativeEvent(
+		objective.prefabData.complete_narrative_event,
+		objective.prefabData.complete_extra_narrative_event)
+	
+	objective.objectiveData.Intel_Fail = objectiveutil_CreateNarrativeEvent(
+		objective.prefabData.fail_narrative_event,
+		objective.prefabData.fail_extra_narrative_event)
+	
+	if objective.prefabData.has_manual_narrative then
+		
+		-- Manual functions can still be used if more control over the SCAR
+		-- event is required. This should not be preferred, as conditions in
+		-- narrative system can control which variant is chosen based on game state.
+		-- But, in some cases you may want to make decisions based on SCAR only state
+		-- or perform more than the simple line-by-line readings in narrative events.
+		
+		local manualStartIntel = _G[objective.prefabData.start_narrative_function]
+		if scartype(manual_start) == ST_FUNCTION then
+			objective.objectiveData.Intel_Start = manualStartIntel
+		end
+		
+		local manualCompleteIntel = _G[objective.prefabData.complete_narrative_function]
+		if scartype(manualCompleteIntel) == ST_FUNCTION then
+			objective.objectiveData.Intel_Complete = manualCompleteIntel
+		end
+		
+		local manualFailIntel = _G[objective.prefabData.fail_narrative_function]
+		if scartype(manualFailIntel) == ST_FUNCTION then
+			objective.objectiveData.Intel_Fail = manualFailIntel
+		end
+	end
+
+	objective.onStart = objective.variantData.on_start or {}
+	objective.onComplete = objective.variantData.on_complete
+	objective.onFail = objective.variantData.on_fail
+	
+	--Initialize variant
+	local initFunc = _G["introtype_"..objective.variantType.."_Init"]
+	if scartype(initFunc) == ST_FUNCTION then
+		-- adds the appropriate completion condition to the objective table
+		objective = initFunc(objective)
+	end
+	
+	
+	-- Initialize Mission Annihilation Condition
+	_default_win_condition = instance.annihilation_condition
+	local title = instance.cue_title
+	local description = instance.cue_description
+	if title == "$0" or title == nil or title == "" then
+		title = "$11197738" -- Your forces have been annihilated
+	end
+	if description == nil or description == "" then
+		description = "$0" -- Empty String, not "LOC:"
+	end
+	objective.fire_event_cue_on_annihilate_data =
+	{
+		cue_title = title,
+		cue_description = description,
+		duration = instance.duration,
+		icon_name = instance.icon_name,
+		sound_name = instance.sound_name,
+		cue_red = instance.cue_red,
+		cue_green = instance.cue_green,
+		cue_blue = instance.cue_blue,
+		cue_alpha = instance.cue_alpha,
+	}
+	
+	table.insert(objective.onStart, {playbill = {
+				conditions = {{
+					condition = "AskScarFunction",
+					functionName = "CheckDefaultWinCondition",
+				}},
+				actions =
+				{
+					{
+						action = "CallScarFunction",
+						work_func = __AnnihilationAutoFailFlow,
+					},
+				},
+		}})
+	
+	objective.pre_intro_sequence = instance.objectives.pre_intro_sequence
+	
+	--INTRO SEQUENCE
+	if instance.objectives.use_intro_sequence == true then
+		
+		objective.introSequence = instance.objectives.intro_sequence
+		
+	end
+	
+	--STARTING ATMOSPHERES
+	local startingAtmosphere = objective.variantData.starting_atmosphere
+	if scartype(startingAtmosphere) == ST_STRING then
+		Game_TransitionToState(startingAtmosphere, 0)
+	end
+	
+	-- SET POPULATION CAP
+	local popCaps = {["LOW"]=POPCAP_LOW, ["STANDARD"]=POPCAP_STANDARD, ["HIGH"]=POPCAP_HIGH}
+	local popPreset = instance.pop_cap_preset
+	if popPreset ~= "NONE" then
+		Player_SetMaxPopulation(player1, CT_Personnel, popCaps[popPreset])
+	end
+	
+	-- PRODUCTION BUILDINGS
+	if objective.variantData.spawn_buildings ~= "Never" then
+		
+		local playbill = {}
+		playbill.actions = {}
+		playbill.conditions = {}
+		
+		-- DEPRECATE THIS CODE
+		local buildings = instance.buildings
+		objective.prefabData.buildings = buildings
+		----------------------
+		
+		local player_race = Player_GetRace(player1)
+		
+		local camera_position = nil
+		if objective.variantData.camera_focus_type ~= nil then
+			if objective.variantData.camera_focus_type == "Building" then
+				-- DEPRECATE THIS CODE
+				if buildings ~= nil then
+					local egroup = buildings[1].egroup
+					if EGroup_Exists(egroup) then
+						camera_position = EGroup_GetPosition(egroup)
+					end
+				end
+				----------------------
+				-- Focus the camera on the chosen building, if there is any egroup specified
+				local building_to_focus = objective.variantData.building_to_focus
+				
+				-- if there are no buildings in the egroup
+				if EGroup_CountSpawned(building_to_focus) <= 0 then
+					error("No buildings found in the egroup: "..EGroup_GetName(building_to_focus))
+					
+				-- if there are more than 1 buildings in the egroup
+				elseif EGroup_CountSpawned(building_to_focus) > 1 then
+					print("More than 1 buildings found in the egroup: "..EGroup_GetName(building_to_focus)..". Setting the first one to be focused")
+					local first_building = EGroup_GetSpawnedEntityAt(building_to_focus, 1)
+					camera_position = Entity_GetPosition(first_building)
+					
+				-- if there is exactly 1 building in the egroup
+				else
+					camera_position = EGroup_GetPosition(building_to_focus)
+				end
+			elseif objective.variantData.camera_focus_type == "Marker Location" then
+				if objective.variantData.fade_focus_marker ~= nil and scartype(objective.variantData.fade_focus_marker) == ST_MARKER then
+					camera_position = Marker_GetPosition(objective.variantData.fade_focus_marker)
+				end
+			end
+		end
+		
+		local atmosphere = nil
+		atmosphere = objective.variantData.fade_new_atmosphere
+		if scartype(atmosphere) ~= ST_STRING or atmosphere == "" then
+			atmosphere = nil
+		end
+		
+		-- Generate work function to do based on intro type data extracted above
+		local introTypeWorkData = {
+			objective = objective,
+			camera_position = camera_position,
+			atmosphere = atmosphere,
+		}
+		local introTypeWork = function(workData)
+			
+			local objective = workData.objective
+			local camera_position = workData.camera_position
+			local atmosphere = workData.atmosphere
+			
+			--introTypeWork should let MissionOMatic handle spawning the buildings if we're set to On Init
+			if objective.variantData.spawn_buildings ~= "On Init" then
+				SpawnBuildings(objective)
+			end
+			
+			-- move camera
+			if camera_position ~= nil then
+				Camera_MoveTo(camera_position, false, 0, false, false)
+			end
+			
+			-- change atmosphere
+			if atmosphere ~= nil then
+				Game_TransitionToState(atmosphere, 0)
+			end
+			
+			if  objective.variantData.activate_enemy_warp == true then
+				if objective.variantData.enemy_warp_location ~= nil then
+					
+					local function _randomDispersal(gid, idx, sid)
+						Squad_WarpToPos(sid, Util_GetRandomPosition(objective.variantData.enemy_warp_location))
+					end
+					
+					if objective.variantData.enemy_fade_group ~= nil and SGroup_CountSpawned(objective.variantData.enemy_fade_group) >= 1 then
+						SGroup_ForEach(objective.variantData.enemy_fade_group, _randomDispersal)
+						--SGroup_WarpToMarker(objective.variantData.enemy_fade_group, objective.variantData.enemy_warp_location)
+					end
+				end
+			end
+			
+			if  objective.variantData.activate_enemy_despawn == true then
+				if objective.variantData.enemy_fade_group ~= nil then
+					if SGroup_CountSpawned(objective.variantData.enemy_fade_group) >= 1 then
+						SGroup_DeSpawn(objective.variantData.enemy_fade_group)
+					end
+				end
+			end
+			
+			if objective.variantData.activate_friendly_warp == true then
+				if objective.variantData.friendly_warp_location ~= nil then
+					
+					local function _randomDispersal(gid, idx, sid)
+						Squad_WarpToPos(sid, Util_GetRandomPosition(objective.variantData.friendly_warp_location))
+					end
+					
+					if objective.variantData.friendly_fade_group ~= nil and SGroup_CountSpawned(objective.variantData.friendly_fade_group) >= 1 then
+						
+						if SGroup_IsInHoldEntity(objective.variantData.friendly_fade_group, ANY) then							
+							Cmd_UngarrisonSquad(objective.variantData.friendly_fade_group)
+						end
+						
+						SGroup_ForEach(objective.variantData.friendly_fade_group, _randomDispersal)
+						
+						--SGroup_WarpToMarker(objective.variantData.friendly_fade_group, objective.variantData.friendly_warp_location)
+					else
+						Player_GetAll(World_GetPlayerAt(1))
+						if SGroup_CountSpawned(sg_allsquads) >= 1 then
+							
+							if SGroup_IsInHoldEntity(sg_allsquads, ANY) then								
+								Cmd_UngarrisonSquad(sg_allsquads)									
+							end
+							
+							SGroup_ForEach(sg_allsquads, _randomDispersal)
+							--sg_introWarpedSquads - to be used in introtype to keep track of squads that have warped in this manner
+							sg_introWarpedSquads = SGroup_CreateIfNotFound("sg_introWarpedSquads")
+							if SGroup_CountSpawned(sg_allsquads) >= 1 then
+								SGroup_AddGroup(sg_introWarpedSquads, sg_allsquads)
+							end
+						end
+					end
+				end
+			end
+			
+			if objective.variantData.stop_friendly_activity == true then
+				if objective.variantData.friendly_fade_group ~= nil then
+					if objective.variantData.friendly_fade_group ~= nil and SGroup_CountSpawned(objective.variantData.friendly_fade_group) >= 1 then
+						Cmd_Stop(objective.variantData.friendly_fade_group)
+					else
+						Player_GetAll(World_GetPlayerAt(1))	
+						Cmd_Stop(sg_allsquads)
+					end
+				end
+			end
+			
+			-- play prefab as part of fade
+			if objective.variantData.fade_playbill ~= nil then
+				if scartype(objective.variantData.fade_playbill) == ST_STRING or scartype(objective.variantData.fade_playbill) == ST_PREFAB then
+					Prefab_Trigger(objective.variantData.fade_playbill)
+				end
+			end			
+		end
+			
+		if objective.variantData.fade_out_and_in == true then
+			
+			-- Create a FadeSequence action and hide all of the work
+			-- inside of it:
+			
+			local action = {
+				action = "FadeSequence",
+				seconds = objective.variantData.fade_time or 1,
+				work_func = introTypeWork,
+				work_data = introTypeWorkData,
+			}
+			
+			table.insert(playbill.actions, action)
+		else
+			
+			-- Otherwise just create an action to call the function directly:
+			local action = {
+				action = "CallScarFunction",
+				work_func = introTypeWork,
+				work_data = introTypeWorkData,
+			}
+			
+			table.insert(playbill.actions, action)
+		end
+		
+		playbill = {playbill = playbill} --correcting table structure for onStart callback
+		
+		--creates building spawning playbill
+		local spawn_buildings = objective.variantData.spawn_buildings
+		if spawn_buildings == "On Init" or spawn_buildings == "On Start" then
+			--introTypeWork will only handle buildings if we're set to On Start
+			--Will do the camera, atmosphere, enemy warp either way
+			table.insert(objective.onStart, playbill)
+		elseif spawn_buildings == "On Complete" then
+			table.insert(objective.onComplete, playbill)
+		end
+		-- was in here twice, but I've commented it out in case there is a reason why we need it again.
+		--table.insert(objective.onComplete, playbill)
+	end
+	
+	-- STARTING TERRITORIES
+	local starting_territory = instance.starting_territory
+	if next(starting_territory) ~= nil then
+		
+		for i=1, #starting_territory do
+			
+			local pos = EGroup_GetPosition(starting_territory[i].replace_egroup)
+			EGroup_DestroyAllEntities(starting_territory[i].replace_egroup)
+			
+			if starting_territory[i].ebp ~= nil then
+				Util_CreateEntities(starting_territory[i].player_owner, nil, starting_territory[i].ebp, pos, 1)
+			end
+			
+		end
+		
+	end
+	
+	g_introObjective = objective
+	
+	return objective
+	
+end
+
+function CheckDefaultWinCondition()
+	local NoHQ = function()
+		local entities = Player_GetEntitiesFromType(World_GetPlayerAt(1), "hq")
+		local count = EGroup_CountSpawned(entities)
+		for i = 1, count do 
+			local entity = EGroup_GetSpawnedEntityAt(entities, i)
+			if Entity_IsAlive(entity) and Entity_GetHealthPercentage(entity) > 0 and Entity_GetBuildingProgress(entity) == 1 then
+				-- Not annihilated yet
+				EGroup_Destroy(entities)
+				return false
+			end
+		end
+		EGroup_Destroy(entities)
+		return true
+	end
+	if _default_win_condition == "No HQ, No Units" then
+		local squads = Player_GetSquads(World_GetPlayerAt(1))
+		local count = SGroup_CountSpawned(squads)
+		for i = 1, count do
+			local squad = SGroup_GetSquadAt(squads, i)
+			if Squad_IsAlive(squad) and
+				Squad_GetHealth(squad) > 0 and
+				not Squad_IsOfType(squad, "airplane") then
+				SGroup_Clear(squads)
+				return false
+			end
+		end
+		SGroup_Clear(squads)
+		return NoHQ()
+	elseif _default_win_condition == "No HQ" then
+		return NoHQ()
+	end
+	return false
+end
+
+function __AnnihilationAutoFailFlow()
+	-- Some extra UI work (which is not currently supported) might be required here to do some fancy things
+	-- like hiding the HUD with specific text on top, fade to black
+	
+	local FireHighPriorityEventToFailMission = function()
+		
+		if g_missionData.missionComplete then -- Ignore annihilation logic if it's no longer possible to fail mission
+			return
+		end
+		
+		local annihilation_data = g_introObjective.fire_event_cue_on_annihilate_data
+		
+		EventCues_HighPriority(
+			annihilation_data.cue_title,
+			annihilation_data.cue_description,
+			annihilation_data.duration,
+			annihilation_data.icon_name,
+			annihilation_data.sound_name,
+			annihilation_data.cue_red,
+			annihilation_data.cue_green,
+			annihilation_data.cue_blue,
+			annihilation_data.cue_alpha)
+		
+		CTRL.Event_Delay(annihilation_data.duration) 
+		CTRL.WAIT()
+		
+		Action_MissionFail_Do()
+	end
+	Event_Start(FireHighPriorityEventToFailMission, 0)
+end
+
+function introtype_PostInit(data)
+	
+	local instance = Prefab_GetInstance(data)
+
+end
+
+--? @args Table/String instance
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function introtype_Trigger(data)
+
+	local instance = Prefab_GetInstance(data)
+
+end
+
+-- Stop the introtype associated with this instance and destroys any spawned squads the player can't see
+function introtype_Stop(data)
+	
+	local instance = Prefab_GetInstance(data)
+
+end 
+
+------------------
+--GENERAL--
+------------------
+
+function MissionOMatic_StartCamera(data)
+	
+	local camera = data.prefabData.camera
+	
+	--Camera_SetDefault(75, 37, -40)
+	--Camera_ResetToDefault()
+	
+	if camera.rotation ~= -1 then
+		Camera_SetDefaultOrbit(camera.rotation)
+	end
+	if camera.angle ~= -1 then
+		Camera_SetDefaultDeclination(camera.angle)
+	end
+	if camera.zoom ~= -1 then
+		Camera_SetDefaultZoomDist(camera.zoom)
+	end
+
+	Camera_ResetToDefault()
+	Camera_MoveTo(Marker_GetPosition(camera.start_location), false, 1)
+	
+end
+
+function MissionOMatic_StartUnits(data)
+	local spawned_company_specific = false
+	local SpawnUnits = function(units)
+		for i=1, #units do
+
+			local currentUnit = units[i]
+			
+			local companyType = currentUnit.company_type
+			local canSpawn = false
+			canSpawn = CanSpawnCompanyTypeOptional(companyType)
+			
+			if currentUnit.squadPBG ~= nil and canSpawn == true then
+				if companyType ~= nil and companyType ~= "" then
+					spawned_company_specific = true
+				end
+				local spawn_player = currentUnit.player
+				
+				local target_spawn_where = nil
+				
+				local sgroup = currentUnit.sgroup
+				
+				local destination = nil
+				
+				if currentUnit.spawn_where ~= nil and scartype(currentUnit.spawn_where) == ST_STRING then
+					
+					if currentUnit.spawn_where == "SGROUP" then
+						if currentUnit.hold_sgroup ~= nil then
+							target_spawn_where = currentUnit.hold_sgroup
+						end
+					elseif currentUnit.spawn_where == "EGROUP" then
+						if currentUnit.hold_egroup ~= nil then
+							target_spawn_where = currentUnit.hold_egroup
+						end
+					end
+					
+					if target_spawn_where == nil and currentUnit.start_position ~= nil then
+						target_spawn_where = currentUnit.start_position
+						if Util_GetDistanceSquared(currentUnit.start_position, currentUnit.dest_position) > 1 then
+							destination = currentUnit.dest_position
+						end
+					end
+					
+				end
+				
+				local useMarkerTransform = true
+				Util_CreateSquads(spawn_player, sgroup, currentUnit.squadPBG, target_spawn_where, destination, currentUnit.numsquads, 
+					currentUnit.loadout, currentUnit.attack_move, nil, currentUnit.upgradePBG, nil, nil, nil, nil, nil, useMarkerTransform,
+					currentUnit.veterancy_rank, currentUnit.is_silent_veterancy_promotion)
+			end
+		end
+	end
+	
+	-- Deprecate this
+	local localUnits = data.prefabData.units.units
+	SpawnUnits(localUnits)
+	-----------------	
+	local race_specific_spawnables = data.prefabData.race_specific_spawnables
+	for i = 1, #race_specific_spawnables do 
+		local spawnable = race_specific_spawnables[i]
+		local units_to_spawn = spawnable.units
+		local conditions = spawnable.conditions -- We do this because conditions and units are in the same level of the prefab
+		-- Checking additional conditions, if there are any
+		if conditions == nil or next(conditions) == nil or ConditionList_CheckList(conditions) == true then
+			SpawnUnits(units_to_spawn)
+		end
+	end
+	if not spawned_company_specific then
+		local campaign = Game_RetrieveTableData("campaign", false)
+		local player_starting_squads = nil
+		local enemy_starting_squads = nil
+		local ally_starting_squads = nil
+		if campaign ~= nil and campaign.player_data ~= nil then
+			player_starting_squads = campaign.player_data[LOCAL_PLAYER_DATA_INDEX].starting_squads
+			enemy_starting_squads = campaign.player_data[AI_PLAYER_DATA_INDEX].starting_squads
+			if campaign.player_data[ALLY_PLAYER_DATA_INDEX] ~= nil then
+				ally_starting_squads = campaign.player_data[ALLY_PLAYER_DATA_INDEX].starting_squads
+			end
+		else
+			local affectors = Affectors_GetTable()
+			if affectors ~= nil then
+				if affectors.player_company_bp_name ~= nil and affectors.player_company_bp_name ~= "" then
+					player_starting_squads = BP_GetCompanyStartingSquadsTable(
+						BP_GetSquadBlueprint(affectors.player_company_bp_name))
+				end
+				if affectors.enemy_company_bp_name ~= nil and affectors.enemy_company_bp_name ~= "" then
+					enemy_starting_squads = BP_GetCompanyStartingSquadsTable(
+						BP_GetSquadBlueprint(affectors.enemy_company_bp_name))
+				end
+				if affectors.reinforcing_company_bp_name ~= nil and affectors.reinforcing_company_bp_name ~= "" then
+					ally_starting_squads = BP_GetCompanyStartingSquadsTable(
+						BP_GetSquadBlueprint(affectors.reinforcing_company_bp_name))
+				end
+			end
+		end
+		local company_units = data.prefabData.company_units
+		for i = 1, #company_units do
+			local pbg = nil
+			if player_starting_squads ~= nil and company_units[i].player.PlayerID == TEAM_ALLIES[1].PlayerID then
+				local player_starting_squad = player_starting_squads[company_units[i].starting_unit_type]
+				if scartype(player_starting_squad) == ST_TABLE then
+					pbg = BP_GetSquadBlueprintByPbgID(player_starting_squad.PropertyBagGroupID)
+				elseif scartype(player_starting_squad) == ST_PBG then
+					pbg = player_starting_squad
+				end
+			elseif enemy_starting_squads ~= nil and company_units[i].player.PlayerID == TEAM_ENEMIES[1].PlayerID then
+				local enemy_starting_squad = enemy_starting_squads[company_units[i].starting_unit_type]
+				if scartype(enemy_starting_squad) == ST_TABLE then
+					pbg = BP_GetSquadBlueprintByPbgID(enemy_starting_squad.PropertyBagGroupID)
+				elseif scartype(enemy_starting_squad) == ST_PBG then
+					pbg = enemy_starting_squad
+				end
+			elseif ally_starting_squads ~= nil and TEAM_ALLIES[2] ~= nil and company_units[i].player.PlayerID == TEAM_ALLIES[2].PlayerID then
+				local ally_starting_squad = ally_starting_squads[company_units[i].starting_unit_type]
+				if scartype(ally_starting_squad) == ST_TABLE then
+					pbg = BP_GetSquadBlueprintByPbgID(ally_starting_squad.PropertyBagGroupID)
+				elseif scartype(ally_starting_squad) == ST_PBG then
+					pbg = ally_starting_squad
+				end
+			end
+			if pbg ~= nil then
+				company_units[i].squadPBG = pbg
+			end
+		end
+		
+		SpawnUnits(company_units)
+	end
+end
+
+function MissionOMatic_StartOnInitBuildings(data)
+	if data.variantData.spawn_buildings == "On Init" then
+		SpawnBuildings(data)
+	end
+end
+
+function SpawnBuildings(data)
+	local race_specific_spawnables = data.prefabData.race_specific_spawnables
+	local buildings = data.prefabData.buildings
+	-- spawn buildings
+	local player = World_GetPlayerAt(1)
+	-- DEPRECATE THIS CODE
+	for i=1, #buildings do
+		
+		local companyType = buildings[i].company_type
+		local canSpawn = false
+		canSpawn = CanSpawnCompanyTypeOptional(companyType)
+		
+		if canSpawn == true then
+			-- ebp, position, egroup are stored here
+			local useMarkerTransform = true
+			Util_CreateEntities(
+				player, 
+				buildings[i].egroup, 
+				buildings[i].ebp,
+				buildings[i].position,
+				1,
+				nil,
+				nil,
+				nil,
+				useMarkerTransform
+				)
+		end
+	end
+	
+	--------------------
+	--Spawn race_specific_buildings from the buildings specified
+	for j = 1, #race_specific_spawnables do
+		local spawnable = race_specific_spawnables[j]
+		local conditions = spawnable.conditions
+		
+		-- Conditions are not met, if there are any
+		if conditions ~= nil and next(conditions) ~= nil and ConditionList_CheckList(conditions) == false then
+			break
+		end
+		
+		local race_specific_buildings = spawnable.buildings
+		for k = 1, #race_specific_buildings do
+			local building = race_specific_buildings[k]
+			local companyType = building.company_type
+			local canSpawn = false
+			canSpawn = CanSpawnCompanyTypeOptional(companyType)
+			if canSpawn == true then
+				-- ebp, position, egroup are stored here
+				local useMarkerTransform = true
+				Util_CreateEntities(
+					player,
+					building.egroup,
+					building.ebp,
+					building.position,
+					1,
+					nil,
+					nil,
+					nil,
+					useMarkerTransform
+					)
+			end
+		end
+	end
+end
+
+------------------
+--CLEAR AREA--
+------------------
+
+function introtype_Cleararea_Init(objective)
+	
+	objective.completeConditions = {
+		condition = "UnitAtLocation",
+		player = g_enemy_team.players[1].id,
+		use_team = true,
+		location_target_type = "MARKER",
+		position = objective.prefabData.cleararea.action_area,
+		amount = 0,
+		comparison = IS_LESS_THAN_OR_EQUAL,
+	}
+	
+	return objective
+	
+end
+
+function introtype_Cleararea_Preset(objective)
+	
+	return objective
+	
+end
+
+------------------
+--KILL UNITS--
+------------------
+
+function introtype_Killunits_Init(objective)
+	
+	sg_introUnitOvergroup = SGroup_CreateIfNotFound("sg_introUnitOvergroup")
+	local lock_groups = {}
+	
+	for i = 1, #objective.prefabData.killunits.spawn_locations do
+		
+		
+		local tempTargetPBG = objective.prefabData.killunits.spawn_locations[i].unit_target	
+		local tempTargetLocation = objective.prefabData.killunits.spawn_locations[i].locations
+		local tempOwner = objective.prefabData.killunits.spawn_locations[i].squads_owner
+		tempOwner = tempOwner or g_enemy_team.players[1].id
+		lock_groups[tempOwner.PlayerID] = lock_groups[tempOwner.PlayerID] or SGroup_CreateIfNotFound("lockGroup_"..#lock_groups)
+		--introSGroup = SGroup_CreateUnique("sg_intro")
+		local introSGroup = objective.prefabData.killunits.spawn_locations[i].sgroup
+		
+		local useMarkerTransform = true
+		Util_CreateSquads(tempOwner,
+			introSGroup,
+			tempTargetPBG,
+			tempTargetLocation,
+			nil, -- Destination
+			1,   -- numsquads
+			nil, -- Loadout
+			nil, -- attackmove
+			nil, -- dest_facing
+			nil, -- upgrades
+			nil, -- spawn_facing
+			nil, -- spawntype
+			nil, -- formationname
+			nil, -- egroupignorelist
+			nil, -- ignorepathfinding
+			useMarkerTransform)
+		
+		--table.insert(t_introUnitList, introSGroupName)
+		objective.prefabData.killunits.spawn_locations[i].introSGroup = introSGroup
+		SGroup_AddGroup(sg_introUnitOvergroup, introSGroup)
+		SGroup_AddGroup(lock_groups[tempOwner.PlayerID], introSGroup)
+		
+	end
+	
+	for owner,group in pairs(lock_groups) do
+		AI_LockSquads(Player_FromId(owner), group)
+	end
+	
+	objective.variantData.targetGroup = nil
+	
+	objective.completeConditions = {
+		condition = "HealthPercentage",
+		target = "SGROUP",
+		sgroup = sg_introUnitOvergroup,
+		percentage = 0,		
+		comparison = IS_LESS_THAN_OR_EQUAL,
+	}
+	
+	return objective
+	
+end
+
+
+function introtype_Killunits_Start(objective)
+	objective.objectiveData.introUI_ID = {}
+	local unitCount = #objective.prefabData.killunits.spawn_locations
+	local calloutCount = #objective.prefabData.killunits.ui_callouts
+	
+	for i = 1, unitCount do
+		local callout = objective.prefabData.killunits.ui_callouts[1 + math.floor((i / unitCount) * (calloutCount - 1))]
+		local killUnit = objective.prefabData.killunits.spawn_locations[i].introSGroup
+		
+		if SGroup_CountSpawned(killUnit) >= 1 then
+			
+			-- DEPRECATE ANVIL BEGIN- Once the strings in prefabs are set to use the locstring editor, this conversion to a number can be removed and the title could be directly used as a LocID
+			-- Temporarily support adding a number for the text field
+			-- which can be a LocID. This should be removed once loc strings
+			-- are supported in the prefabs.
+			
+			if Loc_GetString(callout.text) == Loc_Empty() then
+				
+				callout.text = tonumber(callout.text)
+				
+			end
+			-- DEPRECATE ANVIL END
+			
+			local elem_id = Objective_AddUIElements(objective.objectiveData, killUnit, true, callout.text, true, callout.offset, nil, nil, nil, callout.ui_template)
+			
+			table.insert(objective.objectiveData.introUI_ID, elem_id)
+			
+		end
+	end
+end
+
+
+
+------------------
+--KILL BUILDINGS--
+------------------
+
+function introtype_Killbuildings_Init(objective)
+	
+	for i = 1, #objective.prefabData.killbuildings.spawn_locations do
+		
+		
+		tempTargetPBG = objective.prefabData.killbuildings.spawn_locations[i].building_target	
+		tempTargetLocation = objective.prefabData.killbuildings.spawn_locations[i].locations
+		tempOwner = objective.prefabData.killbuildings.spawn_locations[i].buildings_owner
+		local introEGroup = EGroup_CreateIfNotFound("eg_intro".."EGroup"..i)		
+		Util_CreateEntities(tempOwner, introEGroup, tempTargetPBG, tempTargetLocation, 1)
+		
+		
+		objective.prefabData.killbuildings.spawn_locations[i].introEGroup = introEGroup		
+		
+	end
+	
+	objective.variantData.targetGroup = nil
+	
+	objective.completeConditions = {
+		condition = "UnitAtLocation",
+		player = g_enemy_team.players[1].id,
+		use_team = true,
+		location_target_type = "MARKER",
+		position = Util_GetPosition(objective.prefabData.cleararea.action_area),
+		range = Marker_GetProximityRadiusOrDefault(objective.prefabData.cleararea.action_area, 0),
+		amount = 0,
+		comparison = IS_LESS_THAN_OR_EQUAL,
+	}
+	
+	return objective
+	
+end
+
+function introtype_Killbuildings_Start(objective)
+	objective.objectiveData.introUI_ID = {}
+	local buildingCount = #objective.prefabData.killbuildings.spawn_locations
+	local calloutCount = #objective.prefabData.killbuildings.ui_callouts
+	
+	for i = 1, buildingCount do
+		local callout = objective.prefabData.killbuildings.ui_callouts[1 + math.floor((i / buildingCount) * (calloutCount - 1))]
+		local killbuilding = objective.prefabData.killbuildings.spawn_locations[i].introEGroup
+		
+		if EGroup_CountSpawned(killbuilding) >= 1 then
+			
+			-- DEPRECATE ANVIL BEGIN- Once the strings in prefabs are set to use the locstring editor, this conversion to a number can be removed and the title could be directly used as a LocID
+			-- Temporarily support adding a number for the text field
+			-- which can be a LocID. This should be removed once loc strings
+			-- are supported in the prefabs.
+			
+			if Loc_GetString(callout.text) == Loc_Empty() then
+				
+				callout.text = tonumber(callout.text)
+				
+			end
+			-- DEPRECATE ANVIL END
+			
+			local elem_id = Objective_AddUIElements(objective.objectiveData.objectiveData, killbuilding, true, callout.text, true, callout.offset, nil, nil, nil, callout.ui_template)
+			
+			table.insert(objective.objectiveData.introUI_ID, elem_id)
+		end
+	end
+end
+
+---------------
+
+function CanSpawnCompanyTypeOptional(companyType)
+	
+	local CheckCompanyType = function(companyPBG)
+		local optionalCompanyType = nil
+		if Misc_IsCommandLineOptionSet("companytype") then
+			optionalCompanyType = Misc_GetCommandLineString("companytype")
+		end
+		
+		if scartype(companyPBG) == ST_PBG then
+			local company = BP_GetName(companyPBG)
+			local affectorsTable = Affectors_GetTable()
+			
+			if optionalCompanyType ~= nil then
+				if affectorsTable ~= nil then
+					return affectorsTable.player_company_bp_name == company
+				else
+					return optionalCompanyType == company
+				end
+			elseif affectorsTable ~= nil then
+				return affectorsTable.player_company_bp_name == company
+			else
+				return false
+			end
+		end
+	end
+	
+	local canSpawn = false
+	if companyType ~= nil then
+		if CheckCompanyType(companyType) == true then
+			canSpawn = true
+		end
+	else
+		canSpawn = true
+	end
+
+	return canSpawn
+end

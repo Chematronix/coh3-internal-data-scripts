@@ -1,0 +1,104 @@
+import("anvil.scar")
+
+local function DisplayStoryScreen(closeScreenFunction)
+	
+	local xaml =
+[[<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+		      xmlns:luaDataStore="clr-namespace:LuaDataStoreModelTypes;assembly=EngineUI"
+              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="clr-namespace:WPFGUI">
+      <Grid x:Name="Content" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource BlackOpacity75Brush}">
+			<Control Style="{StaticResource SoldierStoryContentStyle}" IsHitTestVisible="False"  
+    			Visibility="{Binding Path=BooleanLookup[soldier_story.enabled], Source={x:Static luaDataStore:LuaDataStoreModel.Instance}, Converter={StaticResource BoolToVis}}"/>
+      </Grid>
+    </Page>
+]]
+	
+	local screenName = "SoldierStory-" .. closeScreenFunction
+	
+	UI_AddChild("", "XamlPresenter", screenName, { Xaml = xaml })
+	UI_AddEventHandler(screenName .. ".Content", "MouseDown", closeScreenFunction)
+end
+
+function CloseStoryScreen()
+	
+	UI_Remove("SoldierStory-CloseStoryScreen")
+	
+end
+
+function ShowPostSkirmishWin()
+	
+	UI_Remove("SoldierStory-ShowPostSkirmishWin")
+	
+	InitializeVignette("success_vignette")
+	DisplayStoryScreen("ShowPostSkirmishLoss")
+
+end
+
+function ShowPostSkirmishLoss()
+	
+	UI_Remove("SoldierStory-ShowPostSkirmishLoss")
+	
+	InitializeVignette("failure_vignette")
+	DisplayStoryScreen("CloseStoryScreen")
+	
+end
+
+function SoldierStoryDebug_TestCurrentSkirmishStory()
+
+	InitializePreRTSSoldierStory(nil)
+	DisplayStoryScreen("ShowPostSkirmishWin")
+	
+end
+
+function SoldierStoryDebug_TestSkirmishStory(soldier_story_name)
+
+	ClearNextSoldierStory()
+	SetNextSkirmishStory(soldier_story_name)
+	SoldierStoryDebug_TestCurrentSkirmishStory()
+	
+end
+
+function SoldierStoryDebug_TestCurrentMissionStory()
+
+	InitializeVignette("post_mission_vignette")
+	DisplayStoryScreen("CloseStoryScreen")
+	
+end
+
+function SoldierStoryDebug_TestCurrentCompanyStory(player_squad_id)
+
+	InitializePreRTSSoldierStory(player_squad_id)
+	DisplayStoryScreen("ShowPostSkirmishWin")
+	
+end
+
+function SoldierStoryDebug_TestCompanyStory(player_squad_id, company_story_name)
+
+	ClearNextSoldierStory()
+	SetNextCompanyStory(company_story_name)
+	SoldierStoryDebug_TestCurrentCompanyStory(player_squad_id)
+	
+end
+
+function SoldierStoryDebug_CurrentState()
+
+	print("Next SoldierStory")
+
+	local next_soldier_story = Game_RetrieveTableData(next_soldier_story_data_key, false)
+	if (next_soldier_story ~= nil) then
+		
+		print("Next Skirmish Story - " .. (next_soldier_story.next_skirmish_story or "Uninitialised"))
+		print("Next Company Story  - " .. (next_soldier_story.next_company_story or "Uninitialised"))
+		print("Pre Vignette        - " .. (next_soldier_story.pre_vignette or "Uninitialised"))
+		print("Success Vignette    - " .. (next_soldier_story.success_vignette or "Uninitialised"))
+		print("Failure Vignette    - " .. (next_soldier_story.failure_vignette or "Uninitialised"))
+		print("Mission Vignette    - " .. (next_soldier_story.post_mission_vignette or "Uninitialised"))
+		
+	else
+		
+		print("Uninitialised")
+		
+	end
+			
+end

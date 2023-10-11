@@ -1,0 +1,366 @@
+import("table.scar")
+
+--[[
+
+*******************************************
+Data formats used during context_selection
+*******************************************
+
+Context Format
+==============
+Selected contexts are tables with the following format:
+{
+	context_type: String indicating the type of context (one of LOCATION_MARKER, ...)
+	context_data: ContextData (the actual context data, format depends on type)
+}
+
+ContextData Format
+==================
+The format depends on the type of context, ContextData is one of the following:
+
+LOCATION_MARKER:
+----------------
+This format matches the schema of individual a single item within the "locations" list of a locationgroup prefab (locationgroup_schema.scar)
+
+table with the following fields (non-exhaustiv):
+{
+	position: ST_MARKER,
+}
+
+ENTITY:
+-------
+The entity ID
+
+SQUAD:
+------
+The squad ID
+
+POS:
+----
+ScarPos (ST_SCARPOS)
+
+ContextList Format
+==================
+A context list is one of the following:
+
+- ST_EGROUP
+- ST_SGROUP
+- ST_TABLE (Array of ContextData format)
+
+--]]
+
+--? @shortdesc Attempts to select a context from the global context lists according to the provided context_selection_info.
+--? @args Table context_selection_info
+--? @result nil or Table with the Context format (see context_selection.scar)
+function Context_SelectContext(context_selection_info)
+	
+	-- In this function we pick a context for a according to the requested selection info. 
+	-- We find the relevant context lists that are specified in the context
+	-- selection info, and iterate all of them in aggregate to find a context
+	-- that satisfies the context conditions.
+
+	local context_type = context_selection_info.context_type
+	
+	-- Select the context lists we will be searching in, which we will further filter
+	-- with the provided conditions.
+	local context_lists = Context_CollectContextLists(context_selection_info)
+	
+	-- Attempt to find a matching context from the lists we've selected:
+	
+	local random_selection = context_selection_info.random
+	local conditions = context_selection_info.conditions
+	
+	local selected_context -- The final selected context (If not doing random selection, then this is set by testContext on success)
+	local possible_contexts = {} -- The list of qualified context candidates (When doing random selection testContext will populate this)
+	
+	-- Tests an individual context with the ContextData format, returns true to indicate selection
+	-- is complete and false otherwise (this is useful for notifying the caller to break out of
+	-- the search early, if possible).
+	local testContext = function(context_data)
+		local context = {context_data = context_data, context_type = context_type}
+		if conditions == nil or next(conditions) == nil or ConditionList_CheckList(conditions, context) then
+			if not random_selection then
+				-- Set the selected context to this valid context
+				selected_context = context
+				-- indicate a valid context has been found:
+				return true
+			else
+				-- Add this valid context to the list of valid contexts
+				possible_contexts[#possible_contexts + 1] = context
+				-- if we're collecting all of the valid contexts instead
+				-- of the first one found, then don't indicate we are
+				-- finished yet:
+				return false
+			end
+		end
+		return false
+	end
+	
+	local testEGroupContext = function(_group, _index, context_data)
+		if not Entity_IsAlive(context_data) then
+			return false
+		end
+		return testContext(context_data)
+	end
+	
+	local testSGroupContext = function(_group, _index, context_data)
+		if not Squad_IsAlive(context_data) then
+			return false
+		end
+		return testContext(context_data)
+	end
+	
+	-- Iterate the context lists, early out when we've selected a context (when doing random selection,
+	-- we don't select a context until we've processed every context in the selected context lists)
+	for i=1, #context_lists do
+		local context_list = context_lists[i]
+		local context_list_type = scartype(context_list)
+
+		if context_list_type == ST_TABLE then
+			for j=1, #context_list do
+				if testContext(context_list[j]) then
+					break
+				end
+			end
+		elseif context_list_type == ST_EGROUP then
+			EGroup_ForEachEx(context_list, testEGroupContext, true, false)
+		elseif context_list_type == ST_SGROUP then
+			SGroup_ForEachEx(context_list, testSGroupContext, true, false)
+		end
+		
+		if selected_context ~= nil then
+			break
+		end
+	end
+	
+	-- If we're doing random selection, then here is where we pick from the possible contexts
+	-- which were populated above
+	if random_selection then
+		local possible_context_count = #possible_contexts
+		if possible_context_count > 0 then
+			selected_context = possible_contexts[World_GetRand(1, possible_context_count)]
+		end
+	end
+	
+	-- Cleanup groups that were created for context selection
+	for i=1, #context_lists do
+		local context_list = context_lists[i]
+		local context_list_type = scartype(context_list)
+
+		if context_list_type == ST_EGROUP then
+			EGroup_Destroy(context_list)
+		elseif context_list_type == ST_SGROUP then
+			SGroup_Destroy(context_list)
+		end
+	end
+	
+	return selected_context
+end
+
+--? @shortdesc Collects a list of ContextLists to pick a context from based on the provided context selection info
+--? @args Table context_selection_info (format specified in the prefab schema)
+--? @result Table (Array with each element using the ContextList format)
+function Context_CollectContextLists(context_selection_info)
+	
+	local context_type = context_selection_info.context_type
+	
+	-- This is a list of context lists to choose from. The only reason it is 2 dimensional is
+	-- to allow easy aggregation of multiple context source lists.
+	local context_lists = {}
+
+	if context_type == "LOCATION_MARKER" then
+		
+		-- The checked_tags field is a list that is generated on the context_selection_info inside
+		-- playbill.scar when the prefab data is initialized. This is the list of location marker
+		-- tags that were selected. Location markers with these tags will be considered during
+		-- context selection.
+		local checked_location_marker_tags = context_selection_info.checked_tags
+		local checked_tag_count = #checked_location_marker_tags
+		
+		for i=1,checked_tag_count do
+			local tag = checked_location_marker_tags[i]
+			-- This is the list of location markers, sorted into sub lists for each tag.
+			-- (e.g. if a location has open_plains checked, then it will be included in
+			-- the open_plains list, along with any other lists for tags that it has checked)
+			g_location_markers = g_location_markers or {}
+			-- Grab the list of each location marker which has this tag, and add it as
+			-- a context list to consider:
+			context_lists[#context_lists + 1] = g_location_markers[tag]
+		end
+
+	elseif context_type == "ENTITY" then
+		local new_egroup = EGroup_CreateUnique()
+		if context_selection_info.select_from_group then
+			local source_egroup = context_selection_info.source_egroup
+			if context_selection_info.filter_by_player then
+				-- create a new destructible egroup that includes entities
+				-- that are owned by the requested player
+				local player_owner = context_selection_info.player_owner
+
+				local count = EGroup_Count(source_egroup)
+				for i=1, count do
+					local entity = EGroup_GetEntityAt(source_egroup, i)
+					local real_owner
+					if World_OwnsEntity(entity) then
+						real_owner = "World"
+					else
+						real_owner = Entity_GetPlayerOwner(entity)
+					end
+
+					if real_owner == player_owner then
+						EGroup_Add(new_egroup, entity)
+					end
+				end
+			else
+				EGroup_AddEGroup(new_egroup, source_egroup)
+			end
+		else
+			if context_selection_info.filter_by_player then
+				local player_owner = context_selection_info.player_owner
+				if player_owner ~= "World" then
+					Player_GetEntitiesEGroup(player_owner, new_egroup)
+				else
+					World_GetAllNeutralEntities(new_egroup)
+				end
+			else
+				World_GetAllNeutralEntities(new_egroup)
+				local player_count = World_GetPlayerCount()
+				for i=1, player_count do
+					local current_player = World_GetPlayerAt(i)
+					EGroup_AddEGroup(new_egroup, Player_GetEntities(current_player))
+				end
+			end
+		end
+		if context_selection_info.filter_by_bp then
+			EGroup_Filter(new_egroup, context_selection_info.ebp_filter, FILTER_KEEP)
+		end
+		context_lists[#context_lists + 1] = new_egroup
+	elseif context_type == "SQUAD" then
+		local new_sgroup = SGroup_CreateUnique()
+		if context_selection_info.select_from_group then
+			local source_sgroup = context_selection_info.source_sgroup
+			if context_selection_info.filter_by_player then
+
+				local player_owner = context_selection_info.player_owner
+
+				local count = SGroup_Count(source_sgroup)
+				for i=1, count do
+					local squad = SGroup_GetSquadAt(source_sgroup, i)
+					local real_owner = nil
+					if World_OwnsSquad(squad) then
+						real_owner = Squad_GetPlayerOwner(squad)
+					else
+						real_owner = "World"
+					end
+					
+					if real_owner == player_owner then
+						SGroup_Add(new_sgroup, squad)
+					end
+				end
+			else
+				SGroup_AddGroup(new_sgroup, source_sgroup)
+			end
+		else
+			if context_selection_info.filter_by_player then
+				local player_owner = context_selection_info.player_owner
+				if player_owner ~= "World" then
+					SGroup_AddGroup(new_sgroup, Player_GetSquads(player_owner))
+				end
+			else
+				local player_count = World_GetPlayerCount()
+				for i=1, player_count do
+					local current_player = World_GetPlayerAt(i)
+					SGroup_AddGroup(new_sgroup, Player_GetSquads(current_player))
+				end
+			end
+		end
+		if context_selection_info.filter_by_bp then
+			SGroup_Filter(new_sgroup, context_selection_info.sbp_filter, FILTER_KEEP)
+		end
+		context_lists[#context_lists + 1] = new_sgroup
+	end
+	
+	return context_lists
+end
+
+--? @shortdesc Get the position, direction, and proximity of the context provided (expects Context table format)
+--? @extdesc Will return nil for any data that is not found on the context. For example, entities do not have a proximity.
+--? @args Table context with the Context format (see context_selection.scar)
+--? @result ST_SCARPOS position, ST_SCARPOS direction, Number proximity
+function Context_ExtractInfoFromContext(context)
+	-- This is a helper to extract a position dynamically from
+	-- a playbill context, regardless of what type of context it is.
+	-- It has the potential to fail, if the context has no position,
+	-- so use it in prefab conditions where you expect the context
+	-- to contain a position.
+	if scartype(context) ~= ST_TABLE then
+		error("Attempted to extract position info from a non-table playbill context. Are you trying to use a CONTEXT when there is none selected?")
+	end
+	
+	local context_type = context.context_type
+	local context_data = context.context_data
+	
+	if context_type == "LOCATION_MARKER" then
+		local marker = context_data.position
+		return Marker_GetPosition(marker), Marker_GetDirection(marker), Marker_GetProximityRadiusOrDefault(marker, 0)
+	elseif context_type == "ENTITY" then
+		if context_data ~= nil and Entity_IsActive(context_data) then			
+			return Entity_GetPosition(context_data), Entity_GetHeading(context_data), nil
+		end
+	elseif context_type == "SQUAD" then
+		if context_data ~= nil and Squad_IsAlive(context_data) then
+			return Squad_GetPosition(context_data), Squad_GetHeading(context_data), nil
+		end
+	elseif context_type == "POS" then
+		return context_data, nil, nil
+	end
+	return nil, nil, nil
+end
+
+--? @shortdesc Get the Entity/Squad/Position of the context provided (expects Context table format)
+--? @args Table context with the Context format (see context_selection.scar)
+--? @result ST_SCARPOS | ST_ENTITY | ST_SQUAD
+function Context_ExtractTargetFromContext(context)
+	if scartype(context) ~= ST_TABLE then
+		error("Attempted to extract target from a non-table playbill context. Are you trying to use a CONTEXT when there is none selected?")
+	end
+	
+	local context_type = context.context_type
+	local context_data = context.context_data
+	
+	local target = nil
+	if context_type == "LOCATION_MARKER" then
+		local marker = context_data.position
+		target = Marker_GetPosition(marker)
+	else
+		-- context_type is SQUAD, ENTITY or POS and the target is simply
+		-- the context_data field.
+		target = context_data
+	end
+	return target
+end
+
+
+--? @shortdesc Create a context table format from a given target for use as a playbill context
+--? @args A target that is either Squad, Entity, or ScarPos type, or nil (nil will be returned in that case) 
+function Context_CreateContextFromTarget(target)
+	
+	if target == nil then
+		return nil
+	end
+	
+	local context = {context_data = target}
+	local context_type = scartype(target)
+	
+	if context_type == ST_SQUAD then
+		context.context_type = "SQUAD"
+	elseif context_type == ST_ENTITY then
+		context.context_type = "ENTITY"
+	elseif context_type == ST_SCARPOS then
+		context.context_type = "POS"
+	else
+		error("Attempting to create a context from a target that isn't nil, entity, squad, or player. It is: "..tostring(scartype(target)))
+	end
+	
+	return context
+end

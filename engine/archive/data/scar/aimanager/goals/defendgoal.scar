@@ -1,0 +1,203 @@
+--? @group scardoc;Encounter
+
+import("aimanager/Goals/BaseGoal.scar")
+
+Ai = Ai or fatal("Ai not loaded properly")
+Ai.goals = Ai.goals or {}
+Ai.goals.DefendGoal = Clone(Ai.goals.BaseGoal)
+Ai.goals.DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData or {} -- preserve data on soft-reload
+
+local DefendGoal = Ai.goals.DefendGoal
+
+DefendGoal._BaseCreate = DefendGoal.Create
+DefendGoal._BaseSetupSkirmishAI = DefendGoal.SetupSkirmishAI
+DefendGoal._BaseUpdateGoalData = DefendGoal.UpdateGoalData
+
+
+function DefendGoal:Create(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData, previousEncounterID)
+	local DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData
+	defaultGoalData = defaultGoalData or DefaultDefendGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultDefendGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultDefendGoalData.modifyGoalData
+	
+	local goal = self:_BaseCreate(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	
+	if(goal.internalAIEncounterPtr) then fatal("ERROR: AI Encounter object already defined for encounter "  .. encounter.data.name) end
+	
+	goal:CreateSkirmishAI(previousEncounterID)
+	
+	return goal
+end
+
+function DefendGoal:UpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	local DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData
+	defaultGoalData = defaultGoalData or DefaultDefendGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultDefendGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultDefendGoalData.modifyGoalData
+
+	self:_BaseUpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+end
+
+--Setup defend based on skirmish AI
+function DefendGoal:CreateSkirmishAI(previousEncounterID)
+	if (not AI_IsLocalAIPlayer(self.encounter.data.player)) then
+		Ai:Print("Skipping Skirmish AI - player not enabled AI")
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Creating AI Encounter...")
+	if previousEncounterID then
+		self.internalAIEncounterPtr = AI_CreateRestoreEncounter(self.encounter.data.player, AIEncounterType_DefendArea, previousEncounterID)
+	else
+		self.internalAIEncounterPtr = AI_CreateEncounter(self.encounter.data.player, AIEncounterType_DefendArea)
+	end
+	
+	self:SetupEncounterSkirmishAI()
+	self:SetupSkirmishAI()
+end
+
+--Setup defend based on skirmish AI
+function DefendGoal:SetupSkirmishAI()
+	if (self.internalAIEncounterPtr == nil or not AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID)) then
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Setting up Skirmish AI...")
+	
+	self:_BaseSetupSkirmishAI()
+
+	if (self.data.maxIdleTime) then
+		AIEncounter_EngagementGuidance_SetMaxIdleTime(self.internalAIEncounterPtr, self.data.maxIdleTime)
+	end
+	
+	
+	AIEncounter_DefenseGuidance_EnableIdleGarrison(self.internalAIEncounterPtr, self.data.garrisonIdle or false)
+	AIEncounter_CombatGuidance_EnableCombatGarrison(self.internalAIEncounterPtr, self.data.garrison or false)
+	
+	-----
+	----- PATROL
+	-----
+	if (self.data.patrol_params ~= nil and self.data.patrol_params.enabled) then
+		if (self.data.patrol_params.path ~= nil and self.data.patrol_params.path ~= "") then
+			AIEncounter_TargetGuidance_SetPatrolPathByName(self.internalAIEncounterPtr, self.data.patrol_params.path, self.data.patrol_params.waypoint_wait_time or 0, self.data.patrol_params.invert_path_at_end or false, self.data.patrol_params.start_inverted or false)
+		elseif not self.data.patrol_params.wander_center_override_use_squad_spawn_pos then -- want to wander using the squad spawn location, we need to create an entry for each squad
+		
+			local wanderCenter = World_Pos(0, 0, 0)
+			local overrideWanderCenter = false
+			if self.data.patrol_params.wander_center_override_marker ~= nil then
+				wanderCenter = Marker_GetPosition(self.data.patrol_params.wander_center_override_marker)
+				overrideWanderCenter = true
+			end
+			
+			AIEncounter_TargetGuidance_SetPatrolWander(self.internalAIEncounterPtr, self.data.patrol_params.waypoint_wait_time or 0, self.data.patrol_params.wander_radius_mode or AIWanderRadiusMode_Leash, self.data.patrol_params.wander_radius_override or -1, overrideWanderCenter, wanderCenter)
+		end
+	end
+	
+	for k,unit in pairs(self.encounter.units) do
+	
+		local _PerSquad = function(gid, idx, sid)
+	
+			if unit.data.patrol_params ~= nil then
+				if unit.data.patrol_params.enabled then
+					
+					if (unit.data.patrol_params.path ~= nil and unit.data.patrol_params.path ~= "") then
+						AIEncounter_TargetGuidance_SetSquadPatrolPathByName(self.internalAIEncounterPtr, sid, unit.data.patrol_params.path, unit.data.patrol_params.waypoint_wait_time or 0, unit.data.patrol_params.invert_path_at_end or false, unit.data.patrol_params.start_inverted or false)
+					else
+						
+						local wanderCenter = World_Pos(0, 0, 0)
+						local overrideWanderCenter = false
+						if unit.data.patrol_params.wander_center_override_use_squad_spawn_pos then
+							wanderCenter = Marker_GetPosition(unit.data.spawn)
+							overrideWanderCenter = true
+						elseif unit.data.patrol_params.wander_center_override_marker ~= nil then
+							wanderCenter = Marker_GetPosition(unit.data.patrol_params.wander_center_override_marker)
+							overrideWanderCenter = true
+						end
+						
+						AIEncounter_TargetGuidance_SetSquadPatrolWander(self.internalAIEncounterPtr, sid, unit.data.patrol_params.waypoint_wait_time or 0, unit.data.patrol_params.wander_radius_mode or AIWanderRadiusMode_Leash, unit.data.patrol_params.wander_radius_override or -1, overrideWanderCenter, wanderCenter)
+					end
+					
+				else
+					AIEncounter_TargetGuidance_DisableSquadPatrol(self.internalAIEncounterPtr, sid)
+				end
+			elseif self.data.patrol_params ~= nil and self.data.patrol_params.wander_center_override_use_squad_spawn_pos then
+				
+				local wanderCenter = Marker_GetPosition(unit.data.spawn)
+			
+				AIEncounter_TargetGuidance_SetSquadPatrolWander(self.internalAIEncounterPtr, sid, self.data.patrol_params.waypoint_wait_time or 0, self.data.patrol_params.wander_radius_mode or AIWanderRadiusMode_Leash, self.data.patrol_params.wander_radius_override or -1, true, wanderCenter)
+			end
+		end 
+		
+		SGroup_ForEachEx(unit.sgroup, _PerSquad, true, true)
+	end
+
+end
+
+
+--[[
+-- Defend Goal Data Interface
+]]--
+
+--? @shortdesc Adjust default goal data for defend goals.  Sets the default GoalData to the current defaults plus additionalDefaultGoalData; any values specified are used for unspecified encounter defend goal values.
+--? @args Table additionalDefaultGoalData
+function AIDefendGoal_AdjustDefaultGoalData(additionalDefaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Adjusting DefendGoal default data...")
+
+	local additionalGoalData = Clone(additionalDefaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(additionalGoalData)
+	local DefaultBaseGoalData = Ai.goals.DefaultGoalData
+	local DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData
+	local defaultGoalData = DefaultDefendGoalData.defaultGoalData or DefaultBaseGoalData.defaultGoalData
+	DefaultDefendGoalData.defaultGoalData = MergeCloneTable(defaultGoalData, additionalGoalData)
+
+	Ai:Print("-----------------------------------------------")
+	Ai:Print("additionalDefaultGoalData")
+	Ai:Print(additionalGoalData)
+	Ai:Print("-----------------------------------------------")
+	DebugPrintGoals(DefaultDefendGoalData.defaultGoalData, DefaultDefendGoalData.overrideGoalData, DefaultDefendGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set default goal data for defend goals.  defaultGoalData is cloned; any values specified are used for unspecified encounter defend goal values.
+--? @args Table defaultGoalData
+function AIDefendGoal_SetDefaultGoalData(defaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting DefendGoal default data...")
+
+	local DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData
+	DefaultDefendGoalData.defaultGoalData = Clone(defaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultDefendGoalData.defaultGoalData)
+
+	DebugPrintGoals(DefaultDefendGoalData.defaultGoalData, DefaultDefendGoalData.overrideGoalData, DefaultDefendGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set override goal data for defend goals.  overrideGoalData is cloned; any values specified are used for encounter defend goal values.
+--? @args Table overrideGoalData
+function AIDefendGoal_SetOverrideGoalData(overrideGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting DefendGoal override data...")
+
+	local DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData
+	DefaultDefendGoalData.overrideGoalData = Clone(overrideGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultDefendGoalData.overrideGoalData)
+
+	DebugPrintGoals(DefaultDefendGoalData.defaultGoalData, DefaultDefendGoalData.overrideGoalData, DefaultDefendGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set modify goal data for defend goals.  modifyGoalData is cloned; values specified via keyname_Multiply are used for the numeric keyname encounter defend goal value.
+--? @args Table modifyGoalData
+function AIDefendGoal_SetModifyGoalData(modifyGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting DefendGoal modify data...")
+	local DefaultDefendGoalData = Ai.goals.DefaultDefendGoalData
+	DefaultDefendGoalData.modifyGoalData = Clone(modifyGoalData) 
+
+	DebugPrintGoals(DefaultDefendGoalData.defaultGoalData, DefaultDefendGoalData.overrideGoalData, DefaultDefendGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+

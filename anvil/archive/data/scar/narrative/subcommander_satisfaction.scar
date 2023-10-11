@@ -1,0 +1,108 @@
+
+local loyalty_neutral_threshold_lower = 33
+local loyalty_neutral_threshold_upper = 66
+
+local function UpdateSubcommanderSatisfactionFlag(subcommander)
+	
+	if (World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override")) then
+		
+		World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_satisfied", World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override_satisfied"))  
+		World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_dissatisfied", not World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override_dissatisfied"))
+		World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_neutral", not World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override_neutral"))
+
+	else 
+		
+		local loyalty = GetLoyalty(subcommander)
+	
+		SetNarrativeVariable("state_subcommander." .. subcommander .. "_dissatisfied", loyalty < loyalty_neutral_threshold_lower)  
+		SetNarrativeVariable("state_subcommander." .. subcommander .. "_satisfied", loyalty > loyalty_neutral_threshold_upper)  
+		SetNarrativeVariable("state_subcommander." .. subcommander .. "_neutral", loyalty >= loyalty_neutral_threshold_lower and loyalty <= loyalty_neutral_threshold_upper)    
+
+	end	
+	
+end 
+
+function UpdateSubcommanderSatisfactionFlags()
+
+	UpdateSubcommanderSatisfactionFlag("buckram")
+	UpdateSubcommanderSatisfactionFlag("norton")
+	UpdateSubcommanderSatisfactionFlag("valenti")
+	
+end
+
+local function ResetLoyalty()
+
+	SetLoyalty("buckram", 0)
+	SetLoyalty("norton", 0)
+	SetLoyalty("valenti", 0)
+	
+end
+
+function PrintSubcommanderState(subcommander)
+
+	local satisfied = World_GetNarrativeVariable("state_subcommander.".. subcommander .. "_satisfied")
+	local dissatisfied = World_GetNarrativeVariable("state_subcommander.".. subcommander .. "_dissatisfied")
+	local neutral = World_GetNarrativeVariable("state_subcommander.".. subcommander .. "_neutral")
+	
+	local override = World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override")
+	local override_satisfied = World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override_satisfied")
+	local override_dissatisfied = World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override_dissatisfied")
+	local override_neutral = World_GetNarrativeVariable("state_subcommander." .. subcommander .. "_override_neutral")
+
+	if (override) then
+		
+		print(subcommander .. " is " .. ((override_satisfied and "Satisfied ") or (override_dissatisfied and "Dissatisfied ") or (override_neutral and "Neutral ")) .. "(Overridden) ")
+		
+	else
+
+		print(subcommander .. " is " .. ((satisfied and "Satisfied ") or (dissatisfied and "Dissatisfied ") or (neutral and "Neutral ")))
+		
+	end
+	
+end
+	
+function NarrativeDebug_TestSatisfaction()
+
+	ResetLoyalty()
+	UpdateSubcommanderSatisfactionFlags()
+
+	print("")
+	print("BUCKRAM TEST")
+	PrintSubcommanderState("Buckram")
+	SetLoyalty("Buckram", 40)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Buckram")
+	SetLoyalty("Buckram", 90)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Buckram")
+	SetLoyalty("Buckram", 0)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Buckram")
+
+	print("")
+	print("NORTON TEST")
+	PrintSubcommanderState("Norton")
+	SetLoyalty("Norton", 40)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Norton")
+	SetLoyalty("Norton", 90)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Norton")
+	SetLoyalty("Norton", 0)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Norton")
+	
+	print("")
+	print("VALENTI TEST")
+	PrintSubcommanderState("Valenti")
+	SetLoyalty("Valenti", 40)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Valenti")
+	SetLoyalty("Valenti", 90)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Valenti")
+	SetLoyalty("Valenti", 0)
+	UpdateSubcommanderSatisfactionFlags()
+	PrintSubcommanderState("Valenti")
+	
+end

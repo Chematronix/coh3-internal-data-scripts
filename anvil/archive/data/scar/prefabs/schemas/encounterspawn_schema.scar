@@ -1,0 +1,91 @@
+--
+-- WorldBuilder prefab
+-- "encounterspawn"
+--
+
+
+-- Schema
+
+encounterspawn_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "encounterspawn",																						-- name the prefab uses to identify itself
+	description = "encounterspawn",																				-- name to display for this prefab
+	script = "encounterspawn.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+	
+		------------------------
+		------------------------ ENCOUNTER SPAWN
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "spawn_locations",
+			description = "Areas that reinforcements can spawn from",
+			multiplicity = "multiple",
+			itemSchema = {
+				{
+					type = ST_STRING,
+					name = "spawn_type",
+					description = "Condition for an action to happen",
+					options = {"Closet", "Offmap", "Building", "Airdrop", "Amphibious"},
+					default = "Closet",
+				},
+				{
+					type = ST_MARKER,
+					name = "position",
+					description = "Location to spawn at",
+					colour = "red",
+					hasDirection = true,
+					requirement = {"spawn_type", "Closet", "Offmap", "Airdrop", "Amphibious"},
+				},
+				{
+					type = ST_EGROUP,
+					name = "building",
+					description = "Building to spawn units out of",
+					requirement = {"spawn_type", "Building"},
+				},
+				{											
+					type = ST_BOOLEAN,
+					name = "allow_infantry",
+					description = "Allow infantry to spawn here",
+					default = true,
+				},
+				{											
+					type = ST_BOOLEAN,
+					name = "allow_vehicles",
+					description = "Allow vehicles to spawn here",
+					default = true,
+				},
+				{											
+					type = ST_BOOLEAN,
+					name = "can_be_exit",
+					description = "Use this point to exit the map as well",
+					category = "Exit Location",
+					default = true,
+				},
+			},		
+		},
+		
+		{
+			type = ST_STRING,
+			name = "condition",
+			description = "Condition for an action to happen",
+			options = {"None", "OnObjStart", "OnObjComplete", "OnEngaged", "OnTriggerArea", "OnOtherZoneLost"},
+			default = "None",
+			category = "Condition Action",
+		},
+		{
+			type = ST_STRING,
+			name = "action",
+			description = "Action triggered once condition is met",
+			options = {"None", "ChangeEnemyGoal", "ChangePriority", "ChangeIntensity", "ChangeChallenge", "ChangeComplexity"},
+			default = "None",
+			category = "Condition Action",
+		},
+		
+	},
+}

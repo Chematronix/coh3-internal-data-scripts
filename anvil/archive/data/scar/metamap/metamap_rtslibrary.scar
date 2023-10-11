@@ -1,0 +1,385 @@
+--Imports
+import("metamap/metamap_tuning.scar")
+import("modifiers.scar")
+import("narrative/narrative_variables.scar")
+import("audio/audio.scar")
+local t_mission_modifiers = {}
+
+local t_entity_losses = {}
+local t_entity_kills = {}
+
+local LOCAL_PLAYER_DATA_INDEX = 1
+local AI_PLAYER_DATA_INDEX = 2
+local ALLY_PLAYER_DATA_INDEX = 3
+
+--? @shortdesc Setup datastore for metamap when returning from RTS
+--? @extdesc Takes the results table and uses it to setup the datastore which will be used by metamap script to do post mission processing
+--? @args Table results, Table deferred_campaign_data
+--? @result Void
+function MetaMap_FinishRTS(report, deferred_campaign_data)
+	Rule_RemoveGlobalEvent(OnEntityKilledRTS)
+	for i = 0,#t_mission_modifiers do
+		Modifier_Remove(t_mission_modifiers)
+	end
+
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign ~= nil then
+		campaign.deferred_campaign_data = deferred_campaign_data
+		campaign.process_mission_result = true
+		
+		-- set up Soldier Story content if required
+		local auto_resolve_battle_result = report.auto_resolved
+		local mission_data = auto_resolve_battle_result and campaign.auto_resolve_data or campaign.mission_data
+		local is_skirmish = mission_data ~= nil and mission_data.mission_type == "skirmish"
+		
+		-- Process soldier stories. This edits the next soldier story variable and narrative variables, so
+		-- it must be done before we store that info in the campaign table to be used by the campaign map.
+		if (is_skirmish) then
+			InitializePostRTSSoldierStory(report.is_local_player_winner)
+		else
+			InitializeMissionSoldierStory()
+		end
+		
+		MetaMap_PopulateCampaignTable(campaign, report)
+		
+		Game_StoreTableData("campaign", campaign)
+	end
+	
+
+	
+
+	
+end
+
+
+--? @shortdesc Fill provided table campaign with stats and rewards
+--? @extdesc Fill provided table campaign with stats and rewards
+--? @args Table campaign, Table report
+--? @result Void
+function MetaMap_PopulateCampaignTable(campaign, report)
+	
+	campaign.report = report
+	
+	local local_player = Game_GetLocalPlayerID()
+	if t_entity_losses ~= nil and t_entity_losses[local_player] ~= nil then
+		campaign.report.player_entity_losses = t_entity_losses[local_player]
+	else
+		campaign.report.player_entity_losses = 0
+	end
+	if t_entity_kills ~= nil and t_entity_kills[local_player] ~= nil then
+		campaign.report.player_entity_kills = t_entity_kills[local_player]
+	else
+		campaign.report.player_entity_kills = 0
+	end
+	
+	if report.is_local_player_winner then
+		
+		-- Resource rewards will increase if auto resolve predicted loss for player
+		local rewards_multiplier = 1
+		if campaign.auto_resolve_prediction ~= nil and campaign.auto_resolve_prediction == false  then
+			rewards_multiplier = World_GetCampaignAutoResolvePredictionMultiplier()
+		end
+		
+		-- Get the requisition to be saved in the data store
+		local bonusObjectiveSkillPoints = Player_GetResource(Game_GetLocalPlayer(), RT_Requisition)
+		local baselineMissionCompleteSKillPoints = World_GetSkillPointsForMissionCompletion()
+		
+		local requisition = bonusObjectiveSkillPoints + baselineMissionCompleteSKillPoints
+		if campaign.rewarded_resources == nil then
+			campaign.rewarded_resources = { requisition = requisition }
+		elseif campaign.rewarded_resources.requisition == nil then
+			campaign.rewarded_resources.requisition = requisition
+		else
+			campaign.rewarded_resources.requisition = requisition + campaign.rewarded_resources.requisition
+		end
+		
+	end
+	-- Set up loss reward resources
+	if not report.is_local_player_winner and campaign.rewarded_resources ~= nil then 
+		
+		if scartype(campaign.reward_loss_resource_percentage) == ST_NUMBER and campaign.reward_loss_resource_percentage < 1.0 then
+			for resource_name, resource_amount in pairs(campaign.rewarded_resources) do
+				local loss_resource_amount = campaign.reward_loss_resource_percentage * resource_amount
+				if loss_resource_amount > 1.0 then
+					loss_resource_amount = math.floor(loss_resource_amount)
+				else
+					loss_resource_amount = math.ceil(loss_resource_amount)
+				end
+				campaign.rewarded_resources[resource_name] = loss_resource_amount
+			end
+		end
+	end
+	
+	MetaMap_CalculatePlayerVeterancyFromMission(campaign)
+	MetaMap_CalculateAIVeterancyFromMission(campaign)
+	
+	campaign.narrative_variables_out = NarrativeVariables_GetAll()
+	campaign.next_soldier_story_data_out = g_next_soldier_story
+end
+
+--? @shortdesc Setup for mission/skirmish for things such as player abilities
+--? @extdesc Grants player abilities given by buildings in campaign map
+--? @args 
+--? @result Void
+function MetaMap_SetupRTS()
+	t_entity_losses = {}
+	t_entity_kills = {}
+	Rule_AddGlobalEvent(OnEntityKilledRTS, GE_EntityKilled)
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	local player_data = campaign.player_data
+	
+	local ModifyPlayer = function(player, player_data_index)
+		if player_data[player_data_index] == nil then
+			return
+		end
+		
+		local player_ability_data = player_data[player_data_index].ability_data
+		if player_ability_data == nil then
+			return
+		end
+		
+		for k, v in pairs(player_ability_data) do
+			local ability = BP_GetAbilityBlueprintByPbgID(v.PropertyBagGroupID)
+			Player_AddAbility(player, ability)
+		end
+		
+		-- Apply the upgrades from the company squad to the owning player
+		local player_upgrade_data = player_data[player_data_index].upgrade_data
+		if player_upgrade_data ~= nil then
+			for i, value in pairs(player_upgrade_data) do
+				local upgrade = BP_GetUpgradeBlueprintByPbgID(value.PropertyBagGroupID)
+				Player_CompleteUpgrade(player, upgrade)
+			end
+		end
+		
+	end
+	
+	if campaign.player_data ~= nil then
+		-- TODO This method requries player index assigned to each player from campaign meta map match
+		-- the player index in skirmish/mission scenarios. We may want to develop a method to support
+		-- multiple enemies/allies for this in the future
+		local local_player_team = Player_GetTeam(Game_GetLocalPlayer())
+		local enemy_team = 1
+		for index = 1, World_GetPlayerCount() do 
+			local player = World_GetPlayerAt(index)
+			local current_player_team = Player_GetTeam(player)
+			if Player_IsHuman(player) then
+				enemy_team = 1 - Player_GetTeam(player)
+				if enemy_team ~= 0 and enemy_team ~= 1 then
+					error("Human Player is not on Team 0 or Team 1")
+				end
+				ModifyPlayer(player, LOCAL_PLAYER_DATA_INDEX)
+			elseif current_player_team == enemy_team then
+				ModifyPlayer(player, AI_PLAYER_DATA_INDEX)
+			elseif not Player_IsHuman(player) and Team_GetRelationship(current_player_team, local_player_team) == R_ALLY then
+				ModifyPlayer(player, ALLY_PLAYER_DATA_INDEX)
+			end
+		end
+	end
+	
+	if campaign.narrative_variables ~= nil then
+		NarrativeVariables_SetAll(campaign.narrative_variables)
+	end
+	
+	if campaign.next_soldier_story_data ~= nil then
+		g_next_soldier_story = campaign.next_soldier_story_data
+	end
+end
+
+--? @shortdesc Add earned veterancy for local player to campaign
+--? @extdesc Add earned veterancy for local player to campaign based on win/loss, kills, deaths, and auto resolve predication
+--? @args Table campaign
+--? @result Void
+function MetaMap_CalculatePlayerVeterancyFromMission(campaign)
+	local base_veterancy_gain = campaign.mission_player_base_veterancy_value or 0
+	local veterancy_gain = base_veterancy_gain
+	local affector_veterancy_gain = 0
+	-- winner is player
+	if campaign.report.is_local_player_winner then
+		local kills = campaign.report.player_entity_kills or 0
+		local deaths = campaign.report.player_entity_deaths or 0
+		if campaign.report.auto_resolved then
+			efficiency_rating = 0
+		elseif deaths == 0 then
+			efficiency_rating = t_veterancy_tuning.ideal_efficiency_rating
+		else
+			local efficiency_rating = math.min(kills / deaths, t_veterancy_tuning.ideal_efficiency_rating)
+		end
+		local modifier = efficiency_rating / t_veterancy_tuning.ideal_efficiency_rating
+		local bonus_gain = (campaign.mission_ideal_efficiency_veterancy_value or 0) * modifier
+		veterancy_gain = bonus_gain + base_veterancy_gain
+		
+		-- player gets more veterancy on winning a mission with unfavourable auto resolve predication
+		if (campaign.report.auto_resolved == false) and (campaign.auto_resolve_prediction ~= nil) and (campaign.auto_resolve_prediction == false)  then
+			local rewards_multiplier = World_GetCampaignAutoResolvePredictionMultiplier()
+			veterancy_gain = rewards_multiplier * veterancy_gain
+		end
+
+		-- affector squads get a fraction of the base XP if the player wins
+		affector_veterancy_gain = base_veterancy_gain * World_GetRtsAffectorXPMultiplier()
+	
+		for index, objective in pairs(g_AllMissionObjectives) do
+			local  obj_data = objective.objectiveData
+			if Obj_GetState(obj_data.ID) == OS_Complete and obj_data.type == OT_Bonus then
+				veterancy_gain = veterancy_gain + World_GetVeterancyPointsPerObjective_Low()
+			end
+		end
+
+	-- elseif not the first time losing this mission
+	-- veterancy_gain = 0
+	end
+	
+	campaign.veterancy_gained = campaign.veterancy_gained or {}
+	campaign.veterancy_gained.player = veterancy_gain
+	campaign.veterancy_gained.affector = affector_veterancy_gain
+end
+
+--? @shortdesc Add earned veterancy for ai player to campaign
+--? @extdesc Add earned veterancy for ai player to campaign based on win/loss
+--? @args Table campaign
+--? @result Void
+function MetaMap_CalculateAIVeterancyFromMission(campaign)
+	local ai_veterancy_gain = 0
+	local local_player_winner = campaign.report.is_local_player_winner
+	if local_player_winner then
+		-- the ai lost the mission
+		ai_veterancy_gain = campaign.mission_ai_loss_veterancy_value or 0
+	else
+		-- the ai won the mission
+		ai_veterancy_gain = campaign.mission_ai_win_veterancy_value or 0
+	end
+	
+	campaign.veterancy_gained = campaign.veterancy_gained or {}
+	campaign.veterancy_gained.ai = ai_veterancy_gain
+end
+
+--? @shortdesc Show the After Action Report
+--? @extdesc Compute all the required stats (veterancy and optional objectives), then show the After Action Report
+--? @args Bool isLocalPlayerWinner, String scarFunctionToExecuteOnClose
+--? @result Void
+function MetaMap_ShowAfterActionReport(isLocalPlayerWinner, scarFunctionToExecuteOnClose)
+	
+	local veterancy_player = 0
+	local veterancy_ai = 0
+	local veterancyRank = {
+		new_player = 0,
+		new_ai = 0
+	}
+	
+	-- Joseph C: Do we still need to do this? we are not saving campaign datastore after this
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign ~= nil then
+		local winningPlayer
+		local player_data = campaign.player_data
+		if player_data ~= nil then
+			if isLocalPlayerWinner then
+				winningPlayer = Player_FromId(player_data[LOCAL_PLAYER_DATA_INDEX].playerID)
+			else
+				winningPlayer = Player_FromId(player_data[AI_PLAYER_DATA_INDEX].playerID)
+			end
+		end
+
+		local report = {
+			winning_player = winningPlayer,
+			is_local_player_winner = isLocalPlayerWinner,
+			gameLength = World_GetGameTime(),
+			auto_resolved = false,
+		}
+		MetaMap_PopulateCampaignTable(campaign, report)
+		veterancy_player = campaign.veterancy_gained.player
+		veterancy_ai = campaign.veterancy_gained.ai
+		
+		Audio_AfterActionReport(isLocalPlayerWinner)
+	end
+	
+	local affectorsTable = Affectors_GetTable()
+	if affectorsTable ~= nil and campaign.player_data ~= nil then
+		local table_player = campaign.player_data[LOCAL_PLAYER_DATA_INDEX].company_veterancy_table
+		local table_ai = campaign.player_data[AI_PLAYER_DATA_INDEX].company_veterancy_table
+		local VeterancyToRank = function(veterancy, table)
+			if table == nil then
+				return 0
+			end
+			local rank = 0
+			for i = 1, #table do
+				if veterancy >= table[i] then
+					rank = i
+				else
+					break
+				end
+			end
+			return rank
+		end
+		local player_veterancy = campaign.player_data[LOCAL_PLAYER_DATA_INDEX].company_veterancy
+		local ai_veterancy = campaign.player_data[AI_PLAYER_DATA_INDEX].company_veterancy
+		veterancyRank.new_player = VeterancyToRank(player_veterancy + veterancy_player, table_player)
+		veterancyRank.new_ai = VeterancyToRank(ai_veterancy + veterancy_ai, table_player)
+	end
+	
+	UI_ShowCampaignBattleAfterActionReport(
+		isLocalPlayerWinner,  scarFunctionToExecuteOnClose,
+		veterancy_player,
+		veterancyRank.new_player, veterancyRank.new_ai)
+end
+
+function DebugCommandLineParser(commandline)
+	local separated_strings = {}
+	if Misc_IsCommandLineOptionSet(commandline) then
+		local combined_string = Misc_GetCommandLineString(commandline)
+		-- Separate the strings based on commas
+		for name in string.gmatch(combined_string, "([^,]+)") do
+			table.insert(separated_strings, name)
+		end
+	end
+	return separated_strings
+end
+
+function ApplyDebugMissionStartUpgrades(player_index)
+	local player_str = "player"..player_index.."_start_upgrades"
+	local upgrade_names = DebugCommandLineParser(player_str)
+	if next(upgrade_names) ~= nil then
+		-- Apply all the upgrades specified
+		for i = 1, #upgrade_names do
+			-- This takes care of the sanitization of the upgrade name
+			local upgrade_bp = BP_GetUpgradeBlueprint(upgrade_names[i])
+			Player_CompleteUpgrade(World_GetPlayerAt(player_index), upgrade_bp)
+		end
+	end
+end
+
+function AddDebugMissionStartAbility(player_index)
+	local player_str = "player"..player_index.."_start_abilities"
+	local ability_names = DebugCommandLineParser(player_str)
+	if next(ability_names) ~= nil then
+		-- Add all the abilities specified
+		for i = 1, #ability_names do
+			-- This takes care of the sanitization of the ability name
+			local ability_bp = BP_GetAbilityBlueprint(ability_names[i])
+			Player_AddAbility(World_GetPlayerAt(player_index), ability_bp)
+		end
+	end
+end
+
+function OnEntityKilledRTS(context)
+	if context.victimOwner ~= nil then
+		local ownerID = Player_GetID(context.victimOwner)
+		if t_entity_losses[ownerID] == nil then
+			t_entity_losses[ownerID] = 1
+		else
+			t_entity_losses[ownerID] = t_entity_losses[ownerID] + 1
+		end
+	end
+	
+	if context.killer ~= nil then
+		if not World_OwnsEntity(context.killer) then
+			local killer_owner = Entity_GetPlayerOwner(context.killer)
+			local ownerID = Player_GetID(killer_owner)
+			if t_entity_kills[ownerID] == nil then
+				t_entity_kills[ownerID] = 1
+			else
+				t_entity_kills[ownerID] = t_entity_kills[ownerID] + 1
+			end
+		end
+	end
+end

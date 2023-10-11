@@ -1,0 +1,84 @@
+----------------------------------------------------------------------------------------------------------------
+-- Blueprint helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+--? @group Blueprints
+
+
+
+
+
+
+
+--[[
+	Note:
+	
+	The internal functions used in the next three wrappers have the following syntax:
+	
+	BP_GetEntityBlueprintWithType_Internal(Table entityTypes, Boolean all)
+	BP_GetSquadBlueprintWithType_Internal(Table squadTypes, Boolean all)
+	BP_GetUpgradeBlueprintsWithType_Internal(Table upgradeTypes, Boolean all)
+	
+	The wrappers let you use a single type, or a mixed table of types to OR with and subtables of types to AND with - the same syntax used in other functions that allow types
+]]
+
+
+--? @shortdesc Get a table of all of the EBPs that match a particular EntityType. You can pass in a table of multiple EntityTypes to get a list EBPs that match ANY of the types listed.
+--? @extdesc If you want a blueprint to match a bunch of EntityTypes at the same time (i.e. AND instead of OR) then those types should be listed together in a sub-table. This function can potentially be quite slow as it has to parse every EBP in the game, so be careful about how you use it.
+--? @args EntityType/Table types
+--? @result TableOfEBPs
+function BP_GetEntityBlueprintsWithType(types)
+	return __GetBlueprintsWithType(BP_GetEntityBlueprintsWithType_Internal, types)
+end
+
+
+--? @shortdesc Get a table of all of the SBPs that match a particular SquadType. You can pass in a table of multiple SquadTypes to get a list SBPs that match ANY of the types listed.
+--? @extdesc If you want a blueprint to match a bunch of SquadTypes at the same time (i.e. AND instead of OR) then those types should be listed together in a sub-table. This function can potentially be quite slow as it has to parse every SBP in the game, so be careful about how you use it.
+--? @args SquadType/Table types
+--? @result TableOfSBPs
+function BP_GetSquadBlueprintsWithType(types)
+	return __GetBlueprintsWithType(BP_GetSquadBlueprintsWithType_Internal, types)
+end
+
+--? @shortdesc Get a table of all of the Upgrade BPs that match a particular UpgradeType. You can pass in a table of multiple UpgradeTypes to get a list Upgrade BPs that match ANY of the types listed.
+--? @extdesc If you want a blueprint to match a bunch of UpgradeTypes at the same time (i.e. AND instead of OR) then those types should be listed together in a sub-table. This function can potentially be quite slow as it has to parse every Upgrade BP in the game, so be careful about how you use it.
+--? @args UpgradeType/Table types
+--? @result TableOfUpgradeBPs
+function BP_GetUpgradeBlueprintsWithType(types)
+	return __GetBlueprintsWithType(BP_GetUpgradeBlueprintsWithType_Internal, types)
+end
+
+function __GetBlueprintsWithType(bp_get_func, types)
+	if scartype(types) ~= ST_TABLE then -- if it's a single type, pretend it's a table with just that single type in it
+		types = {types}
+	end
+
+	-- split the list into simple types, and more complex types which need to match multiple types at once 
+	local simpleTypes = {}
+	local multipleTypes = {}
+	for index, item in pairs(types) do
+		if scartype(item) == ST_TABLE then
+			table.insert(multipleTypes, item)
+		else
+			table.insert(simpleTypes, item)
+		end
+	end
+	
+	-- get all blueprints that match ANY of the simple types
+	local blueprints = bp_get_func(simpleTypes, ANY)
+
+	-- now get all the types that are subtables (so need to match ALL of the types in the subtable)
+	for index, item in pairs(multipleTypes) do
+	
+		local results = bp_get_func(item, ALL)
+		
+		for index, blueprint in pairs(results) do -- merge these into the existing table if they don't already exist
+			if Table_Contains(blueprints, blueprint) == false then
+				table.insert(blueprints, blueprint)
+			end
+		end
+		
+	end
+	
+	return blueprints
+end

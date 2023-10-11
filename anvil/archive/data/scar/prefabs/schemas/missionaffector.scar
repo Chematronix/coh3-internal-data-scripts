@@ -1,0 +1,9 @@
+--
+-- MissionAffector prefab
+--
+
+--  Prefab Script
+
+function missionaffector_Init(data)
+	--Initialize all missionaffector data here if required
+end

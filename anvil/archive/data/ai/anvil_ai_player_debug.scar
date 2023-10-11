@@ -1,0 +1,34 @@
+import("rulesystem.scar")
+import("anvil_campaign_objects.scar")
+
+local debug_drawCampaignAIPlayerPersonality = false
+local campaign_ai_player_personality_debug_layer = "CampaignAIPlayerPersonalityDebug"
+
+--? @shortdesc Debug draw the name of the current AI Campaign player personality
+function AI_DrawCampaignAIPlayerPersonality()
+	local string = "AI player personality: "..AI_GetCampaignPersonalityName()
+	
+	dr_setautoclear(campaign_ai_player_personality_debug_layer, false)
+	dr_clear(campaign_ai_player_personality_debug_layer)
+	local normalizedScreenPosX = 0.4
+	local normalizedScreenPosY = 0.1
+	local r = 255
+	local g = 255
+	local b = 255
+	dr_text2d(campaign_ai_player_personality_debug_layer, 
+		normalizedScreenPosX,normalizedScreenPosY, 
+		string, 
+		r,g,b
+		)
+end
+
+function AI_ToggleDrawCampaignAIPlayerPersonality()
+	debug_drawCampaignAIPlayerPersonality = not debug_drawCampaignAIPlayerPersonality
+	if debug_drawCampaignAIPlayerPersonality then
+		Rule_AddInterval(AI_DrawCampaignAIPlayerPersonality, 0.125)
+	else
+		Rule_Remove(AI_DrawCampaignAIPlayerPersonality)
+		dr_setautoclear(campaign_ai_player_personality_debug_layer, true)
+		dr_clear(campaign_ai_player_personality_debug_layer)
+	end
+end

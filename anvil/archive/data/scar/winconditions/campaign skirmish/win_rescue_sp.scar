@@ -1,0 +1,539 @@
+-----------------------------------------------------------------------
+-- "Rescue" Win Condition
+--
+-- (c) Relic Entertainment 2020
+--
+-- Campaign Skirmish Mode: Rescue an out-of-supply company, 
+-- represented by a group of allied squads
+-----------------------------------------------------------------------
+
+import("winconditions/options.scar")
+
+-- TODO: 
+-- A lot
+
+-----------------------------------------------------------------------
+--  Locals
+-----------------------------------------------------------------------
+
+
+local player1 = Game_GetLocalPlayer()
+local player2 = Player_FindFirstEnemyPlayer(player1)
+local player3 = World_GetPlayerAt(3)
+local OBJ = {}
+local targetPos = World_Pos(0,0,0)
+local rescueData = {playerSquads, allies, enemies, settings, aiPrefabs, buildings}
+local scheduledEnemies = {}
+local voLine = ""
+local killCount = 0
+
+Core_RegisterModule("Rescue")
+
+local narrativeEvents = {
+	start = "skirmish_rescue_start",
+	damage1 = "skirmish_rescue_alliesDamaged1",
+	damage2 = "skirmish_rescue_alliesDamaged2",
+	damage3 = "skirmish_rescue_alliesDamaged3",
+	alliesSpotted = "skirmish_rescue_alliesSpotted",
+	fail = "skirmish_rescue_fail",
+	success = "skirmish_rescue_success",
+}
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function Rescue_OnInit()
+	
+	-- Remove any victory points
+	local eg = EGroup_CreateUnique()
+	World_GetBlueprintEntities(BP_GetEntityBlueprint("territory_victory_point"), eg)		
+	EGroup_DestroyAllEntities(eg)
+	EGroup_Destroy(eg)
+	
+	AI_Enable(player2, true)
+	AI_SetPersonality(player2, "default_ai_personality_missions.xml")
+	AI_Enable(player3, false)
+	
+	
+	sg_p1Squads = SGroup_CreateIfNotFound("sg_p1Squads")
+	sg_p2Squads = SGroup_CreateIfNotFound("sg_p2Squads")
+	
+	local playerStartingSquads = nil
+	if Player_GetRace(player1) == RACE.AMERICANS then
+		playerStartingSquads = rescueData.playerSquads.sbps_us
+	elseif Player_GetRace(player1) == RACE.BRITISH then
+		playerStartingSquads = rescueData.playerSquads.sbps_uk
+	end	
+	
+	-- Spawn Player Starting Squads
+	local hq = Player_GetEntitiesFromType(player1,"hq")
+	for i = 1, #playerStartingSquads do
+		local pos = Util_GetOffsetPosition(hq, OFFSET_LEFT, i * 12)
+		Util_CreateSquads(player1, sg_p1Squads, playerStartingSquads[i], pos, nil, nil, nil, nil, nil, nil, World_Pos(0,0,0))
+	end
+	
+	eg_baseBuildings = EGroup_CreateIfNotFound("eg_baseBuildings")
+	
+	for i = 1, #rescueData.buildings do
+		local ebp = nil
+		if Player_GetRace(player1) == RACE.AMERICANS then
+			ebp = rescueData.buildings[i].ebp_us
+		elseif Player_GetRace(player1) == RACE.BRITISH then
+			ebp = rescueData.buildings[i].ebp_uk
+		end
+		local pos = rescueData.buildings[i].position
+		if scartype(pos) == ST_STRING then
+			if Marker_Exists(pos, "") then
+				pos = Marker_GetPosition(Marker_FromName(pos, ""))
+			end
+		end
+		Util_CreateEntities(player1, eg_baseBuildings, ebp, pos, 1 , nil, true, nl, true)
+	end
+	
+	-- Set Camera Starting Positions
+	local pos1 = Util_GetOffsetPosition(hq, OFFSET_LEFT, 24)
+	local pos2 = Util_GetOffsetPosition(hq, OFFSET_FRONT_LEFT, 12)
+	local cameraPos = Util_GetPositionFromAtoB(pos2,pos1, Util_GetDistance(pos1, pos2)/2)
+	Camera_FocusOnPosition(cameraPos)
+			
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function Rescue_Start()
+
+	OBJ = {	
+		Title = "$11191926",
+		Description = "",
+		Type = OT_Primary,
+		Parent = nil,
+		Icon = "icons/objectives/objective_primary"
+	}	
+	OBJ.ID = Objective_Register(OBJ)
+	
+	OBJ_Sub = {	
+		Title = "$11191915",
+		Description = "",
+		Type = OT_Primary, 
+		Parent = OBJ,
+		Icon = "icons/objectives/objective_primary",
+		DataTemplate = "SubObjectiveDataTemplate"
+	}	
+	OBJ_Sub.ID = Objective_Register(OBJ_Sub)
+	
+	Rescue_SetupSquads()
+	if rescueData.settings.territoryControl ~= nil then
+		Rescue_SetStartingTerritory()
+	end
+	
+	if #scheduledEnemies > 0 then
+		if Marker_Exists("mkr_defaultEnemySpawn", "") then
+			sg_scheduledEnemies = SGroup_CreateIfNotFound("sg_scheduledEnemies")
+			Rule_AddInterval(Rescue_ScheduleSpawns, 1)
+		else
+			error("Rescue: scheduled spawns require a scar marker: mkr_defaultEnemySpawn")
+		end
+	end
+						
+	Util_StartIntel(function()
+			CTRL.Event_Delay(2)
+			CTRL.WAIT()
+			CTRL.Subtitle_PlayNarrativeEvent(narrativeEvents.start)
+			CTRL.WAIT()	
+			Objective_Start(OBJ)
+			Objective_Start(OBJ_Sub, false)
+			Objective_AddHealthBar(OBJ_Sub, 2, sg_allies, "")
+			hint1 =  Objective_AddUIElements(OBJ, sg_ally1, true, "$11191914", true, 2, nil, nil, nil, "PrimaryObjectiveDataTemplate")
+			hint2 =  Objective_AddUIElements(OBJ, sg_ally2, true, "$11191914", true, 2, nil, nil, nil, "PrimaryObjectiveDataTemplate")
+		end)
+	
+	Rule_AddInterval(Rescue_Update, 1)
+	Rule_AddInterval(Rescue_CanSeeAllies, 1)
+	if rescueData.settings.stopProductionTime > 0 then
+		Rule_AddOneShot(Rescue_StopAIProduction, rescueData.settings.stopProductionTime)
+	end
+end
+
+function Rescue_EnableAIPrefabs()
+	for k, prefab in pairs(rescueData.aiPrefabs) do
+		local prefabName = prefab.behaviour .. ": " .. tostring(k)
+		local prefabID = AI_AddPrefab(player2, prefabName , prefab.behaviour, prefab.radius, prefab.minDifficulty, prefab.maxDifficulty, prefab.canReassign, true)
+		local pos = prefab.position
+		if scartype(pos) == ST_STRING then
+			if Marker_Exists(pos, "") then
+				pos = Marker_GetPosition(Marker_FromName(pos, ""))
+			end
+		end
+		AI_SetPrefabTarget_Position(prefabID, player2, pos)
+		if prefab.behaviour == "Guard" then
+			AI_SetPrefabTarget_Waypoints(prefabID, player2, prefab.waypointPath)
+		end
+	end
+end
+
+function Rescue_SetupSquads()
+	
+	local allySquads = nil
+	if Player_GetRace(player1) == RACE.AMERICANS then
+		allySquads = rescueData.allies.sbps_us
+	elseif Player_GetRace(player1) == RACE.BRITISH then
+		allySquads = rescueData.allies.sbps_uk
+	end	
+	
+	World_EnableSharedLineOfSight(player1, player3, false)
+	sg_allies = SGroup_CreateIfNotFound("sg_allies")
+	
+	if Marker_Exists("mkr_ally1","") and scartype(allySquads[1]) == ST_PBG then
+		sg_ally1 = SGroup_CreateIfNotFound("sg_ally1")
+		Util_CreateSquads(player3, {sg_ally1, sg_allies}, allySquads[1], mkr_ally1)
+		Util_GarrisonNearbyBuilding(sg_ally1, mkr_ally1, 5)
+	else
+		error("Mode win_rescue requires mkr_ally1 and mkr_ally2 and valid ally SBPs")
+	end
+	
+	if Marker_Exists("mkr_ally2","") and scartype(allySquads[2]) == ST_PBG then
+		sg_ally2 = SGroup_CreateIfNotFound("sg_ally2")
+		Util_CreateSquads(player3, {sg_ally2, sg_allies}, allySquads[2], mkr_ally2)
+		Util_GarrisonNearbyBuilding(sg_ally2, mkr_ally2, 5)
+	else
+		error("Mode win_rescue requires mkr_ally1 and mkr_ally2 and valid ally SBPs")
+	end
+	
+	Rule_AddOneShot(Rescue_BuffAllyGarrisons, 5)
+	
+	modID_armor = Modify_Armor(sg_allies, 15) --TODO: Make this a tunable
+	modID_vision = Modify_SightRadius(sg_allies, 0.1)
+	modID_damage = Modify_WeaponAccuracy(sg_allies, "hardpoint_01", 0.1)
+	
+	if Marker_Exists("mkr_bunker1", "") and rescueData.settings.spawnBunker1 then
+		eg_bunker1 = EGroup_CreateIfNotFound("eg_bunker1")
+		Util_CreateEntities(player2, eg_bunker1, EBP.GERMAN.BUNKER_GER, Marker_FromName("mkr_bunker1", ""), 1, nil, nil, nil, true)
+		Cmd_InstantUpgrade(eg_bunker1, BP_GetUpgradeBlueprint("mg42_bunker_ger"))
+	end
+	
+	if Marker_Exists("mkr_bunker2", "") and rescueData.settings.spawnBunker2 then
+		eg_bunker2 = EGroup_CreateIfNotFound("eg_bunker2")
+		Util_CreateEntities(player2, eg_bunker2, EBP.GERMAN.BUNKER_GER, Marker_FromName("mkr_bunker2", ""), 1, nil, nil, nil, true)
+		Cmd_InstantUpgrade(eg_bunker2, BP_GetUpgradeBlueprint("mg42_bunker_ger"))
+	end
+
+	Rescue_CreateMainEncounter()
+	Rescue_EnableAIPrefabs()
+	Rule_AddInterval(Rescue_AllyHealthVO, 1)
+end
+
+function Rescue_BuffAllyGarrisons()
+	eg_allyGarrisons = EGroup_CreateIfNotFound("eg_allyGarrisons")
+	SGroup_GetHoldEGroup(sg_allies, eg_allyGarrisons)
+	if not EGroup_IsEmpty(eg_allyGarrisons) then
+		if scartype(rescueData.settings.garrisonArmorMult) == ST_NUMBER then
+			Modify_Armor(eg_allyGarrisons, rescueData.settings.garrisonArmorMult)
+		end
+		if scartype(rescueData.settings.garrisonMinHealth) == ST_NUMBER then
+			local resetTime = rescueData.settings.garrisonMinHealthDuration or 0
+			EGroup_SetInvulnerable(eg_allyGarrisons, rescueData.settings.garrisonMinHealth, resetTime)
+		end
+	end
+end
+
+function Rescue_CreateMainEncounter()
+	if Marker_Exists("mkr_aiHold", "") then
+		targetPos = Marker_GetPosition(mkr_aiHold)
+	elseif Marker_Exists("mkr_ally1", "") and Marker_Exists("mkr_ally2", "") then
+		local dist = Util_GetDistance(mkr_ally1, mkr_ally2) / 2
+		targetPos = Util_GetPositionFromAtoB(Marker_GetPosition(mkr_ally1), Marker_GetPosition(mkr_ally2), dist)
+	else
+		error("Mode win_rescue requires mkr_ally1 and mkr_ally2")
+	end
+	local prefabID = AI_AddPrefab(player2, "HOLD RESCUE AREA", "Hold", rescueData.settings.AiHoldRadius, rescueData.settings.AiHoldMinimum, rescueData.settings.AiHoldMaximum, false, true)
+	AI_SetPrefabTarget_Position(prefabID, player2, targetPos)
+	
+	sg_enemies = SGroup_CreateIfNotFound("sg_enemies")
+	for k,data in pairs(rescueData.enemies) do
+		Util_CreateSquads(player2, sg_enemies, data.sbp, Prox_GetRandomPosition(targetPos,15,3), nil, data.numSquads, nil, nil, nil, data.upgrades)
+	end
+
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function Rescue_OnWinConditionTriggered(match_result)	
+	if Rule_Exists(Rescue_Update) then 
+		Rule_Remove(Rescue_Update)
+	end
+end	
+
+
+-----------------------------------------------------------------------
+-- Rules
+---------------------------------------------------------------------
+
+function Rescue_Update()
+
+	if SGroup_Count(sg_allies) == 0 then
+		Rule_Add(Rescue_TriggerLoseCondition)
+		Rule_RemoveMe()
+	else
+		--Count the units in the area
+		local sg_SquadsNearMarker = SGroup_CreateIfNotFound("sg_SquadsNearMarker")
+		Player_GetAllSquadsNearMarker(player2, sg_SquadsNearMarker, targetPos, 50)
+		SGroup_Clear(sg_p2Squads)
+		SGroup_AddGroup(sg_p2Squads, sg_SquadsNearMarker)
+		
+		--Filter casualty squads from the sgroup
+		local RemoveCasualty = function(groupid, itemindex, itemid)
+			if Squad_IsCasualty(itemid) then
+				SGroup_Remove(groupid, itemid)
+			end
+		end
+		SGroup_ForEach(sg_p2Squads, RemoveCasualty)
+		
+		--Filter airplane squads from the sgroup
+		local RemoveAirplanes = function(groupid, itemindex, itemid)
+			if Squad_IsOfType(itemid, "airplane") then
+				SGroup_Remove(groupid, itemid)
+			end
+		end
+		SGroup_ForEach(sg_p2Squads, RemoveAirplanes)
+		
+		if Rule_Exists(Rescue_CountKills) then
+			Rule_RemoveSGroupEvent(Rescue_CountKills, sg_p2Squads)
+			Rule_AddSGroupEvent(Rescue_CountKills, sg_p2Squads, GE_SquadKilled)
+		end
+		
+		if killCount == rescueData.settings.killsRequired then
+			Cmd_Retreat(sg_p2Squads)
+			Rule_Add(Rescue_TriggerWinCondition, OBJ)
+			Rule_RemoveMe()
+		end
+	end
+end
+
+function Rescue_ScheduleSpawns()
+	local time = World_GetGameTime()
+	for k,entry in pairs(scheduledEnemies) do
+		if time >= entry.time then
+			local _upgrades = {}
+			for k, upgrade in pairs(entry.upgrades) do
+				table.insert(_upgrades, BP_GetUpgradeBlueprint(upgrade))
+			end
+			Util_CreateSquads(player2,sg_scheduledEnemies, entry.sbp, mkr_defaultEnemySpawn, nil, entry.numSquads, nil, nil, nil, _upgrades)
+			table.remove(scheduledEnemies, k)
+		end
+	end
+	if #scheduledEnemies == 0 then
+		Rule_RemoveMe()
+	end
+end
+	
+function Rescue_TriggerWinCondition()
+	
+	if not Event_IsAnyRunning() then
+		Rule_RemoveMe()
+		
+		local match_result = {		
+				winners = {},
+				losers = {},
+				win_reason = WR_NONE,
+				point_of_interest = nil
+			}
+		for i = 1, World_GetPlayerCount() do	 
+			if Player_ObserveRelationship(Game_GetLocalPlayer(), World_GetPlayerAt(i)) == R_ALLY then 
+				table.insert(match_result.winners, i)
+			else
+				table.insert(match_result.losers, i)
+			end
+		end
+		
+			Util_StartIntel(function()
+			CTRL.Event_Delay(2)
+			CTRL.WAIT()
+			CTRL.Subtitle_PlayNarrativeEvent(narrativeEvents.success)
+			CTRL.WAIT()	
+		end)
+				
+		Objective_Complete(OBJ, true)
+		
+		Rule_AddOneShot(Delayed_TriggerWinCondition, 14, match_result)	-- objective popup + speech duration		
+	end
+end
+
+function Rescue_TriggerLoseCondition()
+	if not Event_IsAnyRunning() then
+		Rule_RemoveMe()
+		
+		local match_result = {		
+				winners = {},
+				losers = {},
+				win_reason = WR_NONE,
+				point_of_interest = nil
+			}
+		for i = 1, World_GetPlayerCount() do	 
+			if Player_ObserveRelationship(Game_GetLocalPlayer(), World_GetPlayerAt(i)) == R_ENEMY then 
+				table.insert(match_result.winners, i)
+			else
+				table.insert(match_result.losers, i)
+			end
+		end
+		
+			Util_StartIntel(function()
+			CTRL.Event_Delay(2)
+			CTRL.WAIT()
+			CTRL.Subtitle_PlayNarrativeEvent(narrativeEvents.fail)
+			CTRL.WAIT()	
+		end)
+				
+		Objective_Fail(OBJ, true)
+		
+		Rule_AddOneShot(Delayed_TriggerWinCondition, 13, match_result)	-- objective popup + speech duration		
+	end
+end
+
+function Rescue_CanSeeAllies()
+	if Player_CanSeeSGroup(player1, sg_allies, ANY) then
+		Modifier_Remove(modID_armor)
+		Modifier_Remove(modID_vision)
+		World_EnableSharedLineOfSight(player1, player3, true)
+		Util_StartIntel(function()
+				CTRL.Subtitle_PlayNarrativeEvent(narrativeEvents.alliesSpotted)
+				CTRL.WAIT()	
+			end)
+		Objective_UpdateText(OBJ, "$11191916",nil, true, true)
+		Objective_SetCounter(OBJ, 0, rescueData.settings.killsRequired)
+		Rule_AddSGroupEvent(Rescue_CountKills, sg_p2Squads, GE_SquadKilled)
+		Rule_RemoveMe()
+	end
+end
+
+function Rescue_CountKills()
+	killCount = killCount + 1
+	Objective_SetCounter(OBJ, killCount, rescueData.settings.killsRequired)
+	if killCount == rescueData.settings.killsRequired then
+		Rule_RemoveMe()
+	end
+end
+
+function Rescue_StopAIProduction()
+	Player_SetPopCapOverride(player2, 0)
+end
+
+function Rescue_AllyHealthVO()
+	if SGroup_Exists("sg_allies") then	
+		if SGroup_IsEmpty(sg_allies) then
+			Rule_RemoveMe()
+		elseif SGroup_GetAvgHealth(sg_allies) <= 0.25 and voLine == narrativeEvents.damage2 then
+			if not Rule_Exists(Rescue_PlayVOWarning) then
+				voLine = narrativeEvents.damage3
+				Rule_Add(Rescue_PlayVOWarning)
+			end
+			Rule_RemoveMe()
+		elseif SGroup_GetAvgHealth(sg_allies) <= 0.5 and voLine == narrativeEvents.damage1 then
+			if not Rule_Exists(Rescue_PlayVOWarning) then
+				voLine = narrativeEvents.damage2
+				Rule_Add(Rescue_PlayVOWarning)
+			end
+		elseif SGroup_GetAvgHealth(sg_allies) <= 0.75 and voLine == "" then
+			if not Rule_Exists(Rescue_PlayVOWarning) then
+				voLine = narrativeEvents.damage1
+				Rule_Add(Rescue_PlayVOWarning)
+			end
+		end
+	end
+end
+	
+function Rescue_PlayVOWarning(data)
+	if not Event_IsAnyRunning() then	
+		Util_StartIntel(function()
+				CTRL.Subtitle_PlayNarrativeEvent(voLine)
+				CTRL.WAIT()	
+			end)
+		Rule_RemoveMe()
+	end
+end
+					
+function Delayed_TriggerWinCondition(context, data)
+	Core_CallDelegateFunctions("OnWinConditionTriggered", data)
+end
+
+function Rescue_OnWinConditionTriggered(match_result)	
+	if Rule_Exists(Rescue_Update) then 
+		Rule_Remove(Rescue_Update)
+	end
+	Core_CallDelegateFunctions("OnGameOver", match_result)
+end
+
+-- Taken from Dave Sitar's "mode_campaign_skirmish" script
+function Rescue_SetStartingTerritory()	
+	
+	local option = rescueData.settings.territoryControl
+	
+	
+	if string.lower(option) == "adjacent" then
+			
+		-- Give each player control of resource points adjacent to their base					
+		for i = 1, 2 do				
+			local eg_sectors = EGroup_CreateUnique()
+			local player = World_GetPlayerAt(i)				
+			local sectors = Territory_GetAdjacentSectors(Territory_FindClosestSectorToPoint(Player_GetStartingPosition(player)))
+			for j = 1, #sectors do  
+				EGroup_Add(eg_sectors, Territory_GetSectorCreatorEntity(sectors[j]))
+			end
+			EGroup_Filter(eg_sectors, BP_GetEntityBlueprint("starting_territory_team"), FILTER_REMOVE)
+			EGroup_InstantCaptureStrategicPoint(eg_sectors, player)							
+			FOW_RevealEGroupOnly(eg_sectors, 1)	-- Make visible briefly so player can see they are captured
+			EGroup_Destroy(eg_sectors)
+		end			
+			
+	elseif string.lower(option) == "split" then
+		
+		-- Give each player control of resource points in their half of the map 
+		local start_pos = {}
+		local eg_points = {} 
+		for i = 1, 2 do				
+			local player = World_GetPlayerAt(i)		
+			local start = Player_GetStartingPosition(player)
+			table.insert(start_pos, start)
+			table.insert(eg_points, EGroup_CreateUnique())
+		end
+
+		local eg = EGroup_CreateUnique()	
+		World_GetStrategyPoints(eg, false)
+		EGroup_Filter(eg, BP_GetEntityBlueprint("starting_territory_team"), FILTER_REMOVE)
+		for i = EGroup_Count(eg), 1, -1 do
+			local point = EGroup_GetEntityAt(eg, i)
+			local shortest_distance_to_point = 9999
+			local index_of_nearest_player
+			for j = 1, 2 do
+				local distance_to_point =  Util_GetDistance(point, start_pos[j])
+				if distance_to_point < shortest_distance_to_point then
+					shortest_distance_to_point = distance_to_point
+					index_of_nearest_player = j
+				end
+			end
+			EGroup_Add(eg_points[index_of_nearest_player], point)
+			EGroup_Remove(eg, point)
+		end
+		
+		for i = 1, #eg_points do 
+			EGroup_InstantCaptureStrategicPoint(eg_points[i], World_GetPlayerAt(i))
+			FOW_RevealEGroupOnly(eg_points[i], 1)	-- Make visible briefly so player can see they are captured
+			EGroup_Destroy(eg_points[i])
+		end
+	end
+end
+
+
+function Rescue_InitializeData(playerData, playerBuildings, allyData, enemyData, scheduleData, settings, aiPrefabs)
+	scheduledEnemies = scheduleData
+	rescueData.allies = allyData
+	rescueData.playerSquads = playerData
+	rescueData.enemies = enemyData
+	rescueData.settings = settings
+	rescueData.aiPrefabs = aiPrefabs
+	rescueData.buildings = playerBuildings
+end
+
+	

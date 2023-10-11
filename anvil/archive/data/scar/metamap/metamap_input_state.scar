@@ -1,0 +1,148 @@
+-----------------------------------------------------------------------
+--
+--  Meta Map Input State 
+--
+-- (c) Relic Entertainment 2022
+--
+-- Script to manage overlapping calls to enable/disable various UI features.
+-- Provides MetaMapInput_AddUILimits / MetaMapInput_RemoveUILimits which act
+-- as stackable requests to disable UI visibility or input availability, or
+-- letterbox mode.
+
+-- You call the Add function with a name of the calling system to register
+-- the request to disable a subset of UI functionality. If there are any
+-- active requests to set a UI flag or feature then it will be done.
+
+-- The Remove function is called to remove the request given the name
+-- and will re-enable the features in the set if there are no longer any
+-- other requests to disable the feature.
+
+-- This means when there are no requests the game is in "default" mode
+-- with all functionality enabled.
+-----------------------------------------------------------------------
+
+
+-- These tables track the limits for each input or UI visibility flag. Each flag has a table
+-- of all the named flag limits for that flag. As long as there is at least 1 entry in that
+-- table then the corresponding flag will be disabled.
+local inputFlagLimits = {
+	{IEF_Camera, {}},
+	{IEF_Selection, {}},
+	{IEF_Command, {}},
+}
+
+local uiFlagLimits = {
+	{VF_ComponentSimulation, {}},
+	{VF_ComponentTaskbar, {}},
+	{VF_ComponentKickers, {}},
+	{VF_ComponentChatControl, {}},
+}
+
+-- Letter box requests are similarly tracked with table keyed by request name. When it is non empty
+-- (all named requests are explicitly cleared) letterbox mode will be disabled.
+local letterBoxRequests = {}
+local letterBoxActive = false
+
+function MetaMapInput_AddUILimits(newInputLimits, newUILimits, letterbox, limitSetName)
+	
+	function AddNamedLimits(flagTable, newLimits)
+		local newLimitCount = #newLimits
+		local flagCount = #flagTable
+		for i=1, newLimitCount do
+			local newFlagLimit = newLimits[i]
+			for j=1, flagCount do
+				local pair = flagTable[j]
+				if pair[1] == newFlagLimit then
+					pair[2][limitSetName] = true
+					break
+				end
+			end
+		end
+	end
+	
+	-- Add the limistSetName to each of the requested flag's limit list
+	AddNamedLimits(inputFlagLimits, newInputLimits)
+	AddNamedLimits(uiFlagLimits, newUILimits)
+	if letterbox then
+		letterBoxRequests[limitSetName] = true
+	end
+	
+	-- Update game UI state based on new limits:
+	MetaMapInput_UpdateUIVisibility()
+	MetaMapInput_UpdateInputState()
+	MetaMapInput_UpdateLetterboxState()
+end
+
+function MetaMapInput_RemoveUILimits(name)
+	local function RemoveNamedLimits(flagTable)
+		local flagCount = #flagTable
+		for i=1, flagCount do
+			local flagPair = flagTable[i]
+			flagPair[2][name] = nil
+		end
+	end
+	
+	-- Remove all associated UI limits with this name:
+	RemoveNamedLimits(uiFlagLimits)
+	RemoveNamedLimits(inputFlagLimits)
+	letterBoxRequests[name] = nil
+	
+	-- Update game UI state based on new limits:
+	MetaMapInput_UpdateUIVisibility()
+	MetaMapInput_UpdateInputState()
+	MetaMapInput_UpdateLetterboxState()
+end
+
+function MetaMapInput_UpdateUIVisibility()
+	-- Set visibility flags based on the active visibility limits
+	Game_SetVisibilityFlag(Game_ConvertVisibilityFlagEnumToInt(VF_Default))
+	local uiFlagCount = #uiFlagLimits
+	for i=1, uiFlagCount do
+		local pair = uiFlagLimits[i]
+		local flag = pair[1]
+		local hideRequests = pair[2]
+		if next(hideRequests) ~= nil then
+			-- There is at least one hide request for this flag so disable it
+			Game_SetVisibility(flag, false)
+		end
+	end
+end
+
+function MetaMapInput_UpdateLetterboxState()
+	-- Add/remove letterbox based on current letterbox requests
+	-- Functionality mimics Util_Enter/Exit cinematic mode
+	local fadeDuration = 0.5
+	local aspectRatio = 21/9
+	if next(letterBoxRequests) ~= nil then
+		if not letterBoxActive then
+			-- Enable letterbox
+			UI_SetEnablePauseMenu(false)
+			UI_LetterboxFade(0,0,0,1,fadeDuration,aspectRatio,true)
+		end
+		letterBoxActive = true
+	else
+		if letterBoxActive then
+			-- Disable letterbox
+			UI_SetEnablePauseMenu(true)
+			local letterbox_id = UI_LetterboxFade(0,0,0,0,fadeDuration,aspectRatio,false)
+		end
+		letterBoxActive = false
+	end
+end
+
+function MetaMapInput_UpdateInputState()
+	-- Set input flags based on the active blockers
+	local inputFlags = Game_ConvertInputEnabledFlagEnumToInt(IEF_Default)
+	local inputFlagCount = #inputFlagLimits
+	for i=1, inputFlagCount do
+		local pair = inputFlagLimits[i]
+		local flag = pair[1]
+		local blockers = pair[2]
+		if next(blockers) ~= nil then
+			-- There is at least one disable request for this flag so disable
+			-- this bit flag.
+			inputFlags = inputFlags & (~Game_ConvertInputEnabledFlagEnumToInt(flag))
+		end
+	end
+	Game_SetInputEnabledFlag(inputFlags)
+end

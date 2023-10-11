@@ -1,0 +1,268 @@
+--
+-- Mission Cheat menu functions
+-- These allow the adding of debug functions to the debug menu (CTRL+Enter) at runtime, on a per-project or per-mission basis
+-- 
+-- Relic Entertainment
+--
+
+
+
+
+--
+-- Cheat menu functions
+--
+
+
+function CheatMenu_Init()
+
+	Scar_DebugCheatMenuExecute("MissionCheat_ClearMenuItems()")
+	Game_SetGameRestoreCallback(CheatMenu_RestoreMenuItems)
+	
+end
+
+function CheatMenu_RestoreMenuItems()
+	
+	Scar_DebugCheatMenuExecute("MissionCheat_ClearMenuItems()")
+	if scartype(_MissionCheat_MenuItems) == ST_TABLE then 
+		for index, item in pairs(_MissionCheat_MenuItems) do
+			if item == _MissionCheat_MenuItems.Events then
+				for eventIndex, eventItem in pairs(_MissionCheat_MenuItems.Events) do
+					Scar_DebugCheatMenuExecute("MissionCheat_RegisterMenuItem_Event([[" .. eventItem.title .. "]], [[" .. eventItem.mode .. "]], [[" .. eventItem.value .. "]])")
+				end
+			else
+				Scar_DebugCheatMenuExecute("MissionCheat_RegisterMenuItem([[" .. item.title .. "]], [[" .. item.mode .. "]], [[" .. item.value .. "]])")
+			end
+		end
+	end
+
+end
+
+
+function CheatMenu_SetValues(mode, value)						-- Store some values in the persistent cheat menu domain
+
+	local cheatData = {
+		mode = mode,
+		value = value,
+	}
+	Game_StoreTableData("missioncheat", cheatData)
+	
+end
+
+-- Retrieve the persistent values from the cheat menu domain. This doesn't necessarily happen inline - you may have to wait until the next frame for the values to be there.
+function CheatMenu_GetValues()
+
+	local cheatData = Game_RetrieveTableData("missioncheat", true)
+	
+	local cheatstring = nil
+	if World_IsCampaignMetamapGame() then
+		if Misc_IsCommandLineOptionSet("cmapcheat") then
+			cheatstring = Misc_GetCommandLineString("cmapcheat")
+		end
+	else
+		if Misc_IsCommandLineOptionSet("missioncheat") then
+			cheatstring = Misc_GetCommandLineString("missioncheat")
+		end
+	end
+	
+	if cheatstring ~= nil then
+		-- split the string up and find the two constituent parts
+		local split = cheatstring:find(":")
+		if split ~= nil then
+			_CheatMenuMode = cheatstring:sub(1, split - 1)
+			_CheatMenuValue = cheatstring:sub(split + 1)		
+			print("Command line cheat found - Mode ".._CheatMenuMode.."   Value ".._CheatMenuValue)
+		end
+		
+		return true
+		
+	end
+	
+	if scartype(cheatData) == ST_TABLE and cheatData.mode ~= nil and cheatData.value ~= nil then
+	
+		_CheatMenuMode = cheatData.mode
+		_CheatMenuValue = cheatData.value			
+	
+		return true 
+		
+	end	
+	
+	return false
+	
+end
+
+
+
+function CheatMenu_RestartGame()									-- Cause the game to restart
+
+	Scar_DebugConsoleExecute("restart")
+	
+end
+
+
+
+-- this is the underlying function to add an item to the Mission Cheat menu... mode and value are two 
+function CheatMenu_AddMenuItem(title, showCommandLineShortcut, mode, value)
+
+	--print("MISSION CHEAT MENU Cheat - Title: "..title..", Mode: "..mode..", Value: "..value)
+	
+	if showCommandLineShortcut == true then
+		title = title.."  (-missioncheat "..mode..":"..value..")"		-- you can run a mission direct into a cheat mode by running with "-missioncheat mode:value", with the mode and value shown in the menu 
+	end
+
+	Scar_DebugCheatMenuExecute("MissionCheat_RegisterMenuItem([[" .. title .. "]], [[" .. mode .. "]], [[" .. value .. "]])")
+
+	-- store this so it can be reinstated on reloading a mission from a save game
+	if _MissionCheat_MenuItems == nil then 
+		_MissionCheat_MenuItems = {
+			Events = {}
+		}
+	end
+	local item = {
+		title = title,
+		mode = mode,
+		value = value
+	}
+	table.insert(_MissionCheat_MenuItems, item)
+
+end
+
+-- This is the underlying function to add an EVENT item to the Events submenu in the Mission Cheat menu
+function CheatMenu_AddMenuItem_Event(title, showCommandLineShortcut, mode, value)
+	
+	print("MISSION CHEAT MENU Cheat (Event) - Title: "..title..", Mode: "..mode..", Value: "..value)
+	
+	if showCommandLineShortcut == true then
+		title = title.."  (-missioncheat "..mode..":"..value..")"		-- you can run a mission direct into a cheat mode by running with "-missioncheat mode:value", with the mode and value shown in the menu 
+	end
+
+	Scar_DebugCheatMenuExecute("MissionCheat_RegisterMenuItem_Event([[" .. title .. "]], [[" .. mode .. "]], [[" .. value .. "]])")
+
+	-- store this so it can be reinstated on reloading a mission from a save game
+	if _MissionCheat_MenuItems == nil then 
+		_MissionCheat_MenuItems = {
+			Events = {}
+		}
+	end
+	local item = {
+		title = title,
+		mode = mode,
+		value = value
+	}
+	table.insert(_MissionCheat_MenuItems.Events, item)
+	
+end
+
+-- this function gets called by the cheat menu (written in cheatmenu.lua)
+function CheatMenu_ActivateMenuItem(mode, value)
+	
+	if mode == "immediateFunc" then 
+		
+		-- immediate mode, so just call the function named in "value"
+		
+		local index = tonumber(value)
+		local func = _CheatMenu_RegisteredFunctions[index].func
+
+		if scartype(func) == ST_FUNCTION then 
+			func()
+		end
+	
+	elseif mode == "restartFunc" then
+	
+		-- otherwise go through the mission restart process
+		
+		CheatMenu_SetValues(mode, value)		-- set the persistent values to catch on the other side...
+		CheatMenu_RestartGame()					-- ...and restart the mission
+		
+	end
+	
+	-- call delegates to see if they need to respond
+	Core_CallDelegateFunctions("ActivateMenuItem", mode, value)
+	
+end
+
+g_TimerRate = 1
+
+function SetTimerRate( rate )
+	g_TimerRate = rate
+end
+
+function CheatMenu_StartWithCheat(mode, value)
+	
+	if _CheatMenuMode == "restartFunc" then
+		
+		local index = tonumber(_CheatMenuValue)
+		local func = _CheatMenu_RegisteredFunctions[index].func
+		
+		if scartype(func) == ST_FUNCTION then
+			func()
+		end
+		
+	end
+
+	-- call delegates to see if they need to respond
+	Core_CallDelegateFunctions("StartWithCheat", mode, value)
+	
+end
+
+
+
+
+
+-- return true if we have some cheat menu values set
+function CheatMenu_IsSet() 
+
+	return _CheatMenuMode ~= nil and _CheatMenuMode ~= "" and _CheatMenuValue ~= nil and _CheatMenuValue ~= ""
+	
+end
+
+
+
+
+--? @group scardoc;Cheat Menu
+
+--? @args Function cheatFunction, String title[, Boolean restartMission]
+--? @shortdesc Adds a function to the Mission Cheat menu, under the title you provide. These should be registered in the Mission_Preset function.
+--? @extdesc If the restartMission flag is set, when the cheat is activated the mission will be restarted. Most of the startup script happens as normal: Mission_SetupVariables,  Mission_SetDifficulty, Mission_SetupRestrictions and Mission_Preset are all called as normal, but the supplied function is called INSTEAD OF the regular Mission_Start function.
+function CheatMenu_RegisterCheatFunction(func, title, restartMission)
+
+	
+	if _CheatMenu_RegisteredFunctions == nil then
+		_CheatMenu_RegisteredFunctions = {}
+	end
+	
+	local new_cheat = {
+		title = title,
+		func = func,
+	}
+	
+	table.insert(_CheatMenu_RegisteredFunctions, new_cheat)
+	local index = #_CheatMenu_RegisteredFunctions
+		
+
+	if restartMission == true then
+		CheatMenu_AddMenuItem(title, true, "restartFunc", index)
+	else
+		CheatMenu_AddMenuItem(title, false, "immediateFunc", index)
+	end
+	
+	
+end
+	
+function CheatMenu_OverrideCheatFunction(func, title)
+	
+	if _CheatMenu_RegisteredFunctions == nil then
+		CheatMenu_RegisterCheatFunction(func, title, false)
+	else
+		local cheat_count = #_CheatMenu_RegisteredFunctions
+		
+		for n = 1, cheat_count do
+			local cheat = _CheatMenu_RegisteredFunctions[n]
+			if cheat.title == title then
+				cheat.func = func
+				return
+			end
+		end
+		
+		CheatMenu_RegisterCheatFunction(func, title, false)
+	end
+end

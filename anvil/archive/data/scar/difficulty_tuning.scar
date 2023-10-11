@@ -1,0 +1,334 @@
+-----------------------------------------------------------------------
+--
+-- Single-player difficulty tuning for missions and campaign skirmishes
+-- NOTE: AI skirmishes from the main menu are not intended to use this
+-- script.
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+import("gamescarutil.scar")
+
+Core_RegisterModule("DifficultyTuning")
+
+--[[
+
+This is the default difficulty Tuning Table:
+- Each difficulty has a corresponding sub table which will determine
+  the active modifiers set during the SetDifficulty stage.
+- Nil values can be used to mean "no modifier"
+- Most fields end in _modifier which means a multiplicative modifier.
+- This default table can be overridden using:
+  DifficultyTuning_SetDifficultyTuningOverride(override_tuning)
+
+]]--
+local t_mission_difficulty_tuning = {
+
+	-- Easy Difficulty
+	{
+		friendly_health_max_modifier = 2.0,
+		friendly_light_vehicle_armor_modifier = 1.5,
+		friendly_light_vehicle_recieved_damage_modifier = 0.6,
+		friendly_defense_build_time_modifier = 0.4,
+		friendly_vehicle_repair_rate_modifier = 3.5,
+		friendly_action_point_income_per_tick = 0.4612,
+		friendly_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+		enemy_health_max_modifier = 0.7,
+		enemy_locked_abilities = {},
+		enemy_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+	},
+	
+	-- Normal Difficulty
+	{
+		friendly_health_max_modifier = 1.5,
+		friendly_light_vehicle_armor_modifier = 1.5,
+		friendly_light_vehicle_recieved_damage_modifier = 0.6,
+		friendly_defense_build_time_modifier = 0.4,
+		friendly_vehicle_repair_rate_modifier = 3.5,
+		friendly_action_point_income_per_tick = 0.3075,
+		friendly_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+		enemy_health_max_modifier = 0.8,
+		enemy_locked_abilities = {},
+		enemy_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+	},
+	
+	-- Hard Difficulty
+	{
+		friendly_health_max_modifier = 1.3,
+		friendly_light_vehicle_armor_modifier = 1.5,
+		friendly_light_vehicle_recieved_damage_modifier = 0.6,
+		friendly_defense_build_time_modifier = 0.4,
+		friendly_vehicle_repair_rate_modifier = 3.5,
+		friendly_action_point_income_per_tick = 0.2050,
+		friendly_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+		enemy_health_max_modifier = 0.9,
+		enemy_locked_abilities = {},
+		enemy_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+	},
+	
+	-- Expert Difficulty
+	{
+		friendly_health_max_modifier = 1.15,
+		friendly_light_vehicle_armor_modifier = 1.5,
+		friendly_light_vehicle_recieved_damage_modifier = 0.6,
+		friendly_defense_build_time_modifier = 0.4,
+		friendly_vehicle_repair_rate_modifier = 3.5,
+		friendly_action_point_income_per_tick = 0.2050,
+		friendly_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+		enemy_health_max_modifier = 1,
+		enemy_locked_abilities = {},
+		enemy_resource_income_modifiers = {
+			manpower = nil,
+			munition = nil,
+			fuel = nil,
+		},
+	},
+}
+
+-- OPTIONAL TODO - separate skirmish difficulty tuning
+-- from mission difficulty tuning by changing this table here.
+-- It is already hooked up in skirmish_it to override the tuning
+-- table with this one:
+local t_campaign_skirmish_difficulty_tuning = t_mission_difficulty_tuning
+
+--? @shortdesc Sets the difficulty tuning table override. This is the table responsible for configuring
+--? how each difficulty 
+--? @args Table tuning_table
+--? @result nil 
+function DifficultyTuning_SetDifficultyTuningOverride(tuning_table)
+	t_difficulty_tuning_override = tuning_table
+end
+
+--? @shortdesc Sets the flag that determines if allied (non-human) players also get most of the human player
+--? modifications (see difficulty_tuning.scar for exactly which bonuses will be applied).
+--? @args bool value (When true, AI allies will be modified as well)
+--? @result nil 
+function DifficultyTuning_SetModifyAllyPlayer(value)
+	g_modAllyPlayer = value
+end
+
+-- Called by core.scar after initialization delegates are called.
+function DifficultyTuning_SetDifficulty()
+	
+	if World_IsCampaignMetamapGame() then
+		return
+	end
+	
+	local tuning_table = t_difficulty_tuning_override or t_mission_difficulty_tuning
+	
+	-- Here is where we choose the right sub table based on the actual difficulty level
+	local difficulty_tuning = Util_DifVar(tuning_table)
+	
+	-- Apply each of the modifications according to the difficulty table selected
+	__DifficultyTuning_ApplyModifications(difficulty_tuning)
+end
+
+function __DifficultyTuning_ApplyModifications(tuning)
+	
+	local modAllies = g_modAllyPlayer
+
+	local ApplyModifierToEBPs = function(mod, player, ebps, modifier_name)
+		if mod == 1 or mod == nil then
+			return
+		end
+		-- modify health for all specified entities
+		for i = 1, #ebps do
+			local ebp = ebps[i]
+			local modifier = Modifier_Create(MAT_EntityType, modifier_name, MUT_Multiplication, false, mod, ebp)
+			Modifier_ApplyToPlayer(modifier, player, 0)
+		end
+	end
+
+	local unit_ebps = BP_GetEntityBlueprintsWithType({"infantry", "vehicle"})
+	local lv_unit_ebps = BP_GetEntityBlueprintsWithType("light_vehicle")
+	
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		local relationship = Player_ObserveRelationship(Game_GetLocalPlayer(), player)
+		if relationship == R_ALLY then
+			-- Modify Human and Ally Players
+			
+			-- Friendly Durability
+			----------------------
+			if modAllies or Game_GetLocalPlayer() == player then
+
+				ApplyModifierToEBPs(
+					tuning.friendly_health_max_modifier,
+					player,
+					unit_ebps,
+					"health_maximum_modifier")
+				ApplyModifierToEBPs(
+					tuning.friendly_light_vehicle_armor_modifier,
+					player,
+					lv_unit_ebps,
+					"armor_modifier")
+				ApplyModifierToEBPs(
+					tuning.friendly_light_vehicle_received_damage_modifier,
+					player,
+					lv_unit_ebps,
+					"received_damage_modifier")
+			end
+			
+			-- Modify Friendly Resource Income
+			----------------------------------
+			__DifficultyTuning_ModifyResourceIncome(player, tuning.friendly_resource_income_modifiers)
+
+			-- Defensive Structure Build Time
+			---------------------------------
+			local defensive_structure_count = #_allDefensiveStructures
+			for i=1, defensive_structure_count do
+				Modify_EntityBuildTime(
+					player,
+					_allDefensiveStructures[i],
+					tuning.friendly_defense_build_time_modifier)
+			end
+
+		elseif relationship == R_ENEMY then
+			-- Modify Enemy Players
+			
+			-- Enemy Durability
+			-------------------
+			ApplyModifierToEBPs(tuning.enemy_health_max_modifier, player, unit_ebps, "health_maximum_modifier")
+			
+			-- Modify Friendly Resource Income
+			----------------------------------
+			__DifficultyTuning_ModifyResourceIncome(player, tuning.enemy_resource_income_modifiers)
+			
+			-- Enemy Locked Abilities
+			-------------------------
+			__DifficultyTuning_LockAbilities(player, tuning.enemy_locked_abilities)
+			
+		end
+	end
+
+	
+	-- Modify Friendly Player Repair Rate
+	-------------------------------------
+	local repair_rate = tuning.friendly_vehicle_repair_rate_modifier
+	if repair_rate ~= nil and repair_rate ~= 1 then
+		local engineer_count = #_engineerEbps
+		for i=1, engineer_count do
+			local blueprint = _engineerEbps[i]
+			Modify_VehicleRepairRate(Game_GetLocalPlayer(), repair_rate, blueprint)
+		end
+	end
+	
+	-- Set passive action/command point income
+	------------------------------------------
+	local rate = tuning.friendly_action_point_income_per_tick
+	if rate ~= nil then
+		Modify_PlayerResourceRate(Game_GetLocalPlayer(), RT_Action, rate, MUT_Addition)
+	end
+	
+	-- Set default command points
+	Dev_UpdateCommandPoints()
+end
+
+
+-- Applies multiplicative income tuning modifiers if they are present
+function __DifficultyTuning_ModifyResourceIncome(player, income_tuning)
+	
+	if income_tuning == nil then
+		return
+	end
+
+	local _applyIncomeTuning = function(value, resource)
+		if value ~= nil and value ~= 1 then
+			Modify_PlayerResourceRate(player, resource, value, MUT_Multiplication)
+		end
+	end
+	
+	_applyIncomeTuning(income_tuning.manpower, RT_Manpower)
+	_applyIncomeTuning(income_tuning.fuel, RT_Fuel)
+	_applyIncomeTuning(income_tuning.munition, RT_Munition)
+	
+end
+
+function __DifficultyTuning_LockAbilities(player, locked_abilities)
+	
+	if locked_abilities == nil then
+		return
+	end
+	
+	local ability_count = #locked_abilities
+	for i=1, #locked_abilities do
+		local ability = locked_abilities[i]
+		Player_SetAbilityAvailability(player, ability, ITEM_LOCKED)
+	end
+end
+
+-- Defensive structures (to modify friendly build time)
+_allDefensiveStructures = {
+	EBP.AMERICAN.BARBED_WIRE_FENCE_RIFLEMAN_US,
+	EBP.AMERICAN.BARBED_WIRE_FENCE_US,
+	EBP.AMERICAN.SANDBAG_WALL_RIFLEMAN_US,
+	EBP.AMERICAN.SANDBAG_WALL_US,
+	EBP.AMERICAN.TANK_TRAP_RIFLEMAN_US,
+	EBP.AMERICAN.TANK_TRAP_US,
+	EBP.AMERICAN.MINE_ENGINEER_US,
+	EBP.AMERICAN.OBSTACLE_MINE_FIELD_US,
+	EBP.AMERICAN.MINE_GREYHOUND_US,
+	EBP.AMERICAN.MINE_HEAVY_ENGINEER_US,
+	EBP.AMERICAN.MINE_RIFLEMAN_US,
+	EBP.BRITISH.BARBED_WIRE_FENCE_TOMMY_UK,
+	EBP.BRITISH.BARBED_WIRE_FENCE_UK,
+	EBP.BRITISH.BARBED_WIRE_REINFORCED_UK,
+	EBP.BRITISH.SANDBAG_WALL_TOMMY_UK,
+	EBP.BRITISH.SANDBAG_WALL_UK,
+	EBP.BRITISH.TANK_TRAP_UK,
+	EBP.BRITISH.MINE_FIELD_SAPPER_UK,
+	EBP.BRITISH.MINE_HEAVY_SAPPER_UK,
+	EBP.BRITISH.MINE_SAPPER_UK,
+	EBP.BRITISH.MINE_TOMMY_UK,
+	EBP.AFRIKA_KORPS.BARBED_WIRE_FENCE_AK,
+	EBP.AFRIKA_KORPS.SANDBAG_WALL_AK,
+	EBP.AFRIKA_KORPS.TANK_TRAP_AK,
+	EBP.AFRIKA_KORPS.LIGHT_MINE_ANTI_VEHICLE_AK,
+	EBP.AFRIKA_KORPS.MINE_PANZERGRENADIER_AK,
+	EBP.AFRIKA_KORPS.MINE_SCHU_42_PANZERGRENADIER_AK,
+	EBP.AFRIKA_KORPS.MINE_TELLER_AK,
+	EBP.AFRIKA_KORPS.MINE_PANZERPIONEER_AK,
+	-- Germans temporarily included as DAK uses some of their assets
+	EBP.GERMAN.TANK_TRAP_GER,
+	EBP.GERMAN.SANDBAG_WALL_GER,
+	EBP.GERMAN.BARBED_WIRE_FENCE_GER,
+	EBP.GERMAN.BARBED_WIRE_REINFORCED_GER
+}
+
+-- Engineers (to modify friendly repair rate)
+_engineerEbps = {
+	EBP.AFRIKA_KORPS.PANZERPIONEER_AK,
+	EBP.AMERICAN.ENGINEER_US,
+	EBP.BRITISH.SAPPER_UK,
+	EBP.BRITISH_AFRICA.SAPPER_AFRICA_UK,
+	EBP.AFRIKA_KORPS.RECOVERY_HALFTRACK_AK,
+}

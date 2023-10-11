@@ -1,0 +1,309 @@
+import("anvil.scar")
+import("rulesystem.scar")
+
+pathInfo_List ={}
+
+function PathDebug_Show(info)
+		
+	local xaml =
+	[[<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	        HorizontalAlignment="Left"
+	        VerticalAlignment="Top"
+	        Orientation="Vertical"
+			Margin="{Binding [windowMargin]}">
+	    <TextBlock Text="{Binding [eid]}" HorizontalAlignment="Center" Style="{StaticResource HUDTitleTextStyle}"/>
+	    <TextBlock Text="TextTwo" HorizontalAlignment="Center" Style="{StaticResource HUDParagraphTextStyle}"/>
+	
+		<Grid HorizontalAlignment="Left" VerticalAlignment="Top" Width="300" >
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition x:Name="PathCols"/>
+			</Grid.ColumnDefinitions>
+			<Grid.RowDefinitions>
+					<RowDefinition x:Name="PathRows" />
+	        </Grid.RowDefinitions>
+			<TextBlock x:Name="PathTexts" />
+		    <Button x:Name="BtnName"/>
+		</Grid>
+	</StackPanel>]]
+
+	local pathRowReplacement = [[<RowDefinition />]]
+	local pathXamlRows = pathRowReplacement
+	local pathColReplacement = [[<ColumnDefinition />]]
+	local pathXamlCols = pathColReplacement
+
+	local pathXamlTexts = ""
+	local pathXamlBtns = ""
+	
+	local separator = ","
+	local btnUniqueNameList = {}
+	
+	local row = 0
+	local existingColNum = 0
+	for i = 1, #info.pathList do
+		local pathTextTemplate = [[<TextBlock Text="PathTxt" Grid.Row="GridRow"  Grid.Column="0" HorizontalAlignment="Center" Style="{StaticResource HUDParagraphTextStyle}"/>]]
+		
+		pathTextTemplate = pathTextTemplate:gsub("PathTxt", "p."..tostring(info.pathList[i].pid))
+		pathTextTemplate = pathTextTemplate:gsub("GridRow", tostring(row))
+		
+		
+		if existingColNum == 0 then
+			pathXamlCols = pathXamlCols..pathColReplacement
+			existingColNum = existingColNum + 1
+		end
+		
+		pathXamlRows = pathXamlRows .. pathRowReplacement
+		
+		pathXamlTexts = pathXamlTexts..pathTextTemplate
+		-- first col is for the pathID
+		local col = 1
+		local sidList = info.pathList[i].seqList
+		for sid, tbl in pairs(sidList) do
+			
+			local pathBtnTemplate = [[<ToggleButton x:Name="BtnName" IsChecked="{Binding [checked]}" Margin="5" Content="BtnTxt" Width="35" IsThreeState="False" Grid.Row="GridRow" Grid.Column="GridColumn"/>]]
+			
+			--local pathBtnTemplate = [[<Button x:Name="BtnName" 
+			--			Grid.Row="GridRow" Grid.Column="GridColumn" HorizontalAlignment="Center" VerticalAlignment="Center" SnapsToDevicePixels="True" 				
+			--			Content="BtnTxt" FontSize="14" Height="35" Width ="35" Margin = "0,4,0,0" />]]
+			
+			local btnUniqName = info.presenter..separator..tostring(info.eid)..separator..tostring(info.pathList[i].pid)..separator..tostring(sid)
+			
+			pathBtnTemplate = pathBtnTemplate:gsub("BtnName", btnUniqName)
+			pathBtnTemplate = pathBtnTemplate:gsub("BtnTxt", tostring(sid))
+			pathBtnTemplate = pathBtnTemplate:gsub("GridRow", tostring(row))
+			pathBtnTemplate = pathBtnTemplate:gsub("GridColumn", tostring(col))
+			
+			table.insert(btnUniqueNameList,btnUniqName)
+			
+			col = col + 1
+			if col > existingColNum then
+				pathXamlCols = pathXamlCols..pathColReplacement
+				existingColNum = existingColNum + 1
+			end
+			
+			pathXamlBtns = pathXamlBtns..pathBtnTemplate
+		end
+		row = row + 1
+	end
+	
+	
+	local pathRowReplaceTarget = [[<RowDefinition x:Name="PathRows" />]]
+	local pathColReplaceTarget = [[<ColumnDefinition x:Name="PathCols"/>]]
+	local pathTextReplaceTarget = [[<TextBlock x:Name="PathTexts" />]]
+	local pathBtnReplaceTarget = [[<Button x:Name="BtnName"/>]]
+	
+	xaml = xaml:gsub( pathRowReplaceTarget, pathXamlRows)
+	xaml = xaml:gsub( pathColReplaceTarget, pathXamlCols)
+	xaml = xaml:gsub( pathTextReplaceTarget, pathXamlTexts)
+	xaml = xaml:gsub( pathBtnReplaceTarget, pathXamlBtns)
+
+	--print(xaml)
+	UI_AddChild("", "XamlPresenter", info.presenter, { Focusable = false, IsHitTestVisible = true, Xaml = xaml, DataContext = UI_CreateDataContext(info.dataContext) })
+	
+	info.preservedData.btnUniqueNameList = btnUniqueNameList
+	
+	for i = 1, #info.preservedData.btnUniqueNameList do
+		UI_AddEventHandler(info.presenter.."."..info.preservedData.btnUniqueNameList[i], "Click", "PathSeq_BtnClickEvent")
+	end
+	
+	info.isDisplayed = true
+end
+
+function PathSeq_BtnClickEvent(elementName, eventName)
+	local currentSquad = nil
+	local separator = ","
+	
+	local elementParams = Util_StringSplit(elementName,",")
+	local presenterName = nil
+	local eid = nil
+	local pid = nil
+	local sid = nil
+	
+	for i=1, #elementParams do
+		if (i == 1) then
+			presenterName = elementParams[i]
+		elseif (i == 2) then
+			eid = tonumber(elementParams[i])
+		elseif (i == 3) then
+			pid = tonumber(elementParams[i])
+		elseif (i == 4) then
+			sid = tonumber(elementParams[i])
+		end
+	end
+	
+	PathDebug_ToggleVisible(eid, pid, sid)
+end
+
+
+
+function PathDebug_Hide(info)
+	UI_Remove(info.presenter)
+	for i = 1, #info.preservedData.btnUniqueNameList do
+		UI_RemoveEventHandler(info.presenter.."."..info.preservedData.btnUniqueNameList[i], "Click", "PathSeq_BtnClickEvent")
+	end
+
+	info.isDisplayed = false
+end
+
+function PathDebug_Update()
+	PathDebug_AddAll()
+	
+	for i = 1, #pathInfo_List do
+		if pathInfo_List[i].isDisplayed == false then
+			PathDebug_Show(pathInfo_List[i])
+		end
+	end
+	
+		-- update the data context
+	for i = 1, #pathInfo_List do
+		--- Panel Data context
+		pathInfo_List[i].dataContext = {		
+			title =  tostring(pathInfo_List.eid).."PathDebug",
+			bgcolor = "DodgerBlue",  --enemy "IndianRed"
+			windowMargin = tostring(10+((i-1)*310))..",10,0,0",
+			----
+			eid = tostring(pathInfo_List[i].eid)
+			}
+		UI_SetDataContext(pathInfo_List[i].presenter,pathInfo_List[i].dataContext)
+		
+		local btnList = pathInfo_List[i].preservedData.btnUniqueNameList
+		local pathListRef = pathInfo_List[i].pathList
+		-- path
+		for j = 1, #btnList do
+			local elementParams = Util_StringSplit(btnList[j],",")
+			local presenterName = elementParams[1]
+			local eid = tonumber(elementParams[2])
+			local pid = tonumber(elementParams[3])
+			local sid = tonumber(elementParams[4])
+			
+			
+			for k = 1, #pathListRef do
+				if (pathListRef[k].pid == pid) then
+					local seqTable = pathListRef[k].seqList[sid]
+					if not(seqTable == nil) then
+						seqTable.dataContext = {
+							checked = PathDebug_IsVisible(eid, pid, sid)
+						}
+						UI_SetDataContext(pathInfo_List[i].presenter.."."..btnList[j],seqTable.dataContext)
+					end
+				end
+			end
+			
+			
+			-- seqence
+			--local sidList = pathRef.seqList
+			--for sid, tbl in pairs(sidList) do
+				
+			--end
+		end
+	end
+
+end
+
+
+function PathDebug_Add(eid, pathListIn)
+	for i = 1, #pathInfo_List do
+		-- existing info, update pathList
+		if (pathInfo_List[i].eid == eid) then
+			-- track changed data
+			local dirty = false
+			local pathListRef = pathInfo_List[i].pathList
+			
+			if not(#pathListRef == #pathListIn) then
+				dirty = true
+			else
+				for j = 1, #pathListIn do
+					if not(pathListRef[j].pid == pathListIn[j].pid and #pathListRef[j].seqList == #pathListIn[j].seqList) then
+						dirty = true
+					end
+				end
+			end
+			
+			if dirty then
+				pathInfo_List[i].pathList = Table_Copy(pathListIn)
+				PathDebug_Hide(pathInfo_List[i]) -- remove UI element to force update
+			end
+			
+			return
+		end
+	end
+	
+	-- new eid, add to info list
+	local presenterSuffix = "_presenter"
+	local newInfo = {
+		presenter = eid..presenterSuffix,
+		dataContext = {		
+			title =  tostring(eid).."PathDebug",
+			bgcolor = "DodgerBlue",  --enemy "IndianRed"
+			windowMargin = "10,10,0,0",
+			eid = eid
+			},
+		eid = eid,
+		pathList = Table_Copy(pathListIn),
+		isDisplayed = false,
+		preservedData = {}
+	}
+	
+	table.insert(pathInfo_List, newInfo)
+end
+
+function PathDebug_AddAll()
+	local data = {}
+	PathDebug_GetAllPathData(data)
+	
+	for eid, pathData in pairs(data) do
+		local pathOutput = {}
+		for pid, seqList in pairs(pathData) do
+			table.insert(pathOutput, {pid = pid, seqList = seqList})
+		end
+		
+		table.sort(pathOutput, function(a,b)
+				return a.pid > b.pid
+			end)
+		
+		PathDebug_Add(eid, pathOutput)
+	end
+end
+
+bShowPathDebug = 0
+
+function PathDebug_Toggle()
+	bShowPathDebug = 1 - bShowPathDebug
+	
+	if (bShowPathDebug == 1) then
+		if Rule_Exists(PathDebug_Update) == false then
+			Rule_Add(PathDebug_Update)
+		end
+		--Rule_AddGlobalEvent(SquadInfo_UpdateDamage, GE_DamageReceived)
+	else
+		if Rule_Exists(PathDebug_Update) then
+			Rule_Remove(PathDebug_Update)
+		end
+
+		--Rule_RemoveGlobalEvent(SquadInfo_UpdateDamage)
+		for i = 1, #pathInfo_List do
+			if pathInfo_List[i].isDisplayed then
+				PathDebug_Hide(pathInfo_List[i])
+			end
+		end
+	end
+end
+
+
+----------------------------------
+function PrintPathDebugHandles()
+	local data = {}
+	PathDebug_GetAllPathData(data)
+	PrintObject(data, 6)
+	
+	-- set all A* paths visible only
+	for eid, pathData in pairs(data) do
+		for pid, pathList in pairs(pathData) do
+			for sid in pairs(pathList) do
+				if (sid == 0) then
+					PathDebug_ToggleVisible(eid, pid, sid)
+				end
+			end
+		end
+	end
+end
+

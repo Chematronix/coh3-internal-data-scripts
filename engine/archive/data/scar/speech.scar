@@ -1,0 +1,151 @@
+----------------------------------------------------------------------------------------------------------------
+-- Actor / NIS helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+--? @group scardoc;Presentation
+
+
+
+--? @shortdesc Plays a speech event for a given actor WITH a portrait and subtitle
+--? @result Void
+--? @args ActorTable actor, Integer locID[, SGroup/SquadID/Table speechbubble, String audioCtrlEvent]
+--? @extdesc If the speech file is not available, a placeholder time will be calculated for the message using the number of words and the message will be displayed for that length of time.\n
+--? speechbubble: Who a speech bubble should appear over ingame. Can be a squadID or an SGroup (where it appears over the first guy in the group) \n
+--? It can also be a table in the format {sgroup = sg_orkboys, closest_to = sg_gorgutz} where it finds the squad in the group closest to the reference point. It can also be in the format {sbp = SBP.ORKS.ORK_BOY, closest_to = mkr_orkIdol} to find the closest unit of the specified type, and you can also add a player entry to that table to specify which player (default is the local player)\n
+--? You can also specify just an SBP, in which case it will play on the first SBP found owned - use this for elite units who may or may not be on the map
+--? audioCtrlEvent:  is a wwise event name. This parameter is used to apply an effect on the line of speech. Ex. "Comm_on" plays speech through a comm effect. Work with an audio designer to get more effects.
+function Actor_PlaySpeech(actor, locID, sgroup, audioCtrlEvent)
+	
+	if scartype(locID) == ST_NUMBER then 
+		print("INTEL: "..locID)
+	end
+	
+	-- check the user option to determine whether to render the portrait or not
+	Actor_PlaySpeechInternal(actor, UI_GetShowHUDSubtitleOption(), locID, sgroup, audioCtrlEvent)
+	
+end
+
+
+--? @shortdesc Plays a speech event for a given actor WITHOUT a portrait or subtitle. See Actor_PlaySpeech for more details
+--? @result Void
+--? @args ActorTable actor, Integer locID[, SGroup/SquadID/Table speechbubble, String audioCtrlEvent]
+function Actor_PlaySpeechWithoutPortrait(actor, locID, sgroup, audioCtrlEvent)
+	
+	if scartype(locID) == ST_NUMBER then 
+		print("AMBIENT: "..locID)
+	end
+	
+	Actor_PlaySpeechInternal(actor, false, locID, sgroup, audioCtrlEvent)
+	
+end
+
+
+function Actor_PlaySpeechInternal(actor, portrait, locID, dataTable, audioCtrlEvent)
+
+	if audioCtrlEvent == nil then audioCtrlEvent = "" end
+	
+	local speechbubble_squadid = nil 
+	local createdTempSGroup = false
+	
+	if scartype(dataTable) == ST_PBG then
+		dataTable = {sbp = dataTable}
+	end
+	
+	if scartype(dataTable) == ST_SGROUP then
+		
+		if SGroup_CountSpawned(dataTable) >= 1 then
+			speechbubble_squadid = SGroup_GetSpawnedSquadAt(dataTable, 1)
+		end
+		
+	elseif scartype(dataTable) == ST_SQUAD then
+	
+		speechbubble_squadid = dataTable 
+		
+	elseif scartype(dataTable) == ST_TABLE then
+		
+		if scartype(dataTable.sbp) ~= ST_NIL then
+			if scartype(dataTable.sbp) == ST_PBG then													-- create a group filled with all units of the specified SBP, so the next section can find the closest one
+				
+				if scartype(dataTable.sgroup) == ST_NIL then
+					
+					createdTempSGroup = true
+					
+					dataTable.sgroup = SGroup_Create("speechbubble")		
+					
+					if scartype(dataTable.player) ~= ST_PLAYER then
+						dataTable.player = Game_GetLocalPlayer()
+					end			
+				
+					Player_GetAll(dataTable.player, dataTable.sgroup)
+
+				end
+
+				SGroup_Filter(dataTable.sgroup, dataTable.sbp, FILTER_KEEP)
+				
+			end
+		end
+		
+		if scartype(dataTable.closest_to) ~= ST_NIL then
+			if (scartype(dataTable.closest_to) == ST_SGROUP and SGroup_CountSpawned(dataTable.closest_to) == 0) or
+			   (scartype(dataTable.closest_to) == ST_EGROUP and EGroup_CountSpawned(dataTable.closest_to) == 0) then
+				
+				-- "closest to" is an empty group, so just pick a random squad
+				if SGroup_CountSpawned(dataTable.sgroup) >= 1 then
+					speechbubble_squadid = SGroup_GetRandomSpawnedSquad(dataTable.sgroup)
+				end
+				
+			else
+				
+				-- find the closest squad in the group
+				local closest_distance = 99999
+				local closest_squad = nil
+				local reference_point = Util_GetPosition(dataTable.closest_to)
+				
+				local _CheckSquad = function(gid, idx, sid)
+					local distance = Util_GetDistance(sid, reference_point)
+					if distance <= closest_distance then
+						closest_distance = distance
+						closest_squad = sid
+					end
+				end
+				SGroup_ForEach(dataTable.sgroup, _CheckSquad)
+				
+				if closest_squad ~= nil then
+					speechbubble_squadid = closest_squad
+				end
+				
+			end
+		else
+			if scartype(dataTable.sgroup) ~= ST_NIL then
+				if SGroup_CountSpawned(dataTable.sgroup) >= 1 then
+					speechbubble_squadid = SGroup_GetSpawnedSquadAt(dataTable.sgroup, 1)
+				end
+			end
+		end
+		
+		if createdTempSGroup == true then
+			SGroup_Destroy(dataTable.sgroup)
+		end
+		
+	end
+	
+	-- play speech
+	
+	if not Misc_IsCommandLineOptionSet("skip_speech") then
+		if scartype(speechbubble_squadid) == ST_SQUAD then
+			if scartype(dataTable.is3D) == ST_NIL or (scartype(dataTable.is3D) == ST_BOOLEAN and dataTable.is3D == false) then
+				-- Audio is 2D, play as normal
+				Subtitle_PlaySpeechForSquadFromLocString(actor, locID, not portrait, audioCtrlEvent, speechbubble_squadid, false)
+			elseif scartype(dataTable.is3D == ST_BOOLEAN and dataTable.is3D == true) then
+				-- Audio is 3D, play based on position of squad 
+				Subtitle_PlaySpeechForSquadFromLocString(actor, locID, not portrait, audioCtrlEvent, speechbubble_squadid, true)
+			end
+		else
+			Subtitle_PlaySpeechFromLocString(actor, locID, not portrait, audioCtrlEvent)
+		end
+	else
+		Event_Delay(0.01)
+	end
+	
+end
+

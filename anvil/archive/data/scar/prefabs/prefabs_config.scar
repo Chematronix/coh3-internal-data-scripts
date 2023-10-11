@@ -1,0 +1,6 @@
+prefabs_config = 
+{
+	schema_aliases = {
+		missionvariant = "missionobjectives",
+	},
+}

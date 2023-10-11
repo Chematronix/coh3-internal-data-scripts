@@ -1,0 +1,331 @@
+-----------------------------------------------------------------------
+-- Ticket UI
+--
+-- (c) Relic Entertainment 2020
+--
+-- Displays ticket meter/count, victory point UI, and game timer.
+-- Logic for increasing/decreasing ticket count is done in other scripts.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("TicketUI")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function TicketUI_OnInit()
+	_ticket_ui = {
+		name = "TicketUI",				-- Name used to identify the parent element of the scripted UI
+		ticket_meter_visible = false,
+		vp_indicator_visible = true,
+		game_timer_visible = nil,		-- Defaults to user setting when nil
+	}
+	-- Create the UI early so other modules can set max/current ticket count via the callbacks below.
+	TicketUI_CreateUI()
+end
+
+
+-- Called by core.scar when a save game is loaded.
+-- Restores state of scripted UI elements.
+function TicketUI_OnGameRestore()
+	TicketUI_CreateUI()
+	TicketUI_SetVisibility(_ticket_ui.ticket_meter_visible, _ticket_ui.vp_indicator_visible, _ticket_ui.game_timer_visible)
+	-- Reset the max ticket values
+	if _ticket_ui.teams then
+		for _, team in pairs(_ticket_ui.teams) do
+			if Table_Contains(team.players, World_GetPlayerIndex(Game_GetLocalPlayer())) then
+				UI_SetPropertyValue( _ticket_ui.name .. ".AllyTickets", "Maximum", team.max_tickets + 0.0)
+			else
+				UI_SetPropertyValue( _ticket_ui.name .. ".EnemyTickets", "Maximum", team.max_tickets + 0.0)
+			end
+			-- Only notify tickets changed if they have already been set (if you save too early then the initialization on Start()
+			-- has yet to occur, so we can wait for that to restore the UI)
+			if team.tickets ~= nil then
+				TicketUI_OnTicketsChanged(World_GetPlayerAt(team.players[1]), team.tickets, team.tickets, true)
+			end
+		end
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+-- Sets the max ticket count for a given player's team (or all teams if player is nil).
+function TicketUI_OnMaxTicketsChanged(max_tickets, player)
+
+	if not max_tickets or max_tickets <= 0 then
+		return
+	end
+
+	if not _ticket_ui.teams then
+		_ticket_ui.teams = {}
+		for i = 1, World_GetPlayerCount() do
+			local team = TicketUI_GetTeam(World_GetPlayerAt(i))
+			if team then
+				table.insert(team.players, i)
+			else
+				table.insert(_ticket_ui.teams, { players = {i} })
+			end
+		end
+	end
+
+	if player then
+		local team = TicketUI_GetTeam(player)
+		team.max_tickets = max_tickets
+		print("Tickets ("..Loc_ToAnsi(Player_GetDisplayName(player))..") = "..max_tickets)
+	else
+		for _, team in pairs(_ticket_ui.teams) do
+			team.max_tickets = max_tickets
+		end
+		print("Tickets = "..max_tickets)
+	end
+
+	for _, team in pairs(_ticket_ui.teams) do
+		if team.max_tickets then
+			if Table_Contains(team.players, World_GetPlayerIndex(Game_GetLocalPlayer())) then
+				UI_SetPropertyValue( _ticket_ui.name .. ".AllyTickets", "Maximum", team.max_tickets + 0.0)
+			else
+				UI_SetPropertyValue( _ticket_ui.name .. ".EnemyTickets", "Maximum", team.max_tickets + 0.0)
+			end
+		end
+	end
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function TicketUI_Start()
+	if _ticket_ui.game_timer_visible == nil and not Rule_Exists(TicketUI_Update) then
+		Rule_AddInterval(TicketUI_Update, 1.0)
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling ticket count has changed.
+-- Updates the ticket UI to reflect the new ticket count.
+function TicketUI_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	local team = TicketUI_GetTeam(player)
+	team.tickets = math.min(math.max(0, tickets), team.max_tickets)
+
+	local is_local_team = Table_Contains(team.players, World_GetPlayerIndex(Game_GetLocalPlayer()))
+	if is_local_team then
+		UI_SetPropertyValue( _ticket_ui.name .. ".AllyTicketsText", "Text", string.format("%.0f", tickets))
+		UI_SetPropertyValue( _ticket_ui.name .. ".AllyTickets", "Value", tickets + 0.0)
+	else
+		UI_SetPropertyValue( _ticket_ui.name .. ".EnemyTickets", "Value", tickets + 0.0)
+		UI_SetPropertyValue( _ticket_ui.name .. ".EnemyTicketsText", "Text", string.format("%.0f", tickets))
+	end
+end
+
+
+-- Called when a win condition has been met signalling that the match should end.
+-- Clean up UI and rules associated with this script module.
+function TicketUI_OnWinConditionTriggered(match_result)
+	if Rule_Exists(TicketUI_Update) then
+		Rule_Remove(TicketUI_Update)
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("ShowUI") by game mode script to explicitly show/hide scripted UI elements. 
+function TicketUI_ShowUI(show)
+	if show then
+		UI_SetPropertyValue( _ticket_ui.name .. ".Tickets", "Visibility", "Visible")
+	else
+		UI_SetPropertyValue( _ticket_ui.name .. ".Tickets", "Visibility", "Hidden")
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+-- Rule that updates game timer visibility based on user setting.
+function TicketUI_Update(context, data)
+	if _ticket_ui.game_timer_visible == nil then
+		if SystemConfig_GetSettingBool("ShowGameTimer", false) then
+			UI_SetPropertyValue( _ticket_ui.name .. ".TicketElapsedTime", "Visibility", "Visible")
+		else
+			UI_SetPropertyValue( _ticket_ui.name .. ".TicketElapsedTime", "Visibility", "Hidden")
+		end
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Private/Internal functions
+-----------------------------------------------------------------------
+
+function TicketUI_GetTeam(player)
+	local player_index = World_GetPlayerIndex(player)
+	for _, team in pairs(_ticket_ui.teams) do
+		for _, index in pairs(team.players) do
+			if index == player_index or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == R_ALLY then
+				return team
+			end
+		end
+	end
+end
+
+
+function TicketUI_CreateUI()
+
+	local xaml =
+[[<StackPanel
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:hudModel="clr-namespace:HUDModelTypes"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		VerticalAlignment="Top"
+		HorizontalAlignment="Center"
+		Orientation="Vertical"
+		Margin="12">
+
+	<Grid x:Name="Tickets" Visibility="Hidden">
+		<Grid.ColumnDefinitions>
+			<ColumnDefinition Width="Auto" />
+			<ColumnDefinition Width="Auto" />
+			<ColumnDefinition Width="Auto" />
+		</Grid.ColumnDefinitions>
+		<Grid.RowDefinitions>
+			<RowDefinition Height="Auto" />
+			<RowDefinition Height="*" />
+		</Grid.RowDefinitions>
+
+		<Border x:Name="BorderTicketMeter" 
+				Grid.Column="1" 
+				HorizontalAlignment="Stretch" 
+				VerticalAlignment="Top" 
+				Height="{StaticResource VPProgressBarHeight}" 
+				Margin="18,0,18,0" 
+				Background="{StaticResource VPProgressBarCenterBrush}"
+				Visibility="Collapsed" />
+
+		<!--  Player Tickets Progress Bar  -->
+		<Grid x:Name="AllyTicketMeter"
+				Grid.Column="0"
+				Width="{StaticResource VPProgressBarWidth}"
+				Height="{StaticResource VPProgressBarHeight}"
+				Margin="0,0,-18,0" Background="{StaticResource VPProgressBarLBrush}"
+				Visibility="Collapsed">
+			<Grid HorizontalAlignment="Right" Margin="{StaticResource VPProgressBarInnerMargin}" Width="248"  Height="{StaticResource VPProgressBarInnerHeight}" 
+					VerticalAlignment="Center">
+				<ProgressBar x:Name="AllyTickets" Margin="0,0,26,0"
+						FlowDirection="RightToLeft" Width="222" 
+						Foreground="{StaticResource VPAllyProgressBarBrush}"
+						Style="{StaticResource VPProgressBar}"
+						Value="0.0" />
+				<Border Margin="0,0,26,0" Background="{StaticResource VPProgressBarOverlayLBrush}" />
+			</Grid>
+			<!--  Player Tickets Text  -->
+			<TextBlock x:Name="AllyTicketsText" Margin="18,0,0,0"
+					HorizontalAlignment="Left" 
+					VerticalAlignment="Center"
+					Foreground="{StaticResource VPAllyTicketTextBrush}"
+					Style="{StaticResource VictoryPointTextStyle}"
+					TextAlignment="Right" />
+		</Grid>
+
+		<!--  Enemy Tickets Progress Bar  -->
+		<Grid x:Name="EnemyTicketMeter" Grid.Column="2"
+				Width="{StaticResource VPProgressBarWidth}"
+				Height="{StaticResource VPProgressBarHeight}"
+				Margin="-18,0,0,0" Background="{StaticResource VPProgressBarRBrush}"
+				Visibility="Collapsed">
+			<Grid HorizontalAlignment="Left" Margin="{StaticResource VPProgressBarInnerMargin}" Width="248" Height="{StaticResource VPProgressBarInnerHeight}" 
+					VerticalAlignment="Center">
+				<ProgressBar x:Name="EnemyTickets" Width="222" Margin="26,0,0,0" 
+						FlowDirection="LeftToRight" 
+						Foreground="{StaticResource VPEnemyProgressBarBrush}"
+						Style="{StaticResource VPProgressBar}"
+						Value="0.0" />
+				<Border Background="{StaticResource VPProgressBarOverlayRBrush}" Margin="26,0,0,0" />
+			</Grid>
+			<!--  Enemy Tickets Text  -->
+			<TextBlock x:Name="EnemyTicketsText" Margin="0,0,18,0"
+					HorizontalAlignment="Right" 
+					VerticalAlignment="Center"
+					Foreground="{StaticResource VPEnemyTicketTextBrush}"
+					Style="{StaticResource VictoryPointTextStyle}"
+					TextAlignment="Left" />
+		</Grid>
+
+		<!--  Victory Point Display  -->
+		<Control Grid.Column="1"
+				x:Name="VictoryPoints"
+				HorizontalAlignment="Center"
+				VerticalAlignment="Center"
+				Style="{StaticResource VictoryPointsPanelStyle}" />
+
+		<!--  Timer  -->
+		<StackPanel Orientation="Vertical"
+				Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3">
+			<Border x:Name="TimerSpacing" Height="0" />
+			<Border x:Name="TicketElapsedTime" 
+					HorizontalAlignment="Center" 
+					Background="{StaticResource BlackTransparent60Brush}" 
+					CornerRadius="4" 
+					Padding="8,3,8,0"
+					Visibility="Collapsed">
+				<TextBlock TextAlignment="Center" Padding="2,0,2,0"
+						HorizontalAlignment="Center" VerticalAlignment="Top"
+						Style="{StaticResource HUDMatchTimerStyle}"
+						Text="{Binding ElapsedTime, Converter={StaticResource TimeFormat}, Mode=OneWay}" />
+			</Border>
+		</StackPanel>
+	</Grid>
+</StackPanel>]]
+
+	UI_AddChild("", "XamlPresenter", _ticket_ui.name, { IsHitTestVisible = false, Xaml = xaml })
+
+	TicketUI_Update()
+end
+
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+--? @shortdesc Sets the visibility of various elements of the ticket UI.
+function TicketUI_SetVisibility(ticket_meter_visible, vp_indicator_visible, game_timer_visible, game_timer_spacing)
+	if scartype(ticket_meter_visible) == ST_BOOLEAN then
+		_ticket_ui.ticket_meter_visible = ticket_meter_visible
+	end
+	if scartype(vp_indicator_visible) == ST_BOOLEAN then
+		_ticket_ui.vp_indicator_visible = vp_indicator_visible
+	end
+	_ticket_ui.game_timer_visible = game_timer_visible
+	
+	local _SetVisibility = function(element, is_visble)
+		if is_visble then
+			UI_SetPropertyValue(_ticket_ui.name.."."..element, "Visibility", "Visible")
+		else
+			UI_SetPropertyValue(_ticket_ui.name.."."..element, "Visibility", "Collapsed")
+		end
+	end
+
+	_SetVisibility("AllyTicketsText", _ticket_ui.ticket_meter_visible)
+	_SetVisibility("EnemyTicketsText", _ticket_ui.ticket_meter_visible)
+	_SetVisibility("AllyTicketMeter", _ticket_ui.ticket_meter_visible)
+	_SetVisibility("EnemyTicketMeter", _ticket_ui.ticket_meter_visible)
+	_SetVisibility("BorderTicketMeter", _ticket_ui.ticket_meter_visible)
+	_SetVisibility("VictoryPoints", _ticket_ui.vp_indicator_visible)
+	if _ticket_ui.game_timer_visible == nil then
+		_SetVisibility("TicketElapsedTime", SystemConfig_GetSettingBool("ShowGameTimer", false))
+		if not Rule_Exists(TicketUI_Update) then
+			Rule_AddInterval(TicketUI_Update, 1.0)
+		end
+	else
+		_SetVisibility("TicketElapsedTime", _ticket_ui.game_timer_visible)
+	end
+
+	-- Allows for inserting other stuff between the ticket/VP elements and the game timer
+	if scartype(game_timer_spacing) == ST_NUMBER then
+		UI_SetPropertyValue(_ticket_ui.name..".TimerSpacing", "Height", game_timer_spacing + 0.0)
+	end
+end

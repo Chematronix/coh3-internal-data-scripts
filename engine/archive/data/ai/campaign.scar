@@ -1,0 +1,25 @@
+import( 'tactics.scar' )
+import( 'utility/debug.scar' )
+import( 'ai-view.scar' )
+
+--------------------------------------------------------------------
+function Rule_CampaignAIThink()	
+
+	aitraceclear_ext( "Rule_CampaignAIThink" )
+
+	DebugDisplay()
+end
+
+--------------------------------------------------------------------
+-- InitializeAI - where the AI starts
+function InitializeCampaignAI()
+
+	print("InitializeCampaignAI")
+	
+	AI_KillAllTasks()
+	TimeRule_RemoveAll()
+	
+	AI_SimulatePre()	
+	TimeRule_AddInterval( Rule_CampaignAIThink, 1.0, 0)
+end
+

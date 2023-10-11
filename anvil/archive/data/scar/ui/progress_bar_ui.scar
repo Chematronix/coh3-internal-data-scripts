@@ -1,0 +1,60 @@
+-----------------------------------------------------------------------
+--
+-- Shows a progress bar over tracked targets in the HUD
+--
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+
+--? @shortdesc Creates a progress bar over the given target with a custom message that will last for <lifetime> seconds,
+--? @args SGroup/EGroup/Entity/Squad/Position target, Number lifetime, LocString message
+function ProgressBar_Create(target, lifetime, message)
+	
+	local final_message = Loc_ToAnsi(message)
+	
+	local final_target = nil
+	local target_type = scartype(target)
+	if target_type == ST_SGROUP and SGroup_Count(target) > 0 then
+		final_target = SGroup_GetSquadAt(target, 1)
+	elseif target_type == ST_EGROUP and EGroup_Count(target) > 0 then
+		final_target = EGroup_GetEntityAt(target, 1)
+	elseif target_type == ST_SCARPOS or target_type == ST_ENTITY or target_type == ST_SQUAD then
+		final_target = target
+	end
+	
+	if final_target == nil then
+		return
+	end
+	
+	local data = {
+		Message = final_message,
+		DataTemplate = "ProgressBarDataTemplate",
+	}
+	
+	UI_CreateTargetTrackingTag(final_target, lifetime, data)
+	
+end
+
+--? @shortdesc Destroys the progress bar over the given target
+--? @args SGroup/EGroup/Entity/Squad/Position target
+function ProgressBar_Destroy(target)
+	
+	local final_target = nil
+	local target_type = scartype(target)
+	if target_type == ST_SGROUP and SGroup_Count(target) > 0 then
+		final_target = SGroup_GetSquadAt(target, 1)
+	elseif target_type == ST_EGROUP and EGroup_Count(target) > 0 then
+		final_target = EGroup_GetEntityAt(target, 1)
+	elseif target_type == ST_SCARPOS or target_type == ST_ENTITY or target_type == ST_SQUAD then
+		final_target = target
+	end
+	
+	if final_target == nil then
+		return
+	end
+	
+	UI_DestroyTargetTrackingTag(final_target)
+	
+end

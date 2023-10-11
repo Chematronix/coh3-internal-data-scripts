@@ -1,0 +1,124 @@
+-- AiManager Event Handler
+
+--~ Event Info to Setup Listener
+--~ Callback
+--~ Event
+--~ Target table of target data
+
+--~ Event Stored in Data
+--~ event.EvType
+--~ event.fn
+--~ event.target - table of data for paramater specific events
+
+--~ Event Passed to Listener
+--~ listern(target)
+
+
+
+Ai.Events = {}
+local Events = Ai.Events
+
+Events.EventType = {
+	EntityDeath 			= "EntityDeath", -- Any time an entity dies
+	SquadDeath 				= "SquadDeath", -- Different from Unit in that a squad may not be apart of an encounter
+	
+	UnitDeath 				= "UnitDeath", -- Requires Unit Target
+	UnitPinned 				= "UnitPinned", -- Requires Unit Target
+	UnitStateChange 		= "UnitStateChange",-- Requires Unit Target
+	UnitBehaviorAdded 		= "UnitBehaviorAdded",-- Requires Unit Target
+	UnitBehaviorRemoved 	= "UnitBehaviorRemoved",-- Requires Unit Target
+	UnitNear				= "UnitNear",-- Requires Unit Target
+	
+	EncounterDeath 			= "EncounterDeath", -- Requires Encounter Target
+	EncounterPinned 		= "EncounterPinned", -- Requires Encounter Target
+	EncounterStateChange 	= "EncounterStateChange",-- Requires Encounter Target
+	EncounterUnitAdded 		= "EncounterUnitAdded",-- Requires Encounter Target
+	EncounterUnitRemoved 	= "EncounterUnitRemoved",-- Requires Encounter Target
+	EncounterNear 			= "EncounterNear",-- Requires Encounter Target
+	
+	GoalStateChange 		= "GoalStateChange", -- requires goal target
+}
+
+
+
+Events.Listeners = {}
+
+function Events:Init()
+	-- setup the listener tables based on defined events	
+	for k,v in pairs(self.EventType)do
+		self.Listeners[v] = {}
+	end
+end
+
+function Events:Update()
+
+end
+
+-- Adds default listener, or calls custom function if listener needs added info / maintenence
+function Events:AddListener(callback, event, target)
+	if(self[event] and type(self[event].AddListener == "function"))then
+		self[event].AddListener(callback, event, target)
+	else
+		table.insert(self.Listeners[event], {fn=callback, event=event})
+	end
+end
+
+-- Handles incoming events
+function Events:ProcessEvent(event)
+	for k,listener in pairs(self.Listeners[event.evType])do 
+		if(listener.target)then
+			if(listener.target == event.target)then
+				listener.fn(event.data)
+			end
+		else
+			listener.fn(event.data)
+		end
+	end
+end
+
+-- Send an event (anyone can do it)
+function Events:SendEvent(event, data)
+	self:ProcessEvent({evType=event, data=data})
+end
+
+
+function Events.EntityDeath(entity, killer)
+	Ai.Events:SendEvent(Ai.Events.EventType.EntityDeath, {entity, killer})
+end
+
+function Events.SquadDeath(squad, killer)
+	Ai.Events:SendEvent(Ai.Events.EventType.SquadDeath, {squad, killer})
+end
+
+Events.UnitNear = {}
+function Events.UnitNear.AddListener(callback, event, target)
+	print("Added Unit Event")
+	local listeners = Events.Listeners.UnitNear or fatal("Can't find UnitNear Listener Table")
+	table.insert(Ai.Events.Listeners[event], {fn=callback, event=target})
+	
+	local ping = function()
+		local dist = Prox_MarkerSGroup(target.marker, target.unit.sgroup, PROX_SHORTEST)
+		if(Prox_MarkerSGroup(target.marker, target.unit.sgroup, PROX_SHORTEST) < target.distance)then
+			Events:ProcessEvent({evType = event, data = unit})
+			Rule_RemoveMe()
+		end
+	end
+	
+	table.insert(__rule_holder, ping)
+	
+	Rule_AddInterval(ping, 1)
+end
+
+__rule_holder = {}
+
+--[[
+-- AI Events Initialize
+]]--
+
+function AIEvents_Initialize()
+	Events:Init()
+end
+
+Scar_AddInit( AIEvents_Initialize )
+
+

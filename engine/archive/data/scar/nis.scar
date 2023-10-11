@@ -1,0 +1,693 @@
+----------------------------------------------------------------------------
+-- NIS helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+----------------------------------------------------------------------------
+
+function __DoNothing()
+
+end
+
+NIS_OPENING	= 0
+NIS_MID		= 1
+NIS_CLOSING	= 2
+NIS_OPENING_BLACK = 3
+NIS_OPENING_FULLSCREEN = 4
+NIS_OPENING_BLEND = 5
+NIS_CLOSING_NOFADE = 6
+NIS_PERF_TEST = 7
+
+--? @group scardoc;Util
+
+--? @shortdesc Plays an NIS. The NIS should have a call to NIS_START(details) at the beginning, and NIS_END() at the end.
+--? @extdesc Example details table keys: {style = NIS_OPENING, NIS_MID or NIS_CLOSING, exemptions = {sg_unit_to_not_despawn}, revealFOW = true, callbackStart = func, callbackEnd = func}
+--? @result Void
+--? @args LuaFunction NIS
+function Util_StartNIS(NIS)
+
+	sg_nis_invulnerableunits = SGroup_CreateIfNotFound("sg_nis_invulnerableunits")
+	sg_nis_removedunits = SGroup_CreateIfNotFound("sg_nis_removedunits")
+	eg_nis_removedentities = EGroup_CreateIfNotFound("eg_nis_removedentities")
+	
+	sg_nis_decoratorHideGroup = SGroup_CreateIfNotFound("sg_nis_decoratorHideGroup")
+	
+	local event = function()
+		
+		_nis_preambleHasHappened = false
+		_nis_startHasHappened = false
+		_nis_endHasHappened = false
+		_nis_postambleHasHappened = false
+		_nis_storedDetails = nil 
+		_nis_isPlaying = true
+		
+		NIS()	-- <== this is the user's NIS
+
+		_nis_isPlaying = false
+		
+		if _nis_endHasHappened == false then
+			NIS_END(_nis_storedDetails)
+		elseif _nis_postambleHasHappened == true then
+			Rule_AddOneShot(_NIS_BackToGameplay, 0.5)
+		end
+		
+		
+	end
+	
+	Event_Start(event, 0)
+	
+end
+
+
+
+--? @group scardoc;NIS
+
+
+--? @shortdesc ONLY USE THIS INSIDE AN NIS EVENT with an NIS camera. Starts the NIS camera drifting.
+--? @extdesc "Drifting" moves the camera around in the shape of an infinity symbol, so it doesn't look quite so static.
+--? @result Void
+--? @args [Real totalTime, Real driftScale]
+function NIS_StartDrift(totalTime, driftScale)
+	
+	totalTime = totalTime or 16
+	driftScale = driftScale or 1
+	
+	nis_drift(totalTime, driftScale)
+
+end
+
+function Util_DriftNIS(totalTime, driftScale)
+	NIS_StartDrift(totalTime, driftScale)
+end
+
+--? @shortdesc ONLY USE THIS INSIDE AN NIS EVENT with an NIS camera. Stops the NIS camera drifting.
+--? @extdesc "Drifting" moves the camera around in the shape of an infinity symbol, so it doesn't look quite so static.
+--? @result Void
+function NIS_StopDrift()
+	nis_stopdrift()
+end
+
+--? @shortdesc ONLY USE THIS INSIDE AN NIS EVENT. Wait until the NIS camera hits its counterpart checkpoint.
+--? @extdesc Makes the script pause and wait until the camera portion hits "nis_pause()" (the counterpart checkpoint) on it's timeline. With these two functions, you can have the event script and camera sync up - i.e. make one wait for the other - at various points in the NIS and avoid all sorts of timing issues.
+--? @result Void
+--? @args Void
+function NIS_CameraCheckpoint()
+
+	while nis_ispaused() == false and Event_IsBeingSkipped() == false do
+		CTRL.Event_Delay(0.01)
+		CTRL.WAIT()
+	end
+	
+	nis_resume()
+	
+end
+
+--? @shortdesc Used to create a fade cut in an NIS
+--? @extdesc Call this in your NIS Event.  This will require an nis_pause() frame in your NIS file in order to work.
+--? @result Void
+--? @args Void
+function NIS_FadeCameraCut()
+	
+	CTRL.Game_FadeToBlack(FADE_OUT, 1)
+	CTRL.WAIT()
+	NIS_CameraCheckpoint()
+	CTRL.Game_FadeToBlack(FADE_IN, 1)
+	CTRL.WAIT()
+	
+end
+
+--? @shortdesc Stores the current camera position as the NIS's end_camera position.
+--? @extdesc Useful if you want the camera to always end where the player was last looking. If it does not return a position, nothing will be stored.
+--? @result Void
+--? @args Void
+function NIS_StoreCurrentCameraPos(details)
+
+	if scartype(Camera_GetTargetPos()) == ST_SCARPOS then
+		details.cameraEnd = Camera_GetTargetPos()
+	end
+	
+end
+
+
+
+
+--
+-- these next function take care of the transitions in and out of an NIS, and ensure that the preserve/restore is done at the correct point in that transition
+--
+
+
+--? @shortdesc ONLY USE THIS INSIDE AN NIS EVENT. Transition from the game into an NIS preamble - a quick section before the NIS proper. A preamble is totally optional, if you want to go straight into an NIS, skip this and use NIS_START instead.
+--? @extdesc See NIS_START for information about the details table. 
+--? @result Void
+--? @args Table details
+function NIS_PREAMBLE(details)
+
+	if scartype(details) ~= ST_TABLE then
+		details = {}
+	end
+	_nis_storedDetails = details
+	
+	--
+	-- make any vulnerable units invulnerable for the preamble (this is undone just before the NIS_START)
+	--
+	
+	_NIS_Preamble_PreserveState(details)
+	
+
+	
+	--
+	-- remove the UI 
+	--
+	
+	if details.style == NIS_OPENING or details.style == NIS_PERF_TEST then
+		Game_FadeToBlack(true, 0)
+	else
+		
+		Util_FullscreenMode(DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS)
+		
+		CTRL.Event_Delay(0.5)
+		CTRL.WAIT()
+
+	end
+	
+	_nis_preambleHasHappened = true
+	
+end
+
+
+--? @shortdesc ONLY USE THIS INSIDE AN NIS EVENT. Transition from the game (or a preamble) into an NIS.
+--? @extdesc You can do any setup after calling this, as that will occur once the screen has faded to black on the transition in. The game will fade back in to the NIS over the next half second or so (apart from opening cinematics, which is two seconds), so you may want to delay your first action accordingly. The details table should include, at the very least, the following items: style (NIS_OPENING, NIS_MID, or NIS_CLOSING), revealFOW (a Boolean). If you included details in a preamble, you don't need to supply them again here.
+--? @result Void
+--? @args [Table details]
+function NIS_START(details)
+	
+	_nis_startHasHappened = true
+	--stop player all abilities. so we don't get duplicated units in the case of delayed units spawning
+	nis_stop_player_abilities()
+	
+	if scartype(details) ~= ST_TABLE then
+		details = _nis_storedDetails
+		if scartype(details) ~= ST_TABLE then
+			details = {}
+		end
+	end
+	_nis_storedDetails = details
+	
+	
+	-- fade to black
+	if _nis_preambleHasHappened == false then
+		_NIS_Preamble_PreserveState(details)
+	end
+	
+	if details.style == NIS_OPENING then
+		Game_FadeToBlack(true, 0)
+	else
+		CTRL.Game_FadeToBlack(true, 1.0)
+		CTRL.WAIT()
+	end
+	
+	-- now while in black... do all the pre-NIS stuff
+	
+	Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+	
+	if scartype(details.callbackStart) == ST_FUNCTION then
+		details.callbackStart()
+	end
+	
+	_NIS_Start_PreserveState(details)
+	
+	if details.cameraStart ~= nil then
+		Camera_MoveTo(details.cameraStart)
+	end
+	
+	if details.musicMovementStart ~= nil then
+		Music_PlayMovement(details.musicMovementStart)
+	end
+	
+	
+	CTRL.Event_Delay(0.5)
+	CTRL.WAIT()
+	
+	Rule_AddOneShot(_NIS_FadeUpIntoNIS, 0.5)
+
+	
+	-- ...and return back to the user's NIS which will kick off the action
+	
+end
+
+
+
+--? @shortdesc ONLY USE THIS INSIDE AN NIS EVENT. Transition from the NIS back to the game.
+--? @extdesc You can safely do any cleanup after calling this, and it will occur once the screen is black.
+--? @result Void
+--? @args [Table details]
+function NIS_END(details)
+
+	if scartype(details) ~= ST_TABLE then
+		details = _nis_storedDetails
+		if scartype(details) ~= ST_TABLE then
+			details = {}
+		end
+	end
+	
+	if details.style ~= NIS_CLOSING_NOFADE then
+		if Event_IsBeingSkipped() == false and _nis_startHasHappened == true then
+			CTRL.Game_FadeToBlack(FADE_OUT, 1.0)
+			CTRL.WAIT()
+		end
+		nis_stop()		-- Stop any NIS cameras (this ensures the fade in works)
+
+		if Event_IsBeingSkipped() == true and _nis_startHasHappened == true then
+			Game_FadeToBlack(FADE_OUT, 0)
+		end
+	end
+
+	-- now in black... do all the post-NIS stuff
+	
+	_NIS_End_RestoreState_InBlack(details)
+	
+	if scartype(details.callbackEnd) == ST_FUNCTION then
+		details.callbackEnd()
+	end
+	
+	if details.musicMovementEnd == nil then 
+		-- if there was no start track, then we don't want to restart the music
+		if details.musicMovementStart ~= nil then
+			-- no music, restore 'default' track
+			Music_PlayDefaultMovement()
+		end
+	else
+		if details.musicMovementEnd == details.musicMovementStart then
+			-- Do nothing; the music should continue seamlessly
+		else
+			Music_SetDefaultMovement(details.musicMovementEnd)
+			Music_PlayDefaultMovement()
+		end
+	end
+	
+	-- now set the fade up back into the game...
+	
+	if details.style ~= NIS_CLOSING or details.style ~= NIS_CLOSING_NOFADE then
+		
+		-- hold a little bit before fade back into the game
+		if Event_IsBeingSkipped() == false then
+			CTRL.Event_Delay(0.5)
+			CTRL.WAIT()
+		end
+	
+		Camera_ResetToDefault()
+		Rule_AddOneShot(_NIS_MoveCameraBack, 0.5, details)
+		
+	end
+	
+	-- mark that this has been called (so it can be auto-called otherwise)
+	_nis_endHasHappened = true
+	
+end
+
+
+
+
+function _NIS_FadeUpIntoNIS()
+
+	-- now set the fade up into the NIS itself
+	if _nis_storedDetails.style == NIS_OPENING then
+		Game_FadeToBlack(false, 2)
+		_DisplayTitleCards()
+	elseif _nis_storedDetails.style == NIS_MID then
+		Game_FadeToBlack(false, 1.5)
+	else
+		Game_FadeToBlack(false, 1.0)
+	end
+
+end
+
+function _NIS_MoveCameraBack(id, data)
+	local triggerFadeInTime = 0
+	
+	-- If there's a camera end, set the camera there
+	if data.cameraEnd ~= nil then
+		if _nis_startHasHappened then
+			Camera_MoveTo(data.cameraEnd, false)
+		else
+			triggerFadeInTime = 1.5
+			Camera_PanOverTimeTo(data.cameraEnd, triggerFadeInTime)
+		end
+	end
+	
+	Rule_AddOneShot(_NIS_FadeBackIntoGame, triggerFadeInTime, data)
+end
+
+function _NIS_FadeBackIntoGame(id, data)
+	
+	local fadeInTime = 1.5
+	
+	if _nis_startHasHappened == false then
+		fadeInTime = 0
+	end
+	
+	-- fade back into gameplay (or maybe a post-amble?)
+	if _nis_isPlaying == true then
+		_nis_postambleHasHappened = true
+	else
+		Rule_AddOneShot(_NIS_BackToGameplay, (fadeInTime+0.5))
+	end
+	
+	Util_FullscreenMode(DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS)
+	Game_FadeToBlack(FADE_IN, fadeInTime)
+	
+end
+
+function _NIS_BackToGameplay()		-- this fades the UI back in - either alongside the fade back in (normally), or after a postamble
+
+	SGroup_EnableUIDecorator(sg_nis_decoratorHideGroup, true)
+	Util_NormalMode()
+	Rule_AddOneShot(_NIS_End_RestoreState_PostFade, 1)
+	if scartype(_nis_storedDetails.callbackComplete) == ST_FUNCTION then
+		_nis_storedDetails.callbackComplete()
+	end
+
+end
+
+
+--
+-- These next functions take care of preserving and restroing the game state at either end of the NIS
+--
+
+function _NIS_Preamble_PreserveState(details)
+	
+	--
+	-- Make all units invulnerable for the preamble (Note: we ignore units that already have invulnerability, as they would have their state reset by this)
+	--
+	
+	SGroup_Clear(sg_nis_invulnerableunits)
+	
+	for index = 1, World_GetPlayerCount() do 
+		local player = World_GetPlayerAt(index)
+		Player_GetAll(player, sg_temp)
+		
+		SGroup_AddGroup(sg_nis_invulnerableunits, sg_temp)
+	end
+
+	SGroup_Duplicate(sg_nis_invulnerableunits, sg_nis_decoratorHideGroup)
+	
+	local _CheckSquad = function(gid, idx, sid)
+		if Squad_GetInvulnerable(sid) == true then
+			SGroup_Remove(gid, sid)
+		end
+	end
+	
+	SGroup_ForEach(sg_nis_invulnerableunits, _CheckSquad)
+
+	SGroup_EnableUIDecorator(sg_nis_decoratorHideGroup, false)
+	SGroup_SetInvulnerable(sg_nis_invulnerableunits, true)
+	
+	
+	--
+	-- pause rules
+	--
+	
+	Rule_PauseAll()
+	
+	
+	--
+	-- pause timers
+	--
+	
+	Timer_PauseAllTimers()
+	
+	
+	--
+	-- record current resource levels
+	--
+
+	_NIS_StartingResourceLevels = {}
+	
+	for player = 1, World_GetPlayerCount() do
+		_NIS_StartingResourceLevels[player] = {}
+		for resource = RT_Begin, RT_Count do
+			_NIS_StartingResourceLevels[player][resource] = Player_GetResource(World_GetPlayerAt(player), resource)
+		end
+	end
+
+	
+end
+
+
+
+
+function _NIS_Start_PreserveState(details)
+
+	-- 
+	-- remove the holding pattern invulnerability, if it was set from the preamble
+	--
+	SGroup_SetInvulnerable(sg_nis_invulnerableunits, false)
+	SGroup_Clear(sg_nis_invulnerableunits)
+	
+	
+	--
+	-- complete any units in the process of spawning
+	--
+	UnitEntry_CompleteAllImmediately()
+	UnitExit_CompleteAllImmediately()
+	
+	
+	--
+	-- Destroy any squads in squads to Destroy (Once units are despawned, it's hard to kill them)
+	--
+	if scartype(details.destroy) ~= ST_NIL then
+		if scartype(details.destroy) == ST_TABLE then
+			details.destroy = {details.destroy}
+		end
+		for index, item in pairs(details.destroy) do 
+			if scartype(item) == ST_SGROUP then
+				print("Destroying SGroup")
+				SGroup_DestroyAllSquads(item)
+			elseif scartype(item) == ST_EGROUP then
+				print("Destroying EGroup")
+				EGroup_DestroyAllEntities(item)
+			end
+		end
+	end
+	
+	--
+	-- despawn all player, ally, and enemy units
+	--
+	
+	SGroup_Clear(sg_nis_removedunits)
+	EGroup_Clear(eg_nis_removedentities)
+	
+	if details.style == NIS_MID or details.style == NIS_CLOSING or details.style == NIS_CLOSING_NOFADE then
+		
+		for index = 1, World_GetPlayerCount() do 
+			local player = World_GetPlayerAt(index)
+			Player_GetAll(player, sg_temp)
+			SGroup_AddGroup(sg_nis_removedunits, sg_temp)
+		end
+		
+		if scartype(details.exemptions) ~= ST_TABLE then
+			details.exemptions = {details.exemptions}
+		end
+		
+		for index, item in pairs(details.exemptions) do
+			if scartype(item) == ST_SGROUP then
+				SGroup_RemoveGroup(sg_nis_removedunits, item)
+				SGroup_AddGroup(sg_nis_invulnerableunits, item)
+			elseif scartype(item) == ST_PLAYER then
+				Player_GetAll(item, sg_temp)
+				SGroup_RemoveGroup(sg_nis_removedunits, sg_temp)
+				SGroup_AddGroup(sg_nis_invulnerableunits, sg_temp)
+			end
+		end
+		
+		-- Clear out the shotSpaces of all player units
+		
+		-- Filter all nil owned (non-player owned objects) out of the shot spaces
+		if scartype(details.shotSpaces) == ST_TABLE and (#details.shotSpaces) > 0 then
+			for k,v in pairs(details.shotSpaces) do 
+				if v.player == nil then
+					World_GetNeutralEntitiesNearMarker(eg_temp, v.location)
+					
+					EGroup_Filter(eg_temp, __shotSpaceEntities, FILTER_KEEP)
+					EGroup_AddEGroup(eg_nis_removedentities, eg_temp)
+				else
+					SGroup_Clear(sg_temp)
+					EGroup_Clear(eg_temp)
+					Player_GetAllSquadsNearMarker(v.player, sg_temp, v.location)
+					Player_GetAllEntitiesNearMarker(v.player, eg_temp, v.location)
+					
+					SGroup_AddGroup(sg_nis_removedunits, sg_temp)
+					EGroup_AddEGroup(eg_nis_removedentities, eg_temp)
+				end
+				if v.purgeOrphans == true then
+					Orphan_Purge(Marker_GetPosition(v.location), Marker_GetProximityRadiusOrDefault(v.location, 0))
+				end
+			end
+		end
+		
+		SGroup_FilterSpawned(sg_nis_removedunits, FILTER_KEEP)
+		
+		-- Remove any mines, in case they're booby trapping the NIS area
+		if details.removeMines ~= false and scartype(__mineEntities) == ST_TABLE then
+			
+			Player_GetAll(player1)
+			EGroup_Filter(eg_allentities, __mineEntities, FILTER_KEEP)
+			
+			EGroup_DestroyAllEntities(eg_allentities)
+			
+		end
+		
+		
+		--  TEMP: Disable all AI players  -  fix an issue whereby the encounters would stop because all it's units were despawned during the NIS
+		_AIPlayersDisabled = {}
+		for index = 1, World_GetPlayerCount() do
+			local player = World_GetPlayerAt(index)
+			if AI_IsEnabled(player) then
+				AI_Enable(player, false)
+				table.insert(_AIPlayersDisabled, player)
+			end
+		end
+		
+		SGroup_DeSpawn(sg_nis_removedunits)
+		
+		if scartype(details.hide) ~= ST_NIL then
+			if scartype(details.hide) ~= ST_TABLE then
+				details.hide = {details.hide}
+			end
+			for index, item in pairs(details.hide) do
+				if scartype(item) == ST_EGROUP then
+					EGroup_AddEGroup(eg_nis_removedentities, item)
+				end
+			end
+		end
+		EGroup_DeSpawn(eg_nis_removedentities)
+		
+		
+	end
+	
+	SGroup_SetInvulnerable(sg_nis_invulnerableunits, true)
+	
+	
+	--
+	-- set fog of war
+	--
+	
+	if details.revealFOW == true then
+		FOW_UIRevealAll()
+	end
+
+
+	--
+	-- mute ambient speech
+	--
+	
+	if details.muteGameplaySpeech ~= false then
+		Sound_Play2D("mute_gameplay_all_speech")
+	end
+	
+	
+	
+end
+
+
+
+function _NIS_End_RestoreState_InBlack(details)
+
+	
+	--
+	-- make sure any NIS camera is killed off
+	--
+	if details.style ~= NIS_CLOSING_NOFADE then
+		nis_skip()	
+	end
+
+	--
+	-- respawn all player, ally, and enemy units
+	--
+	
+	-- TEMP: re-enable all AI players
+	if scartype(_AIPlayersDisabled) ~= ST_NIL then
+		for index, player in pairs(_AIPlayersDisabled) do 
+			AI_Enable(player, true)
+		end
+	end
+	_AIPlayersDisabled = {}
+
+	if details.style == NIS_MID then
+		
+		SGroup_ReSpawn(sg_nis_removedunits)
+		EGroup_ReSpawn(eg_nis_removedentities)
+		
+	end
+	
+	--
+	-- force-deploy any units that are in the process of being deployed
+	--
+	UnitEntry_CompleteAllImmediately()
+	UnitExit_CompleteAllImmediately()
+	
+	-- 
+	-- Set all respawned units to be invulnerable
+	-- 
+	SGroup_SetInvulnerable(sg_nis_removedunits, true)
+	EGroup_SetInvulnerable(eg_nis_removedentities, true)
+
+	
+	--
+	-- restore rules
+	--
+	
+	Rule_UnpauseAll()
+	
+	
+	--
+	-- restore timers
+	--
+	
+	Timer_ResumeAllTimers()
+	
+	
+	--
+	-- restore resource levels
+	--
+
+	for player = 1, World_GetPlayerCount() do
+		for resource = RT_Begin, RT_Count do
+			Player_SetResource(World_GetPlayerAt(player), resource, _NIS_StartingResourceLevels[player][resource])
+		end
+	end
+	
+	_NIS_StartingResourceLevels = nil 
+	
+	
+	--
+	-- restore fog of war
+	--
+	
+	if details.revealFOW == true then
+		FOW_UIUnRevealAll()
+	end
+
+	
+	--
+	-- unmute ambient speech
+	--
+	
+	if details.muteGameplaySpeech ~= false and details.style ~= NIS_CLOSING and details.style ~= NIS_CLOSING_NOFADE then
+		Sound_Play2D("unmute_gameplay_all_speech")
+	end
+	
+	
+
+end
+
+function _NIS_End_RestoreState_PostFade()
+	print("Setting units vulnerable")
+	SGroup_SetInvulnerable(sg_nis_removedunits, false)
+	EGroup_SetInvulnerable(eg_nis_removedentities, false)
+	SGroup_SetInvulnerable(sg_nis_invulnerableunits, false)
+	
+	-- clean up groups
+	SGroup_Clear(sg_nis_removedunits)
+	SGroup_Clear(sg_nis_invulnerableunits)
+	EGroup_Clear(eg_nis_removedentities)
+end
+

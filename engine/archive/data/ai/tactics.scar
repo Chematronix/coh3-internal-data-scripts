@@ -1,0 +1,1023 @@
+import("Player.scar")
+import("Entity.scar")
+import("Squad.scar")
+import("Groups.scar")
+
+-- how far to look back when checking if we've taken a shot or been shot at
+s_CombatHistoryTicks 	= 5 * 8
+
+s_LowHealthPercentage 	= 0.55
+s_LowHealthPercentageVehicle 	= 0.55
+
+s_MinArmorForHeavyVehicle = 35.0
+
+MAX_TACTIC_PRIORITY = 1000
+
+s_TargetSelectionGlobalBestMinScoreRatio_Artillery = 0.8
+s_TargetSelectionGlobalBestMinScoreRatio_Recon = 0.6
+s_TargetSelectionGlobalBestMinScoreRatio_SupplyDrop = 0.6
+s_TargetSelectionGlobalBestMinScoreRatio_GeneralAbility = 0.5
+
+-- target filter flags (bit fields) for use by the target filter functions:
+--
+--   TFF_All                  -- the default, no restriction
+--   TFF_Visible              -- only visible targets
+--   TFF_NotVisible           -- only invisible targets
+--   TFF_Infantry             -- only infantry targets
+--   TFF_Vehicle              -- only vehicle targets
+--   TFF_CausingSuppression   -- only targets that cause suppression
+--   TFF_InFriendlySectors    -- only targets that are in friendly sectors
+--   TFF_InEnemySectors       -- only targets that are in enemy sectors
+--   TFF_InMostClumpedSector  -- only targets that are in the most clumped sector
+--   TFF_NotNearPlayerStartingPositions         -- don't target anything in HQ sectors
+--   TFF_FriendlyTargets      -- only friendly targets
+--   TFF_InjuredInfantry      -- only injured infantry targets
+-- 	 TFF_InSectorProducingResources -- only targets in resource producing sectors
+--   TFF_MeleeCombat		  -- only targets engaged in melee combat (Has an OR relationship with TFF_RangedCombat)
+--   TFF_RangedCombat		  -- only targets engaged in ranged combat (Has an OR relationship with TFF_MeleeCombat)
+  
+--------------------------------------------------------------------------------
+-- util
+
+
+-- Perform bitwise OR operation on two 32-bit integers
+function bit32_bor_arg2(a,b)
+  local floor = math.floor
+  local r = 0
+  for i = 0, 31 do
+    local x = a / 2
+    local y = b / 2
+    -- Check if the current bit is set for either number.
+    if x ~= floor(x) or y ~= floor(y) then
+      r = r + 2^i
+    end
+    a = floor (a / 2)
+    b = floor (b / 2)
+  end
+  return r
+end
+
+function bit32_bor(...)
+  local arg = {...}
+  
+  local r = arg[1]
+  for i = 2, #arg do
+    r = bit32_bor_arg2(r, arg[i])
+  end
+  return r
+end
+
+function get_targeting_global_best_min_score_ratio_for_artillery()
+  return s_TargetSelectionGlobalBestMinScoreRatio_Artillery
+end
+
+function get_targeting_global_best_min_score_ratio_for_recon()
+  return s_TargetSelectionGlobalBestMinScoreRatio_Recon
+end
+
+function get_targeting_global_best_min_score_ratio_for_supply_drop()
+  return s_TargetSelectionGlobalBestMinScoreRatio_SupplyDrop
+end
+
+function get_targeting_global_best_min_score_ratio_for_general_ability()
+  return s_TargetSelectionGlobalBestMinScoreRatio_GeneralAbility
+end
+
+function is_low_health_sim_quad(sim_squad, threshold)
+	
+	local h = Squad_GetHealth(sim_squad)
+	local hMax = Squad_GetHealthMax(sim_squad)
+	local hP = h / hMax
+	
+	return hP < (threshold or 0.25)
+	
+end
+
+function is_low_health_entity(entity)
+	return (Entity_GetHealthPercentage(entity) < s_LowHealthPercentage)
+end
+
+
+function is_enemy_squad(target_squad)
+	if not World_OwnsSquad(target_squad) then
+			
+		local target_player = Squad_GetPlayerOwner(target_squad)
+		local self_player = AI_GetPlayer()
+
+		if Player_GetRelationship(self_player, target_player) == R_ENEMY then
+			return true
+		end
+	end
+	
+	return false
+end
+
+function is_friendly_squad(target_squad) 
+	if not World_OwnsSquad(target_squad) then
+			
+		local target_player = Squad_GetPlayerOwner(target_squad)
+		local self_player = AI_GetPlayer()
+			
+		if Player_GetRelationship(self_player, target_player) == R_ALLY then
+			return true
+		end
+	end
+	
+	return false
+end
+
+function is_full_squad(target_squad)
+	return Squad_Count(target_squad) >= Squad_GetMax(target_squad)
+end
+
+function can_reinforce_squad(target_squad)
+	return not is_full_squad(target_squad)
+end
+
+function is_healthy_squad(target_squad)
+	return not is_low_health_sim_quad(target_squad, s_LowHealthPercentage)
+end
+
+function is_healthy_vehicle_squad(target_squad)
+	if not Squad_HasVehicle(target_squad) then
+		return false
+	end
+	
+	return not is_low_health_sim_quad(target_squad, s_LowHealthPercentageVehicle) and not Squad_HasAnyCritical(target_squad)
+end
+
+function is_not_healthy_vehicle_squad(target_squad)
+	if not Squad_HasVehicle(target_squad) then
+		return false
+	end
+	
+	return is_low_health_sim_quad(target_squad, s_LowHealthPercentageVehicle) or Squad_HasAnyCritical(target_squad)
+end
+
+function is_not_vehicle(target_squad)
+	return not Squad_HasVehicle(target_squad)
+end
+
+function is_low_health_non_vehicle(target_squad)
+	return not Squad_HasVehicle(target_squad) and not is_healthy_squad(target_squad)
+end
+
+function non_moving(target_squad)
+	if( not Squad_IsMoving(target_squad) ) then
+		return true
+	end
+	return false
+end
+
+function non_moving_causing_suppression(target_squad)
+	local self_aiplayer = AI_GetAIPlayer()
+	if( not Squad_IsMoving(target_squad) and AI_CanSquadCauseSuppression(self_aiplayer, target_squad) ) then
+		return true
+	end
+	return false
+end
+
+function non_moving_vehicle(target_squad)
+	if( not Squad_IsMoving(target_squad) and Squad_HasVehicle(target_squad) ) then
+		return true
+	end
+	return false
+end
+
+function is_enemy_entity(target_entity)
+	--ignore entities that don't have health extensions
+	if( not World_OwnsEntity(target_entity) and Entity_GetHealthMax(target_entity) > 0 and not Entity_IsStrategicPoint(target_entity) ) then
+			
+		local target_player = Entity_GetPlayerOwner(target_entity)
+		local self_player = AI_GetPlayer()
+		
+		--ignore entities that don't have health extensions
+		if Player_GetRelationship(self_player, target_player) == R_ENEMY then
+			return true
+		end	
+	end	
+	return false
+end
+
+function is_friendly_entity(target_entity)
+	--ignore entities that don't have health extensions
+	if( not World_OwnsEntity(target_entity) and Entity_GetHealthMax(target_entity) > 0 ) then
+			
+		local target_player = Entity_GetPlayerOwner(target_entity)
+		local self_player = AI_GetPlayer()
+		
+		if Player_GetRelationship(self_player, target_player) == R_ALLY then
+			return true
+		end	
+	end	
+	return false
+end
+
+function is_neutral_entity(target_entity)
+  --ignore entities that don't have health extensions
+  if( Entity_GetHealthMax(target_entity) > 0 ) then
+    
+    -- neutral world owned entities
+    if ( World_OwnsEntity(target_entity) ) then
+      return true
+    end
+    
+    -- neutral Player owned entities
+    local target_player = Entity_GetPlayerOwner(target_entity)
+	local self_player = AI_GetPlayer()
+
+    if Player_GetRelationship(self_player, target_player) == R_NEUTRAL then
+      return true
+    end 
+  end 
+  return false
+end
+
+function is_structure_causing_suppression(target_entity)
+	local self_aiplayer = AI_GetAIPlayer()
+	if( Entity_IsBuilding(target_entity) and AI_CanEntityCauseSuppression(self_aiplayer, target_entity) ) then
+		return true
+	end	
+	return false
+end
+
+function is_damaged_building_entity(target_entity)
+	if not Entity_IsBuilding(target_entity) then
+		return false
+	end
+	
+	return is_low_health_entity(target_entity, s_LowHealthPercentageVehicle)
+end
+
+function get_first_enemy_entity_filter(squad, target_entities, filterPred, dualFilterPred)
+	local simSquad = AI_ConvertToSimSquad(squad)
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		
+		if is_enemy_entity(target_entity) then
+			if filterPred == nil or filterPred(target_entity) then
+				if dualFilterPred == nil or dualFilterPred(simSquad, target_entity) then
+					return target_entity
+				end
+			end
+		end
+	end	
+	return nil	
+end
+
+function get_first_friendly_entity_filter(squad, target_entities, filterPred, dualFilterPred)
+	local simSquad = AI_ConvertToSimSquad(squad)
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		
+		if is_friendly_entity(target_entity) then
+			if filterPred == nil or filterPred(target_entity) then
+				if dualFilterPred == nil or dualFilterPred(simSquad, target_entity) then
+					return target_entity
+				end
+			end
+		end
+	end	
+	return nil	
+end
+
+function get_first_friendly_or_neutral_repairable_entity_filter(squad, target_entities, filterPred, dualFilterPred)
+  local simSquad = AI_ConvertToSimSquad(squad)
+  local count = EGroup_CountSpawned(target_entities)
+  for i=1, count do
+    
+    local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+    
+    -- For neutral entities, we only consider repairing vehicles (not bunkers, sandbags, etc.)
+    if is_friendly_entity(target_entity) or (is_neutral_entity(target_entity) and Entity_IsVehicle(target_entity)) then
+      if filterPred == nil or filterPred(target_entity) then
+        if dualFilterPred == nil or dualFilterPred(simSquad, target_entity) then
+          return target_entity
+        end
+      end
+    end
+  end 
+  return nil  
+end
+
+function get_first_enemy_squad_filter(squad, target_squads, filterPred, dualFilterPred)
+	local simSquad = AI_ConvertToSimSquad(squad)
+	local count = SGroup_CountSpawned(target_squads)
+	for i=1, count do
+		
+		local target_squad = SGroup_GetSpawnedSquadAt(target_squads, i)
+		
+		if is_enemy_squad(target_squad) then
+			if filterPred == nil or filterPred(target_squad) then
+				if dualFilterPred == nil or dualFilterPred(simSquad, target_squad) then
+					return target_squad
+				end
+			end
+		end
+	end	
+	return nil
+end
+
+function get_first_friendly_squad_filter(squad, target_squads, filterPred, dualFilterPred)
+	local simSquad = AI_ConvertToSimSquad(squad)
+	local count = SGroup_CountSpawned(target_squads)
+	for i=1, count do
+		
+		local target_squad = SGroup_GetSpawnedSquadAt(target_squads, i)
+
+		if is_friendly_squad(target_squad) then
+			if filterPred == nil or filterPred(target_squad) then
+				if dualFilterPred == nil or dualFilterPred(simSquad, target_squad) then
+					return target_squad
+				end
+			end
+		end
+	end	
+	return nil
+end
+
+function get_first_healthy_friendly_squad(squad, target_squads)
+	return get_first_friendly_squad_filter(squad, target_squads, is_healthy_squad, nil)
+end
+
+function get_first_can_reinforce_friendly_squad(squad, target_squads)
+	return get_first_friendly_squad_filter(squad, target_squads, can_reinforce_squad, nil)
+end
+
+function get_first_enemy_entity(squad, target_entities)
+	return get_first_enemy_entity_filter(squad, target_entities, nil, nil)
+end
+
+function get_first_enemy_squad(squad, target_squads)
+	return get_first_enemy_squad_filter(squad, target_squads, nil, nil)
+end
+
+function get_first_healthy_enemy_squad(squad, target_squads)
+	return get_first_enemy_squad_filter(squad, target_squads, is_healthy_squad, nil)
+end
+
+function get_first_enemy_squad_vehicle(squad, target_squads)
+	return get_first_enemy_squad_filter(squad, target_squads, Squad_HasVehicle, nil)
+end
+
+function get_first_healthy_enemy_squad_vehicle(squad, target_squads)
+	return get_first_enemy_squad_filter(squad, target_squads, is_healthy_vehicle_squad, nil)
+end
+
+function Position_IsValid(pos)
+	-- Invalid script pos in C++ is -10,000 on all axes
+	return pos.x ~= COORD_INVALID and pos.z ~= COORD_INVALID 
+end
+
+function PointIsInFrontOfSquad( localPos, other_squad )
+	
+	local targetHeading = Squad_GetHeading(other_squad)
+	if targetHeading.x == 0 and targetHeading.z == 0 then
+		-- crazy physics?
+		return false
+	end
+	local targetPos = Squad_GetPosition(other_squad)
+	local targetPosRef = {x=targetPos.x + targetHeading.x,z=targetPos.z + targetHeading.z}
+	local V1 = {x = targetPosRef.x - targetPos.x, z = targetPosRef.z - targetPos.z}
+	local V2 = {x = localPos.x - targetPos.x,z = localPos.z - targetPos.z}
+	local V1L = math.sqrt(V1.x*V1.x+V1.z*V1.z)
+	local V2L = math.sqrt(V2.x*V2.x+V2.z*V2.z)	
+	if V1L == 0 or V2L == 0 then
+		-- heading is screwy
+		return false
+	end
+	local cosAlpha = (V1.x * V2.x + V1.z * V2.z) / (V1L*V2L)
+	local alpha = math.acos(cosAlpha)
+	return alpha >= -1.570795 and alpha <= 1.570795 
+
+end
+
+function SquadIsInFront(squad, other_squad)
+	return PointIsInFrontOfSquad( Squad_GetPosition(squad), other_squad )	
+end
+
+function AI_ConvertToSimType(aitype)
+	if scartype(aitype) == ST_AIPLAYER then
+		return AI_ConvertToSimPlayer(aitype)
+	elseif scartype(aitype) == ST_AISQUAD then
+		return AI_ConvertToSimSquad(aitype)
+	elseif scartype(aitype) == ST_AIENTITY then
+		return AI_ConvertToSimEntity(aitype)
+	else
+		assert("Trying to cast a non-ai type to a sim type!")
+	end
+end
+
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- tactic filters
+--   return true or false
+
+function TacticFilter_TrivialAccept(squad)
+	return true
+end
+
+function TacticFilter_IsBeingAttacked(squad, historyTicks)
+	return AISquad_HasBeenAttacked(squad, historyTicks or s_CombatHistoryTicks)
+end
+
+function TacticFilter_IsBeingAttackedWhileFallingBack(squad, historyTicks)
+	if( TacticFilter_IsBeingAttacked(squad, historyTicks) ) then
+		return true--TODO
+	end
+	return false
+end
+
+function TacticFilter_IsShooting(squad, historyTicks)
+	return AISquad_HasFiredWeapon(squad, historyTicks or s_CombatHistoryTicks)
+end
+
+function TacticFilter_InCombat(squad)
+	return TacticFilter_IsShooting(squad) or TacticFilter_IsBeingAttacked(squad)
+end
+
+function TacticFilter_NotInCombat(squad)
+	return not (TacticFilter_IsShooting(squad) or TacticFilter_IsBeingAttacked(squad))
+end
+
+function TacticFilter_InRecentCombat(squad)
+	return TacticFilter_IsShooting(squad, 16) or TacticFilter_IsBeingAttacked(squad, 16) --2 seconds
+end
+
+function TacticFilter_NotInRecentCombat(squad)
+	return not TacticFilter_IsShooting(squad, 16) and not TacticFilter_IsBeingAttacked(squad, 16) --2 seconds
+end
+
+function TacticFilter_InCombatAndMoving(squad)
+	return TacticFilter_InCombat(squad) and Squad_IsMoving(AI_ConvertToSimSquad(squad))
+end
+
+function TacticFilter_InRecentCombatAndMoving(squad)
+	return TacticFilter_InRecentCombat(squad) and Squad_IsMoving(AI_ConvertToSimSquad(squad))
+end
+
+function TacticFilter_NotInRecentCombatOrMoving(squad)
+	return not TacticFilter_InRecentCombat(squad) or Squad_IsMoving(AI_ConvertToSimSquad(squad))
+end
+
+function TacticFilter_InCombatWithHealthyInfantryOrLightVehicle(squad)
+	if( TacticFilter_InCombat(squad) ) then
+		local sim_squad = AI_ConvertToSimSquad( squad )
+		if sim_squad == nil then
+			return false
+		end
+		local squadTarget = AI_GetAnySquadCombatTarget(sim_squad)
+		if( squadTarget ~= nil) then
+			if( Squad_HasSoldier(squadTarget) or (Squad_HasVehicle(squadTarget) and (Squad_GetMinArmor(squadTarget) < s_MinArmorForHeavyVehicle)) ) then
+				if( not is_low_health_sim_quad(sim_squad) ) then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+function TacticFilter_InCombatWithHealthyInfantry(squad)
+	if( TacticFilter_InCombat(squad) ) then
+		local sim_squad = AI_ConvertToSimSquad( squad )
+		if sim_squad == nil then
+			return false
+		end
+		local squadTarget = AI_GetAnySquadCombatTarget(sim_squad)
+		if( squadTarget ~= nil) then
+			if( Squad_HasSoldier(squadTarget) ) then
+				if( not is_low_health_sim_quad(sim_squad) ) then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+function TacticFilter_InCombatWithHealthyLightVehicle(squad)
+	if( TacticFilter_InCombat(squad) ) then
+		local sim_squad = AI_ConvertToSimSquad( squad )
+		if sim_squad == nil then
+			return false
+		end
+		local squadTarget = AI_GetAnySquadCombatTarget(sim_squad)
+		if( squadTarget ~= nil) then
+			if( Squad_HasVehicle(squadTarget) and (Squad_GetMinArmor(squadTarget) < s_MinArmorForHeavyVehicle) ) then
+				if( not is_low_health_sim_quad(sim_squad) ) then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+function TacticFilter_InCombatWithHealthyHeavyVehicle(squad)
+  if( TacticFilter_InCombat(squad) ) then
+    local sim_squad = AI_ConvertToSimSquad( squad )
+    if sim_squad == nil then
+      return false
+    end
+    local squadTarget = AI_GetAnySquadCombatTarget(sim_squad)
+    if( squadTarget ~= nil) then
+      if( Squad_HasVehicle(squadTarget) and (Squad_GetMinArmor(squadTarget) >= s_MinArmorForHeavyVehicle) ) then
+        if( not is_low_health_sim_quad(sim_squad) ) then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
+function TacticFilter_LowHealthNotInCombat(squad)
+	return TacticFilter_HealthLow(squad) and not TacticFilter_InCombat(squad)
+end
+
+function TacticFilter_LowHealthInCombatAndMoving(squad)
+	return TacticFilter_HealthLow(squad) and TacticFilter_InCombat(squad) and Squad_IsMoving(AI_ConvertToSimSquad(squad))
+end
+
+function TacticFilter_HealthyOrInCombat(squad)
+	return not TacticFilter_HealthLow(squad) or TacticFilter_InCombat(squad)
+end
+
+function TacticFilter_HealthyVehicleOrInCombat(squad)
+	return not TacticFilter_IsLowHealthVehicle(squad) or TacticFilter_InCombat(squad)
+end
+
+function TacticFilter_HealthLow(squad)
+	local simSquad = AI_ConvertToSimSquad(squad)
+	
+	return not is_healthy_squad(simSquad)
+end
+
+function TacticFilter_IsLowHealthVehicle(squad)
+	local simSquad = AI_ConvertToSimSquad(squad)
+
+	return not is_healthy_vehicle_squad(simSquad)	
+end
+
+function TacticFilter_IsLowHealthVehicleNotInCombat(squad)
+	return TacticFilter_IsLowHealthVehicle(squad) and not TacticFilter_InCombat(squad)	
+end
+
+function TacticFilter_ShouldEnableCamouflage(squad)
+	return not Squad_IsMoving(AI_ConvertToSimSquad(squad))
+end
+ 
+ function TacticFilter_ShouldDisableCamouflage(squad)
+	return Squad_IsMoving(AI_ConvertToSimSquad(squad))
+end
+
+--------------------------------------------------------------------------------
+-- tactic squad target filters
+--   return a squad, or nil
+
+function SquadTargetFilter_TrivialAccept(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_TrivialAccept: Invalid targetFilterContextTable" )
+	return SGroup_GetSpawnedSquadAt(targetFilterContextTable.target_sg, 1)
+end
+
+function SquadTargetFilter_FirstLowHealthyFriendlyNonVehicle(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstLowHealthyFriendlyNonVehicle: Invalid targetFilterContextTable" )
+	return get_first_friendly_squad_filter(squad, targetFilterContextTable.target_sg, is_low_health_non_vehicle, nil)
+end
+
+function SquadTargetFilter_FirstCanReinforceFriendlySquad(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstCanReinforceFriendlySquad: Invalid targetFilterContextTable" )
+	return get_first_can_reinforce_friendly_squad(squad, targetFilterContextTable.target_sg)
+end
+
+function SquadTargetFilter_FirstCanMergeReinforceFriendlySquad(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstCanMergeReinforceFriendlySquad: Invalid targetFilterContextTable" )
+	
+	--to merge must be a different squad type, must have two squads after the merge,
+	--and must be a team weapon or a more expensive squad
+	
+	local self_player = AI_GetPlayer()
+
+	local simSquad = AI_ConvertToSimSquad(squad)
+	local squadResourceCost = Player_GetSquadBPCost(self_player, Squad_GetBlueprint(simSquad))	
+	
+  local target_squads = targetFilterContextTable.target_sg
+	local count = SGroup_CountSpawned(target_squads)
+	for i=1, count do
+		local target_squad = SGroup_GetSpawnedSquadAt(target_squads, i)
+		if Squad_GetPlayerOwner(target_squad) == self_player then --can only merge with squads we own
+			if Squad_GetBlueprint(simSquad) ~= Squad_GetBlueprint(target_squad) then --should not merge with same squad type
+				local squadCount = Squad_Count(target_squad)
+				local squadMax = Squad_GetMax(target_squad)
+				if squadMax > squadCount then --can only merge if the squad is missing some entities
+					local numMissingEntities = squadMax - squadCount
+					if Squad_Count(simSquad) - numMissingEntities > 0 then --should only merge if we will have two squads after the merge
+						if Squad_HasTeamWeapon(target_squad) then --should merge with team weapons
+							return target_squad
+						else
+							local targetSquadResourceCost = Player_GetSquadBPCost(self_player, Squad_GetBlueprint(target_squad))
+							if targetSquadResourceCost.manpower > squadResourceCost.manpower then --should merge with more expensive squads
+								return target_squad
+							end
+						end
+					end
+				end
+			end
+		end
+	end	
+	return nil
+end
+
+function SquadTargetFilter_FirstEnemy(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstEnemy: Invalid targetFilterContextTable" )
+	return get_first_enemy_squad(squad, targetFilterContextTable.target_sg)	
+end
+
+function SquadTargetFilter_FirstHealthyEnemy(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstHealthyEnemy: Invalid targetFilterContextTable" )
+	return get_first_healthy_enemy_squad(squad, targetFilterContextTable.target_sg)
+end
+
+function SquadTargetFilter_FirstNonMovingEnemy(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstNonMovingEnemy: Invalid targetFilterContextTable" )
+	return get_first_enemy_squad_filter(squad, targetFilterContextTable.target_sg, non_moving, nil)
+end
+
+function SquadTargetFilter_FirstEnemyVehicle(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstEnemyVehicle: Invalid targetFilterContextTable" )
+	return get_first_enemy_squad_vehicle(squad, targetFilterContextTable.target_sg)
+end
+
+function SquadTargetFilter_FirstNonMovingEnemyVehicle(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstNonMovingEnemyVehicle: Invalid targetFilterContextTable" )
+	return get_first_enemy_squad_filter(squad, targetFilterContextTable.target_sg, non_moving_vehicle, nil)
+end
+
+function SquadTargetFilter_FirstHealthyEnemyVehicle(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstHealthyEnemyVehicle: Invalid targetFilterContextTable" )
+	return get_first_healthy_enemy_squad_vehicle(squad, targetFilterContextTable.target_sg)
+end
+
+function SquadTargetFilter_FirstEnemyNonVehicle(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstEnemyNonVehicle: Invalid targetFilterContextTable" )
+	return get_first_enemy_squad_filter(squad, targetFilterContextTable.target_sg, is_not_vehicle, nil)
+end
+
+function SquadTargetFilter_FirstNonMovingEnemyCausingSuppression(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstNonMovingEnemyCausingSuppression: Invalid targetFilterContextTable" )
+	return get_first_enemy_squad_filter(squad, targetFilterContextTable.target_sg, non_moving_causing_suppression, nil)
+end
+
+-- filter enemy non-vehicle stationary squads with a preference for those in cover, under suppression, or with a setup weapon
+function SquadTargetFilter_BestEnemyInfantryGrenade(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_BestEnemyInfantryGrenade: Invalid targetFilterContextTable" )
+	local bestSquad = nil
+	local bestScore = -1
+	local target_squads = targetFilterContextTable.target_sg
+	local count = SGroup_CountSpawned(target_squads)
+	for i=1, count do
+		local target_squad = SGroup_GetSpawnedSquadAt(target_squads, i)
+		if( is_enemy_squad(target_squad) and Squad_HasSoldier(target_squad) and not Squad_IsMoving(target_squad) and not is_low_health_sim_quad(target_squad))then
+			local score = Squad_GetCoverLevel(target_squad)
+			if( score == 1 and Squad_GetHealthPercentage(target_squad) < 0.4 ) then
+				score = 0 --only want to consider low cover if there is a healthy unit in it
+			end			
+			if( Squad_IsPinnedOrSuppressed(target_squad) ) then
+				score = score + 2
+			end
+			if( Squad_HasSetupTeamWeapon(target_squad) ) then
+				score = score + 5
+			end
+			
+			if( score > bestScore ) then
+				bestScore = score
+				bestSquad = target_squad
+			end
+		end
+	end
+	
+	return bestSquad
+end
+
+function SquadTargetFilter_FirstFriendlyVehicle_LowHealth(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "SquadTargetFilter_FirstFriendlyVehicle_LowHealth: Invalid targetFilterContextTable" )
+	return get_first_friendly_squad_filter(squad,  targetFilterContextTable.target_sg, is_not_healthy_vehicle_squad, nil)
+end
+
+function SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, globalBestMinScoreRatio, filterFlags, minNumSquads, minRangeOverride, maxRangeOverride)
+	local self_aiplayer = AI_GetAIPlayer()
+
+	local i = -1
+
+	assert(targetFilterContextTable ~= nil and (targetFilterContextTable.range_min ~= nil or minRangeOverride ~= nil) and (targetFilterContextTable.range_max ~= nil or maxRangeOverride ~= nil),
+		"SquadTargetFilter_BestClumpCentreSquadHelper: Invalid targetFilterContextTable")
+
+	local minRange = targetFilterContextTable.range_min
+	if minRangeOverride ~= nil then
+		minRange = minRangeOverride
+	end
+
+	local maxRange = targetFilterContextTable.range_max
+	if maxRangeOverride ~= nil then
+		maxRange = maxRangeOverride
+	end
+
+	if targetFilterContextTable.ability_pbg == nil then
+		return nil
+	end
+
+	if AI_IsSquadValid(squad) then
+		i = AIPlayer_GetBestClumpForSquadIdx(self_aiplayer, squad, targetFilterContextTable.ability_pbg, minRange, maxRange, filterFlags, minNumSquads or 1)
+	else
+		i = AIPlayer_GetBestClumpIdxForAbility(self_aiplayer, targetFilterContextTable.ability_pbg, minRange, maxRange, globalBestMinScoreRatio, filterFlags, minNumSquads or 1)
+	end
+
+	if i < 0 then
+		return nil
+	end
+
+	return AIPlayer_GetClumpCentreSquad(self_aiplayer, i, filterFlags)
+end
+
+function SquadTargetFilter_BestArtillery(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), TFF_All)
+end
+
+function SquadTargetFilter_BestInfantryArtillery(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), TFF_Infantry)
+end
+
+function SquadTargetFilter_BestVehicleArtillery(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), TFF_Vehicle)
+end
+
+function SquadTargetFilter_BestOwnedSectorArtillery(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_InMostClumpedSector, TFF_InFriendlySectors))
+end
+
+function SquadTargetFilter_BestEnemySectorArtillery(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_InMostClumpedSector, TFF_InEnemySectors))
+end
+
+function SquadTargetFilter_BestArtillerySmoke(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), TFF_CausingSuppression)
+end
+
+function SquadTargetFilter_BestRecon(squad, targetFilterContextTable)
+  return SquadTargetFilter_BestClumpCentreSquadHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_recon(), TFF_NotVisible)
+end
+
+
+--------------------------------------------------------------------------------
+-- tactic entity target filters
+--   return an entity, or nil
+
+function EntityTargetFilter_TrivialAccept(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_TrivialAccept: Invalid targetFilterContextTable" )
+	
+	return EGroup_GetSpawnedEntityAt(targetFilterContextTable.target_eg, 1)
+end
+
+function EntityTargetFilter_FirstEnemy(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstEnemy: Invalid targetFilterContextTable" )
+	return get_first_enemy_entity(squad, targetFilterContextTable.target_eg)
+end
+
+function EntityTargetFilter_FirstEnemyStructure(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstEnemyStructure: Invalid targetFilterContextTable" )
+	return get_first_enemy_entity_filter(squad, targetFilterContextTable.target_eg, Entity_IsBuilding, nil)
+end
+
+function EntityTargetFilter_FirstEnemyStructureCausingSuppression(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstEnemyStructureCausingSuppression: Invalid targetFilterContextTable" )
+	return get_first_enemy_entity_filter(squad, targetFilterContextTable.target_eg, is_structure_causing_suppression, nil)
+end
+
+function EntityTargetFilter_FirstHold(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstHold: Invalid targetFilterContextTable" )
+	
+	-- dont want to load into vehicles, this works because vehicles are not passed in
+	local sim_squad = AI_ConvertToSimSquad(squad)
+	local target_entities = targetFilterContextTable.target_eg
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		if AIy_CanLoadSquadAndAttackCurrentTarget(target_entity, sim_squad, false, false) then
+			return target_entity
+		end
+	end
+	
+	return nil
+end
+
+-- this is a special tactic that doesn't take an entitygroup to choose from
+function EntityTargetFilter_Obstruction(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil and targetFilterContextTable.range_max ~= nil, "EntityTargetFilter_Obstruction: Invalid targetFilterContextTable" )
+	
+	-- ask the obstruction system for the closest obstruction
+	-- pass in true to filter out allied obstructions (may need revisit)
+	local entity_target = AISquad_GetClosestObstruction( squad, targetFilterContextTable.range_max, false )
+
+	return entity_target
+end
+
+-- this is a special tactic that doesn't take an entitygroup to choose from
+function EntityTargetFilter_Obstruction_Wire(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil and targetFilterContextTable.range_max ~= nil, "EntityTargetFilter_Obstruction_Wire: Invalid targetFilterContextTable" )
+	
+	local entity_target = AISquad_GetClosestCuttableObstruction( squad, targetFilterContextTable.range_max )
+	
+	return entity_target
+end
+
+function EntityTargetFilter_FirstFriendlyStructure_LowHealth(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstFriendlyStructure_LowHealth: Invalid targetFilterContextTable" )
+	return get_first_friendly_entity_filter(squad, targetFilterContextTable.target_eg, is_low_health_entity, nil)
+end
+
+function EntityTargetFilter_FirstRepairableEntity(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstRepairableEntity: Invalid targetFilterContextTable" )
+	-- look for special repairables 
+	local target_entities = targetFilterContextTable.target_eg
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		
+		if is_friendly_entity(target_entity) then
+			if Entity_IsOfType( target_entity, "hq_wreck" ) then
+				return target_entity
+			end
+		else 
+			if not is_enemy_entity(target_entity) then
+				-- a neutral - wrecked bridges are good to go
+				if Entity_IsOfType( target_entity, "wrecked_bridge" ) then
+					return target_entity
+				end				
+			end
+		end
+	end	
+
+	-- fall back on looking for low health friendlies or neutral repairable entities
+	return get_first_friendly_or_neutral_repairable_entity_filter(squad, target_entities, is_low_health_entity, nil)
+end
+
+function EntityTargetFilter_FirstRepairableEntityBuilding(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil, "EntityTargetFilter_FirstRepairableEntityBuilding: Invalid targetFilterContextTable" )
+	
+	return get_first_friendly_entity_filter(squad,  targetFilterContextTable.target_eg, is_damaged_building_entity, nil)
+end
+
+function EntityTargetFilter_PickUp(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil , "EntityTargetFilter_PickUp: Invalid targetFilterContextTable" )
+	
+	local self_playerid = AI_GetAIPlayer()
+	local self_player = AI_GetPlayer()
+	local sim_squad = AI_ConvertToSimSquad(squad)
+
+	local target_entities = targetFilterContextTable.target_eg
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		-- don't pickup items that belong to other ally players such as a cargo drop for an ally
+		if ( World_OwnsEntity( target_entity ) or ( self_playerid == Player_GetID( Entity_GetPlayerOwner( target_entity ) ) ) or Player_GetRelationship(self_player, Entity_GetPlayerOwner( target_entity )) ~= R_ALLY ) then
+			if ( Squad_CanPickupItem( sim_squad, target_entity ) ) then
+				return target_entity
+			end
+		end
+		
+	end
+	
+	return nil
+end
+
+function EntityTargetFilter_CaptureTeamWeapon(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil , "EntityTargetFilter_CaptureTeamWeapon: Invalid targetFilterContextTable" )
+	
+	local requireTwoSquads = AITactic_GetTacticPriority(squad, TACTIC_CaptureTeamWeapon) < MAX_TACTIC_PRIORITY
+
+	local sim_squad = AI_ConvertToSimSquad(squad)
+	local target_entities = targetFilterContextTable.target_eg
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		if ( Squad_CanCaptureTeamWeapon( sim_squad, target_entity ) ) then
+			if not requireTwoSquads or (Squad_Count(sim_squad) - Entity_GetMaxCaptureCrewSize(target_entity) > 0) then
+				return target_entity
+			end
+		end
+	end
+	
+	return nil
+end
+
+function EntityTargetFilter_Recrew(squad, targetFilterContextTable)
+	
+	assert(targetFilterContextTable ~= nil , "EntityTargetFilter_Recrew: Invalid targetFilterContextTable" )
+	
+	local requireTwoSquads = AITactic_GetTacticPriority(squad, TACTIC_Recrew) < MAX_TACTIC_PRIORITY
+
+	local sim_squad = AI_ConvertToSimSquad(squad)
+
+	local target_entities = targetFilterContextTable.target_eg
+	local count = EGroup_CountSpawned(target_entities)
+	for i=1, count do
+		local target_entity = EGroup_GetSpawnedEntityAt(target_entities, i)
+		if ( Squad_CanRecrew( sim_squad, target_entity ) and not Entity_IsSyncWeapon( target_entity ) ) then
+			if not requireTwoSquads or AI_CanSquadDecrew( sim_squad, target_entity ) or (Squad_Count(sim_squad) - Entity_GetMaxCaptureCrewSize(target_entity) > 0) then
+				return target_entity
+			end
+		end
+	end
+	
+	return nil
+end
+
+--------------------------------------------------------------------------------
+-- tactic position target filters
+--   return a position, or a position with all coords set to COORD_INVALID
+
+function PositionTargetFilter_Cover(squad, targetFilterContextTable)
+	assert(targetFilterContextTable ~= nil and targetFilterContextTable.range_max ~= nil, "PositionTargetFilter_Cover: Invalid targetFilterContextTable" )
+	
+	local self_aiplayer = AI_GetAIPlayer()
+	return AISquad_FindFilteredCoverCompareCurrent(self_aiplayer, squad, targetFilterContextTable.range_max, true)	
+end
+
+function PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, globalBestMinScoreRatio, filterFlags, minNumSquads)
+  local self_aiplayer = AI_GetAIPlayer()
+
+assert(targetFilterContextTable ~= nil and targetFilterContextTable.range_min ~= nil and targetFilterContextTable.range_max ~= nil, "PositionTargetFilter_BestClumpHelper: Invalid targetFilterContextTable")
+  
+  if targetFilterContextTable.ability_pbg == nil then
+	return nil
+  end
+  
+  local i = -1
+  if AI_IsSquadValid(squad) then
+    i = AIPlayer_GetBestClumpForSquadIdx(self_aiplayer, squad, targetFilterContextTable.ability_pbg, targetFilterContextTable.range_min, targetFilterContextTable.range_max, filterFlags,  minNumSquads or 1)
+  else
+    i = AIPlayer_GetBestClumpIdxForAbility(self_aiplayer, targetFilterContextTable.ability_pbg, targetFilterContextTable.range_min, targetFilterContextTable.range_max, globalBestMinScoreRatio, filterFlags,  minNumSquads or 1)
+  end
+  
+  if i < 0 then
+    return nil
+  end
+
+  return AIPlayer_GetClumpPosition(self_aiplayer, i, filterFlags)
+end
+
+function PositionTargetFilter_BestArtillery(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), TFF_NotNearPlayerStartingPositions)
+end
+
+function PositionTargetFilter_BestInfantryArtillery(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_Infantry, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestVehicleArtillery(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_Vehicle, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestOwnedSectorArtillery(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_InMostClumpedSector, TFF_InFriendlySectors, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestEnemySectorArtillery(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_InMostClumpedSector, TFF_InEnemySectors, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestArtillerySmoke(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_artillery(), bit32_bor(TFF_CausingSuppression, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestRecon(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_recon(), bit32_bor(TFF_NotVisible, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestMedicalSupplies(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_supply_drop(), bit32_bor(TFF_FriendlyTargets, TFF_Infantry, TFF_NotNearPlayerStartingPositions, TFF_InjuredInfantry))
+end
+
+function PositionTargetFilter_BestResourceSupplies(squad, targetFilterContextTable)
+  return PositionTargetFilter_BestClumpHelper(squad, targetFilterContextTable, get_targeting_global_best_min_score_ratio_for_supply_drop(), bit32_bor(TFF_FriendlyTargets, TFF_Infantry, TFF_NotNearPlayerStartingPositions))
+end
+
+function PositionTargetFilter_BestAntiVehicleMine(squad)
+  --TODO find best target for particular type
+  return nil  
+end
+
+
+
+

@@ -1,0 +1,29 @@
+import( 'tactics.scar' )
+import( 'utility/debug.scar' )
+import( 'ai-view.scar' )
+
+--------------------------------------------------------------------
+function Rule_SkirmishAIThink()
+	
+	aitraceclear_ext( "Rule_SkirmishAIThink" )
+
+	local self_aiplayer = AI_GetAIPlayer()
+	DebugDisplay()
+end
+
+--------------------------------------------------------------------
+-- InitializeAI - where the AI starts
+function InitializeSkirmishAI()
+
+	print("InitializeSkirmishAI")
+				
+	-- turn display on and off
+	dr_setdisplay("aidebug".. AI_GetPlayerID(), true)
+	
+	AI_KillAllTasks()
+	TimeRule_RemoveAll()
+
+	AI_SimulatePre()	
+	TimeRule_AddInterval( Rule_SkirmishAIThink, 0.5, 0)
+end
+

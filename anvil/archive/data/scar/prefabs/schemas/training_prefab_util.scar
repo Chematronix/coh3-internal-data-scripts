@@ -1,0 +1,671 @@
+----------------------------------------------------------------------------------------------------------------
+-- Training System Prefab Utilities
+-- Copyright 2022 SEGA Corporation, Developed by Relic Entertainment
+
+-- Documentation: http://relicwiki/display/P34/Playbill+Training+Hint+Action
+
+--? @group scardoc;Training;Goals
+
+----------------------------------------------------------------------------------------------------------------
+
+import("training.scar")
+
+SETUP_FAILURE = 1
+local GOAL_COMPLETE = 3
+
+-- Adds the goal sequence specified by the data
+function TrainingPrefab_GoalSequenceSetup(data, prefabDataPath)
+	
+	local goals = {} -- Goals table we will build in the format expected by training.scar
+	local goalsPrefabData = data.goals -- Data for each goal specified in the goal sequence prefab
+	local goalCount = #goalsPrefabData
+	local typeInfos = __TrainingPrefab_GoalTypeInfos
+	for i=1, goalCount do
+		local goalPrefabData = goalsPrefabData[i]
+		
+		-- The main training hint key may not be needed, but it will be set using
+		-- the manually specified key & key type from the prefab data later on, or
+		-- determined by the completion type setup functions if "Auto" is chosen
+		-- as the key type.
+		local key = "None"
+		
+		-- This will appear as the data context example Data[Message] in TrainingResources.xaml 
+		local MakeGoalData = function(prefabData, index)
+			return {
+				ID = tostring(index),
+				DataTemplate = prefabData.datatemplate,
+				Message = prefabData.goal_message,
+				HeaderText = prefabData.header_text,
+				Image = prefabData.hint_image,
+				Video = prefabData.hint_video
+			}
+		end
+		
+		local goalData = MakeGoalData(goalPrefabData, i)
+		
+		local goalTypeInfo = typeInfos[goalPrefabData.completion_type]
+		
+		-- Grab the completion function from the completion_type info:
+		local isCompleteFunction = goalTypeInfo.isComplete
+		
+		local goal = Training_Goal(key, goalData, isCompleteFunction) -- Single goal in the format expected by training.scar
+		
+		-- Perform completion-type-specific goal setup:
+		-- These functions will alter and override the fields of the goal table according to their needs, and can call
+		-- training.scar utilities on the result of the table to add UI handlers or goal start/end callbacks.
+		local setupResult = goalTypeInfo.setupGoal(goalPrefabData, goal)
+		if setupResult == SETUP_FAILURE then
+			-- Exit the setup for the sequence and indicate we did not succeed by returning nil
+			return nil
+		end
+		
+		-- Pick the goal's key according to the manually specified key_type & key fields:
+		-- NOTE: Nothing to do for the "Auto" keytype, as the completion type specific setup functions
+		-- will have initialized the goal.key field if they can already. We only need to override that
+		-- value if there is one manually specified.
+		
+		local TryGetTagKeyOverride = function(prefabData)
+			local key_type = prefabData.key_type
+			if key_type == "MenuPBG" then
+				return BP_GetMenuBlueprint(prefabData.menu_pbg_key)
+			elseif key_type == "UIElement" then
+				return prefabData.ui_element_key
+			elseif key_type == "SGroup" then
+				return SGroup_GetSquadAt(prefabData.sgroup_key, 1)
+			elseif key_type == "EGroup" then
+				local key = EGroup_GetEntityAt(prefabData.egroup_key, 1)
+				
+				if (not World_IsCampaignMetamapGame()) then
+					-- Workaround for RTS entity tags not having UI setup for hint tags yet, just
+					-- use the entity's position.
+					return Entity_GetPosition(key)
+				else
+					return key
+				end
+				
+			elseif key_type == "AbilityPBG" then
+				return prefabData.ability_pbg_key
+			elseif key_type == "SquadPBG" then
+				return prefabData.squad_pbg_key
+			elseif key_type == "Position" then
+				return Marker_GetPosition(prefabData.position_key)
+			elseif key_type == "OrderEnum" then
+				return { orderNum = prefabData.order_number_key}
+			elseif key_type == "UpgradePBG" then
+				return prefabData.upgrade_pbg_key
+			elseif key_type == "EntityPBG" then
+				return prefabData.entity_pbg_key
+			end
+			return nil
+		end
+		
+		local key_override = TryGetTagKeyOverride(goalPrefabData)
+		if key_override ~= nil then
+			goal.key = key_override
+		end
+		
+		local GetSubkeyFromData = function(prefabData)
+			return prefabData.subkey ~= "" and prefabData.subkey or nil
+		end
+		
+		goal.subkey = GetSubkeyFromData(goalPrefabData)
+		
+		if (not World_IsCampaignMetamapGame()) and scartype(goal.key) == ST_ENTITY then
+			-- Workaround for RTS entity tags not having UI setup for hint tags yet, just
+			-- use the entity's position.
+			goal.key = Entity_GetPosition(goal.key)
+		end
+		
+		-- Setup additional tags which share the same training hint fields as the main
+		-- goalPrefabData format.
+		local extra_tag_count = #goalPrefabData.extra_tags
+		for extra_tag_index=1, extra_tag_count do
+			local extra_tag = goalPrefabData.extra_tags[extra_tag_index]
+			local extra_tag_key = TryGetTagKeyOverride(extra_tag)
+			local extra_tag_subkey = GetSubkeyFromData(extra_tag)
+			if extra_tag_key ~= nil then
+				local extra_tag_data = MakeGoalData(extra_tag, extra_tag_index)
+				Training_AddExTagToGoal(goal, extra_tag_key, extra_tag_data, extra_tag_subkey)
+			end
+		end
+		
+		if i == goalCount then
+			
+			-- This is the final goal, so we want to add a callback to this
+			-- goal that should evoke the sequence complete actions
+			-- when the whole goal sequence is complete.
+			local on_complete_actions = data.on_complete_actions
+			if #on_complete_actions > 0 then
+				
+				-- There may be a callback already specified. Let's cache that
+				-- so we can explicitly evoke that behaviour in our own callback:
+				goal.primary_on_complete = goal.onComplete
+				
+				-- Set or overwrite the callback:
+				Training_AddCallbacksToGoal(goal, goal.onStart, __TrainingPrefab_OnFinalGoalComplete)
+				
+				-- Set the on_complete_actions so our callback can evoke them
+				goal.on_complete_actions = on_complete_actions
+			end
+		end
+		
+		-- Add the goal to the list
+		goals[i] = goal
+		
+	end
+	
+	local triggerFunction = function(goalSequence)
+		-- NOTE: could support accumulating goal requirements for each goal and checking them all before triggering the sequence,
+		-- unnecessary for the V1.
+		return true
+	end
+	
+	local bypassFunction = _G[data.opt_bypass_function]
+	if scartype(bypassFunction) ~= ST_FUNCTION then
+		bypassFunction = nil
+	end
+	
+	local sequenceID = data.sequence_id
+	if sequenceID == "" then
+		sequenceID = "Unnamed"
+	end
+	
+	local goalSequence = Training_GoalSequence(
+		sequenceID, -- id
+		1, -- repeat max
+		1, --remind max
+		triggerFunction, --trigger
+		nil, --ignore
+		nil, --remind
+		bypassFunction, --bypass
+		true, --can regress
+		goals)
+	
+	goalSequence.prefabDataPath = prefabDataPath
+	return goalSequence
+	
+end
+
+function __TrainingPrefab_OnFinalGoalComplete(completeReason, goal)
+	
+	-- Play the primary on complete callback if there is one
+	local primary_on_complete = goal.primary_on_complete
+	if scartype(primary_on_complete) == ST_FUNCTION then
+		primary_on_complete(completeReason, goal)
+	end
+	
+	-- Evoke any on complete actions that were specified
+	if completeReason == GOAL_COMPLETE then
+		local on_complete_actions = goal.on_complete_actions
+		if on_complete_actions ~= nil then
+			ActionList_PlayActions(on_complete_actions, {})
+		end
+	end
+	
+end
+
+-------------------
+-- TutorialWindow
+-------------------
+
+-- Overview:
+-- Add UI handlers to create a training hint window that can be closed to complete this goal
+-- These handlers will be called on goal start & goal end to manage the UI (create/destroy the window)
+-- The Close button on the created window will signal the goal __TrainingPrefab_ActiveTutorialWindowGoal
+-- that the window has closed.
+
+
+-- GLOBALS
+----------
+__TrainingPrefab_ActiveTutorialWindowGoal = nil -- stores an active TutorialWindow goal table while the window is active
+
+
+-- SETUP/COMPLETION
+-------------------
+function __TrainingPrefab_TutorialWindow_Setup(goalPrefabData, goal)
+	
+	-- expects goalPrefabData to have:
+	-- NONE (goal_message is used for the window)
+	
+	-- 
+	Training_AddUIHandlersToGoal(goal, TrainingPrefab_TutorialWindowCreate, TrainingPrefab_TutorialWindowDestroy)
+	
+	-- Change the UI data (we don't need a datatemplate, set the style to TutorialWindow)
+	-- If needed in the future we can expose this style as a prefabData property
+	goal.data.Style = "TutorialWindow"
+	goal.data.DataTemplate = nil
+	goal.data.HeaderText = Loc_GetString(goalPrefabData.header_text)
+	-- Using Loc_GetString here because it will be set as a property value directly from script
+	-- We use the "$12345" regular string type for the TagData as it only supports strings, bools, doubles
+end
+
+function __TrainingPrefab_TutorialWindow_Complete(goal)
+	return goal.windowClosed
+end
+
+-- HELPERS
+----------
+
+-- Create custom UI at goal start
+function TrainingPrefab_TutorialWindowCreate(goal)
+
+	__TrainingPrefab_ActiveTutorialWindowGoal = goal
+	goal.windowClosed = false
+	goal.commandBlocker = World_AddScriptedCommandBlocker()
+	
+	UI_CreateUserPromptOK(
+		"TutorialWindow", -- datatemplate
+		goal.data.HeaderText, 
+		goal.data.Message, 
+		11234523, -- "Understood"
+		"TrainingPrefab_TutorialWindowCloseButtonCallback"
+	)
+end
+
+-- Signal tutorial window close button was pressed
+function TrainingPrefab_TutorialWindowCloseButtonCallback()
+	-- __TrainingPrefab_ActiveTutorialWindowGoal could be nil if the destroy UI handler
+	-- for the goal was called on the same sim tick as the close button callback was queued
+	-- (for example the goal regresses but before the next sim tick the user presses "understood")
+	-- In that case we don't consider the goal completed because technically the prior goal regressed
+	if __TrainingPrefab_ActiveTutorialWindowGoal then
+		__TrainingPrefab_ActiveTutorialWindowGoal.windowClosed = true
+	end
+end
+
+-- Remove custom UI at goal end
+function TrainingPrefab_TutorialWindowDestroy(goal)
+	World_RemoveScriptedCommandBlocker(__TrainingPrefab_ActiveTutorialWindowGoal.commandBlocker)
+	__TrainingPrefab_ActiveTutorialWindowGoal = nil
+	UI_Remove("TutorialWindow")
+	
+end
+
+
+------------------------------------------
+-- FTUE Window (OpenScreen / CloseScreen)
+------------------------------------------
+
+-- Overview:
+-- This goal is for checking the "in game screen pages"
+
+-- SETUP/COMPLETION
+-------------------
+
+function __TrainingPrefab_OpenScreen_Setup(goalPrefabData, goal)
+	
+	-- expects goalPrefabData to have:
+	-- goal_screen (name of screen to check for open)
+	-- goal_modal (name of modal within screen to check for)
+	-- also_check_for_close
+
+	
+	goal.screen = goalPrefabData.goal_screen
+	
+	if (goalPrefabData.goal_modal ~= "") then
+		goal.modal = goalPrefabData.goal_modal
+	end
+	
+	goal.alsoCheckForClose = goalPrefabData.also_check_for_close
+end
+
+function __TrainingPrefab_CloseScreen_Setup(goalPrefabData, goal)
+	
+	-- expects goalPrefabData to have:
+	-- goal_screen (name of screen to check for open)
+	-- tutorial_item
+	
+	goal.screen = goalPrefabData.goal_screen
+	goal.tutorialItem = goalPrefabData.tutorial_item
+	Training_AddUIHandlersToGoal(goal, __TrainingPrefab_ShowFTUEWindow, __TrainingPrefab_ShowFTUEWindow)
+end
+
+function __TrainingPrefab_OpenScreen_Complete(goal)
+	local flow = Game_RetrieveTableData("flow",false)
+	if ((scartype(flow.inGameScreenPage) == ST_STRING and flow.inGameScreenPage == goal.screen) and
+		(goal.modal == nil or (flow.inGameModalPage == goal.modal or flow.inGameModal2Page == goal.modal))) or
+		(goal.alsoCheckForClose == true and flow.inGameScreenPage == "") then
+		return true
+	end
+	return false
+end
+
+function __TrainingPrefab_CloseScreen_Complete(goal)
+	local flow = Game_RetrieveTableData("flow",false)
+	if scartype(flow.inGameScreenPage) == ST_STRING and flow.inGameScreenPage == goal.screen then
+		return false
+	end
+	return true
+end
+
+-- HELPERS
+----------
+function __TrainingPrefab_ShowFTUEWindow(goal)
+	local flow = Game_RetrieveTableData("flow",false)
+	flow.inGameScreenPage = goal.screen
+	flow.defaultTutorialItem = goal.tutorialItem
+	Game_StoreTableData("flow", flow)
+end
+
+function __TrainingPrefab_CloseFTUEWindow(goal)
+	local flow = Game_RetrieveTableData("flow",false)
+	flow.defaultTutorialItem = nil
+	Game_StoreTableData("flow", flow)
+end
+
+---------------
+-- AbilityCast
+---------------
+
+-- Overview:
+-- This goal is completed when the specified ability is cast. This is checked
+-- by adding a global event callback to check ABilityExecuted events for the
+-- specified ability. This callback will set goal.ability_was_cast to true
+-- when the specified ability is cast. This callback has access to the goal
+-- table.
+-- When the goal is completed, we also set a flag that will remove the rule
+-- the next time the rule is executed just in case the goal is forced complete
+-- so we don't keep the rule active.
+
+-- Ability uses before goal setup can be tracked and automatically cause goal
+-- completion if TrainingPrefab_TrackAllAbilities() is called manually in
+-- script. This behaviour is optional and must be included in a particular
+-- mission script if desired. This works by tracking every ability and marking
+-- it 'true' in a global table when it was cast.
+
+
+-- SETUP/COMPLETION
+-------------------
+
+function __TrainingPrefab_AbilityCast_Setup(goalPrefabData, goal)
+	
+	-- expects goalPrefabData to have:
+	-- ability_pbg
+	
+	goal.abilityBP = goalPrefabData.ability_pbg
+	goal.key = goalPrefabData.ability_pbg
+
+	Training_AddCallbacksToGoal(goal, __TrainingPrefab_AbilityCast_OnStart, __TrainingPrefab_AbilityCast_OnEnd)
+end
+
+function __TrainingPrefab_AbilityCast_Complete(goal)
+	return goal.ability_was_cast == true or __TrainingPrefab_TrackedAbilityWasCast(goal.abilityBP)
+end
+
+-- HELPERS
+----------
+
+function __TrainingPrefab_AbilityCast_OnStart(startReason, goal)
+	-- Add an event handler to check if the specified ability was completed:
+	-- Pass the goal as the user table that will get passed to the rule
+	Rule_AddGlobalEvent(__TrainingPrefab_AbilityCast_OnAbilityExecuted, GE_AbilityExecuted, goal)
+end
+
+function __TrainingPrefab_AbilityCast_OnEnd(startReason, goal)
+	-- If something else completes this goal, we want to remove the ability executed callback
+	Rule_RemoveGlobalEvent(__TrainingPrefab_AbilityCast_OnAbilityExecuted)
+end
+
+function __TrainingPrefab_AbilityCast_OnAbilityExecuted(context, userTable)
+
+	local goal = userTable
+	
+	if context.ability == goal.abilityBP then
+		goal.ability_was_cast = true
+		Rule_RemoveMe()
+	end
+	
+end
+
+-- Universal Ability Tracking
+-----------------------------
+-- This is optional tracking that must be explicitly turned
+-- on by a mission script in order to start tracking usages
+-- before an ability completed goal was started.
+-- Call TrainingPrefab_TrackAllAbilities() to begin tracking.
+
+function __TrainingPrefab_TrackedAbilityWasCast(pbg)
+	return g_ability_tracking_table ~= nil and g_ability_tracking_table[BP_GetName(pbg)]
+end
+
+function __TrainingPrefab_OnEachAbility(context, userTable)
+	userTable[BP_GetName(context.ability)] = true
+end
+
+function TrainingPrefab_TrackAllAbilities()
+	local ability_tracking_table = g_ability_tracking_table or {}
+	g_ability_tracking_table = ability_tracking_table
+	Rule_AddGlobalEvent(__TrainingPrefab_OnEachAbility, GE_AbilityExecuted, ability_tracking_table)
+end
+
+
+-- ====================
+-- Completion Type Info
+-- ====================
+
+-- Globals for predefined goal types
+sg_CurrentSquadSelections = SGroup_CreateIfNotFound("sg_CurrentSquadSelections")
+eg_CurrentEntitySelections = EGroup_CreateIfNotFound("eg_CurrentEntitySelections")
+
+-- Data for each completion type
+__TrainingPrefab_GoalTypeInfos = {
+	SelectEntity = {
+		setupGoal = function(goalPrefabData, goal)
+			
+			-- expects goalPrefabData to have:
+			-- egroup
+			
+			goal.select_target = goalPrefabData.egroup
+			goal.key = EGroup_GetEntityAt(goalPrefabData.egroup, 1) -- Set key for "Auto" training hint key selection
+		end,
+		
+		isComplete = function(goal)
+			Misc_GetSelectedEntities(eg_CurrentEntitySelections, false)
+			return EGroup_ContainsEGroup(eg_CurrentEntitySelections, goal.select_target, ALL)
+		end,
+		
+	},
+	
+	SelectSquad = {
+		setupGoal = function(goalPrefabData, goal)
+			
+			-- expects goalPrefabData to have:
+			-- sgroup
+			
+			if SGroup_Count(goalPrefabData.sgroup) == 0 then
+				return SETUP_FAILURE
+			end
+			
+			goal.select_target = goalPrefabData.sgroup
+			goal.key = SGroup_GetSquadAt(goalPrefabData.sgroup, 1) -- Set key for "Auto" training hint key selection
+		end,
+		
+		isComplete = function(goal)
+			Misc_GetSelectedSquads(sg_CurrentSquadSelections, true)
+			return SGroup_Count(sg_CurrentSquadSelections) == 1 and SGroup_ContainsSGroup(sg_CurrentSquadSelections, goal.select_target, ALL)
+		end,
+		
+	},
+	
+	TutorialWindow = {
+		setupGoal = __TrainingPrefab_TutorialWindow_Setup,
+		isComplete = __TrainingPrefab_TutorialWindow_Complete,
+	},
+	
+	OpenScreen = {
+		setupGoal = __TrainingPrefab_OpenScreen_Setup,
+		isComplete = __TrainingPrefab_OpenScreen_Complete,
+	},
+	
+	CloseScreen = {
+		setupGoal = __TrainingPrefab_CloseScreen_Setup,
+		isComplete = __TrainingPrefab_CloseScreen_Complete,
+	},
+	
+	Timer = {
+		setupGoal = function(goalPrefabData, goal)
+			
+			-- expects goalPrefabData to have:
+			-- timer_duration
+			
+			goal.timer_duration = goalPrefabData.timer_duration
+		end,
+		
+		isComplete = function(goal)
+			
+			if goal.startTime == nil then
+				goal.startTime = World_GetGameTime()
+			end
+			
+			return (World_GetGameTime() - goal.startTime) > goal.timer_duration
+		end,
+	},
+	
+	AbilityCast = {
+		setupGoal = __TrainingPrefab_AbilityCast_Setup,
+		isComplete = __TrainingPrefab_AbilityCast_Complete,
+	},
+	
+	CustomScript = {
+		setupGoal = function(goalPrefabData, goal)
+			
+			-- expects goalPrefabData to have:
+			-- custom_setup_func
+			-- custom_completion_func
+			
+			-- goalPrefabData can optionall have:
+			-- egroup
+			-- sgroup
+			
+			-- Track the egroup & sgroup of the prefabdata in the goal in case the
+			-- custom function wants to use them:
+			goal.egroup = goalPrefabData.egroup
+			goal.sgroup = goalPrefabData.sgroup
+			
+			-- Find the setup function
+			local customSetupGoalFunc = _G[goalPrefabData.custom_setup_func]
+			local setupResult = customSetupGoalFunc(goalPrefabData, goal)
+			
+			-- Find the complete function to be used later (store it in the goal)
+			goal.isCompleteFunc= _G[goalPrefabData.custom_completion_func]
+			
+			return setupResult
+			
+		end,
+		
+		isComplete = function(goal)
+			-- Call the custom function that was added by setup
+			return goal.isCompleteFunc(goal)
+		end,
+	},
+	
+	MoveUnit = {
+		setupGoal = function(goalPrefabData, goal)
+			
+			-- expects goalPrefabData to have:
+			-- target_pos
+			-- sgroup
+
+			goal.key = Marker_GetPosition(goalPrefabData.target_pos)
+
+			goal.move_target = goalPrefabData.target_pos
+			goal.move_sgroup = goalPrefabData.sgroup
+		end,
+		
+		isComplete = function(goal)
+			return Prox_AreSquadMembersNearMarker(goal.move_sgroup, goal.move_target, ANY)
+		end,
+	},
+	
+	AttackSquad = {
+		setupGoal = function(goalPrefabData, goal)
+			-- expects goalPrefabData to have:
+			-- sgroup
+			
+			if SGroup_Count(goalPrefabData.sgroup) == 0 then
+				return SETUP_FAILURE
+			end
+			
+			goal.attack_sgroup = goalPrefabData.sgroup
+			goal.key = SGroup_GetSquadAt(goalPrefabData.sgroup, 1)
+		end,
+		
+		isComplete = function(goal)
+
+			local squadUnderAttack = function (groupid, itemindex, squad)
+				return Squad_IsUnderAttack(squad, 10) or Util_GetPlayerOwner(squad) == Game_GetLocalPlayer()
+			end
+			
+			return SGroup_ForEachAllOrAny(goal.attack_sgroup, ANY, squadUnderAttack)
+		end,
+	},
+	
+	AttackEntity = {
+		setupGoal = function(goalPrefabData, goal)
+			-- expects goalPrefabData to have:
+			-- egroup
+			
+			goal.attack_egroup = goalPrefabData.egroup
+			
+			if EGroup_Count(goalPrefabData.egroup) == 0 then
+				return SETUP_FAILURE
+			end
+			
+			if EGroup_Count(goalPrefabData.egroup) > 0 then
+				goal.key = EGroup_GetEntityAt(goalPrefabData.egroup, 1)
+			end
+		end,
+		
+		isComplete = function(goal)
+
+			local entityUnderAttack = function (groupid, itemindex, entity)
+				return Entity_IsUnderAttack(entity, 10) or Util_GetPlayerOwner(entity) == Game_GetLocalPlayer()
+			end
+			
+			return EGroup_Count(goal.attack_egroup) == 0 or EGroup_ForEachAllOrAny(goal.attack_egroup, ANY, entityUnderAttack)
+		end,
+	},
+	
+	ProducedSquad = {
+		setupGoal = function(goalPrefabData, goal)
+			
+			-- expects goalPrefabData to have:
+			-- squads_to_produce
+			
+			local eg_allLocalEntities = EGroup_Create("eg_allLocal")
+			Player_GetEntitiesEGroup(Game_GetLocalPlayer(), eg_allLocalEntities)
+			
+			local producer_egroup = EGroup_CreateIfNotFound("eg_producers")
+			EGroup_Clear(producer_egroup)
+			local collectProducer = function(groupid, itemindex, entity)
+				if Entity_HasProductionQueue(entity) then
+					EGroup_Add(producer_egroup, entity)
+				end
+			end
+			
+			EGroup_ForEach(eg_allLocalEntities, collectProducer)
+			
+			goal.producer_egroup = producer_egroup
+			goal.squads_to_produce = goalPrefabData.squads_to_produce
+			goal.key = goalPrefabData.squads_to_produce[1].sbp
+			
+			EGroup_Destroy(eg_allLocalEntities)
+		end,
+		
+		isComplete = function(goal)
+			
+			for i=EGroup_Count(goal.producer_egroup), 1, -1 do
+				local entity = EGroup_GetEntityAt(goal.producer_egroup, i)
+				
+				for j=#goal.squads_to_produce, 1, -1 do
+					if Entity_IsProducingSquad(entity, goal.squads_to_produce[j].sbp) then
+						return true
+					end
+				end
+			end
+			return false
+		end,
+	},
+	
+	
+}

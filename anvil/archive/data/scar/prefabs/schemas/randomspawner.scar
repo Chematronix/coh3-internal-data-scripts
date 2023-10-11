@@ -1,0 +1,89 @@
+--
+-- "Random Spawner"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+
+--? @group scardoc;Prefabs
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function randomspawner_Init(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	MissionPrint("Random Spawner is Initializing")
+	
+	local spawner = instance.spawner
+	
+	if randomspawner_RollDice(spawner.chance) then
+		
+		local number_to_spawn = spawner.number_to_spawn
+		if number_to_spawn > #spawner.locations then
+			number_to_spawn = #spawner.locations
+		end
+		
+		for i=number_to_spawn, 1, -1 do
+			
+			local rand = World_GetRand(1, #spawner.locations)
+			local location = spawner.locations[rand]
+			
+			local useMarkerTransform = true
+			Util_CreateEntities(location.player, nil, location.entity, location.position, 1, nil, nil, nil, useMarkerTransform)
+			
+			table.remove(spawner.locations, rand)
+			
+		end
+		
+	end
+	
+end
+
+
+
+function randomspawner_PostInit(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+end
+
+function randomspawner_Start(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+end
+
+
+
+--? @args Table/String instance
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function randomspawner_Trigger(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+end
+
+-- Stop the encounter associated with this instance and destroys any spawned squads the player can't see
+function randomspawner_Stop(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end
+
+
+
+function randomspawner_RollDice(chance)
+	
+	if World_GetRand(1, 100) <= chance then
+		return true
+	end
+	
+	return false
+	
+end

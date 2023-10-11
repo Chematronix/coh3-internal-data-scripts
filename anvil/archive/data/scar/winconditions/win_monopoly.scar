@@ -1,0 +1,88 @@
+-----------------------------------------------------------------------
+-- Monopoly Win Condition
+--
+-- (c) Relic Entertainment 2022
+--
+-- This win condition is triggered when one teams holds all the victory points on the map.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Monopoly")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+function Monopoly_OnInit()
+	
+	_monopoly = {
+		eg_vps = EGroup_CreateUnique(),
+	}
+	
+	-- Verify at least one VP exists
+	local eg = EGroup_CreateUnique()
+	World_GetStrategyPoints(eg, true)
+	EGroup_ForEach(eg,
+		function(egroup, index, entity)
+			if Entity_IsVictoryPoint(entity) then
+				EGroup_Add(_monopoly.eg_vps, entity)
+			end
+		end)
+	EGroup_Destroy(eg)
+	if EGroup_CountSpawned(_monopoly.eg_vps) == 0 then
+		_monopoly = nil
+		Core_UnregisterModule("Monopoly")
+	end
+end
+
+-- Called by core.scar after opening cinematics and events are complete.
+function Monopoly_Start()
+	Rule_AddInterval(Monopoly_CheckVictoryPoints, 3)
+end
+
+
+-- Called when any win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function Monopoly_OnWinConditionTriggered(match_result)
+	if Rule_Exists(Monopoly_CheckVictoryPoints) then
+		Rule_Remove(Monopoly_CheckVictoryPoints)
+	end
+end
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+function Monopoly_CheckVictoryPoints()
+	
+	local winner
+	for i = 1, World_GetPlayerCount() do
+		local vps = Player_GetNumVictoryPoints(World_GetPlayerAt(i))
+		if vps >= EGroup_CountSpawned(_monopoly.eg_vps) then
+			winner = World_GetPlayerAt(i)
+			break
+		end
+	end
+	
+	if winner then 
+		local match_result = {
+			winners = {}, 		-- table of player indices for the winning players
+			losers = {},		-- table of player indices for the losing players
+			win_reason = WR_VICTORY_POINT,		-- the win condition that was triggered
+		}
+		for i = 1, World_GetPlayerCount() do
+			if Player_ObserveRelationship(winner, World_GetPlayerAt(i)) == R_ALLY then
+				table.insert(match_result.winners, i)
+			else
+				table.insert(match_result.losers, i)
+			end
+		end
+		Core_CallDelegateFunctions("OnWinConditionTriggered", match_result)
+	end
+end
+

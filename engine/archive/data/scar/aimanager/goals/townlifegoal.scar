@@ -1,0 +1,141 @@
+--? @group scardoc;Encounter
+
+import("aimanager/Goals/BaseGoal.scar")
+
+Ai = Ai or fatal("Ai not loaded properly")
+Ai.goals = Ai.goals or {}
+Ai.goals.TownLifeGoal = Clone(Ai.goals.BaseGoal)
+Ai.goals.DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData or {} -- preserve data on soft-reload
+
+local TownLifeGoal = Ai.goals.TownLifeGoal
+
+TownLifeGoal._BaseCreate = TownLifeGoal.Create
+TownLifeGoal._BaseSetupSkirmishAI = TownLifeGoal.SetupSkirmishAI
+TownLifeGoal._BaseUpdateGoalData = TownLifeGoal.UpdateGoalData
+
+
+function TownLifeGoal:Create(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData, previousEncounterID)
+	local DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData
+	defaultGoalData = defaultGoalData or DefaultTownLifeGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultTownLifeGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultTownLifeGoalData.modifyGoalData
+	
+	local goal = self:_BaseCreate(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	
+	if(not goal.data.target) then fatal("ERROR: No TownLife target defined for encounter "  .. encounter.data.name) end
+	if(goal.internalAIEncounterPtr) then fatal("ERROR: Objective object already defined for encounter "  .. encounter.data.name) end
+	
+	goal:CreateSkirmishAI(previousEncounterID)
+	
+	return goal
+end
+
+function TownLifeGoal:UpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	local DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData
+	defaultGoalData = defaultGoalData or DefaultTownLifeGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultTownLifeGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultTownLifeGoalData.modifyGoalData
+
+	self:_BaseUpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+end
+
+--Create and Setup TownLife based on skirmish AI
+function TownLifeGoal:CreateSkirmishAI(previousEncounterID)
+	if (not AI_IsLocalAIPlayer(self.encounter.data.player)) then
+		Ai:Print("Skipping Skirmish AI - player not enabled AI")
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Creating AI Encounter...")
+	if previousEncounterID then
+		self.internalAIEncounterPtr = AI_CreateRestoreEncounter(self.encounter.data.player, AIEncounterType_TownLife, previousEncounterID)
+	else
+		self.internalAIEncounterPtr = AI_CreateEncounter(self.encounter.data.player, AIEncounterType_TownLife)
+	end
+	
+	self:SetupEncounterSkirmishAI()
+	self:SetupSkirmishAI()
+end
+
+--Setup TownLife based on skirmish AI
+function TownLifeGoal:SetupSkirmishAI()
+	if (self.internalAIEncounterPtr == nil or not AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID)) then
+		self.internalAIEncounterPtr = nil
+		return
+	end
+	
+	Ai:Print("Setting up Skirmish AI...")
+	
+	self:_BaseSetupSkirmishAI()
+	
+end
+
+
+--[[
+-- TownLife Goal Data Interface
+]]--
+
+--? @shortdesc Adjust default goal data for TownLife goals.  Sets the default GoalData to the current defaults plus additionalDefaultGoalData; any values specified are used for unspecified encounter TownLife goal values.
+--? @args Table additionalDefaultGoalData
+function AITownLifeGoal_AdjustDefaultGoalData(additionalDefaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Adjusting TownLifeGoal default data...")
+	
+	local additionalGoalData = Clone(additionalDefaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(additionalGoalData)
+	local DefaultBaseGoalData = Ai.goals.DefaultGoalData
+	local DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData
+	local defaultGoalData = DefaultTownLifeGoalData.defaultGoalData or DefaultBaseGoalData.defaultGoalData
+	DefaultTownLifeGoalData.defaultGoalData = MergeCloneTable(defaultGoalData, additionalGoalData)
+
+	Ai:Print("-----------------------------------------------")
+	Ai:Print("additionalDefaultGoalData")
+	Ai:Print(additionalGoalData)
+	Ai:Print("-----------------------------------------------")
+	DebugPrintGoals(DefaultTownLifeGoalData.defaultGoalData, DefaultTownLifeGoalData.overrideGoalData, DefaultTownLifeGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set default goal data for TownLife goals.  defaultGoalData is cloned; any values specified are used for unspecified encounter TownLife goal values.
+--? @args Table defaultGoalData
+function AITownLifeGoal_SetDefaultGoalData(defaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting TownLifeGoal default data...")
+
+	local DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData
+	DefaultTownLifeGoalData.defaultGoalData = Clone(defaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultTownLifeGoalData.defaultGoalData)
+
+	DebugPrintGoals(DefaultTownLifeGoalData.defaultGoalData, DefaultTownLifeGoalData.overrideGoalData, DefaultTownLifeGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set override goal data for TownLife goals.  overrideGoalData is cloned; any values specified are used for encounter TownLife goal values.
+--? @args Table overrideGoalData
+function AITownLifeGoal_SetOverrideGoalData(overrideGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting TownLifeGoal override data...")
+
+	local DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData
+	DefaultTownLifeGoalData.overrideGoalData = Clone(overrideGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultTownLifeGoalData.overrideGoalData)
+
+	DebugPrintGoals(DefaultTownLifeGoalData.defaultGoalData, DefaultTownLifeGoalData.overrideGoalData, DefaultTownLifeGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set modify goal data for TownLife goals.  modifyGoalData is cloned; values specified via keyname_Multiply are used for the numeric keyname encounter TownLife goal value.
+--? @args Table modifyGoalData
+function AITownLifeGoal_SetModifyGoalData(modifyGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting TownLifeGoal modify data...")
+
+	local DefaultTownLifeGoalData = Ai.goals.DefaultTownLifeGoalData
+	DefaultTownLifeGoalData.modifyGoalData = Clone(modifyGoalData) 
+
+	DebugPrintGoals(DefaultTownLifeGoalData.defaultGoalData, DefaultTownLifeGoalData.overrideGoalData, DefaultTownLifeGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+

@@ -1,0 +1,1062 @@
+--
+-- Mission-o-Matic - Player-facing Objectives
+--
+-- Parse, manage, and monitor the player's objectives for the mission 
+--
+
+--
+-- See: Mission-o-Matic: Player Objectives
+--      http://relicwiki/display/CARD/Mission-o-Matic%3A+Player+Objectives	(in the EE, you can Control-click on this link to go there)
+--
+-- See also: 
+--      Conditions and Actions - http://relicwiki/display/CARD/Mission-o-Matic%3A+Conditions+and+Actions	
+--
+
+import("ui/hpat_enum_util.scar")
+import("anvil.scar")
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+---------------
+ --INITIALIZE--
+
+-- NOTE: saveInfo is a board state partial save table that can be passed in
+-- to override some parts of the initialization flow. This is not relevant
+-- to a 'full save' (RTS save)
+ function MissionOMatic_InitializeObjective(objective, parentObjective, opt_context, saveInfo)
+	
+	local objectiveData = objective.objectiveData
+	local prefabData = objective.prefabData
+	
+	objective.context = opt_context
+	
+	-- create the objective in the format the Objective System requires...
+	
+	local OBJ = {}
+	
+	OBJ.Title = objectiveData.Title
+	
+	-- DEPRECATE ANVIL BEGIN- Once the strings in prefabs are set to use the locstring editor, this conversion to a number can be removed and the title could be directly used as a LocID
+	
+	-- Temporarily support adding a number for the Title field
+	-- which can be a LocID. This should be removed once loc strings
+	-- are supported in the prefabs.
+	
+	-- if it does not get a LocString
+	if Loc_GetString(objectiveData.Title) == Loc_Empty() then
+		
+		local titleLoc = tonumber(objectiveData.Title)
+		
+		-- if it cannot convert to a number, use the string directly
+		if titleLoc ~= nil then
+			
+			OBJ.Title = titleLoc
+			
+		end
+	end
+	-- DEPRECATE ANVIL END
+	
+	OBJ.Description = objectiveData.Description
+	OBJ.Type = objectiveData.type or OT_Primary
+	OBJ.DataTemplate = objectiveData.DataTemplate
+	OBJ.Icon = objectiveData.Icon
+	
+	if parentObjective ~= nil then
+		OBJ.Parent = parentObjective.objectiveData
+	end
+	
+	OBJ.showStartTitle = objectiveData.showStartTitle
+	OBJ.showFailureTitle = objectiveData.showFailureTitle
+	OBJ.showCompletionTitle = objectiveData.showCompletionTitle
+	OBJ.visibility = prefabData.visibility
+	OBJ.visibility_player = prefabData.visibility_player
+	
+	MissionPrint("MissionOMatic_InitializeObjective " .. objectiveData.Title)
+	
+	--ON PRESTART
+	OBJ.PreStart = MissionOMatic_ObjectiveCallback_OnPreStart
+
+	--ON START
+	OBJ.OnStart = MissionOMatic_ObjectiveCallback_OnStart
+	OBJ.Intel_Start = objectiveData.Intel_Start
+	
+	
+	--ON COMPLETE
+	OBJ.PreComplete = MissionOMatic_ObjectiveCallback_OnPreComplete
+	OBJ.OnComplete = MissionOMatic_ObjectiveCallback_OnComplete
+	OBJ.IsComplete = MissionOMatic_Callback_CheckForComplete
+	OBJ.Intel_Complete = objectiveData.Intel_Complete
+	
+	
+	--ON FAIL
+	OBJ.PreFail = MissionOMatic_ObjectiveCallback_OnPreFail
+	OBJ.OnFail = MissionOMatic_ObjectiveCallback_OnFail
+	OBJ.IsFailed = MissionOMatic_Callback_CheckForFail
+	OBJ.Intel_Fail = objectiveData.Intel_Fail
+	
+	if prefabData.turn_based then
+		if prefabData.expires_after_turns then
+			-- ON EXPIRE
+			OBJ.PreExpire = MissionOMatic_ObjectiveCallback_OnPreExpire
+			OBJ.OnExpire = MissionOMatic_ObjectiveCallback_OnExpire
+			OBJ.IsExpired = MissionOMatic_Callback_CheckForExpire
+			OBJ.Intel_Expire = objectiveData.Intel_Expire
+		end
+		if prefabData.has_turn_reminder then
+			OBJ.Intel_TurnReminder = objectiveData.Intel_TurnReminder
+		end
+	end
+	
+	--ON PLAYER TURN START
+	OBJ.OnPlayerTurnStart = MissionOMatic_ObjectiveCallback_OnPlayerTurnStart
+	
+	--ON PLAYER TURN END
+	OBJ.OnPlayerTurnEnd = MissionOMatic_ObjectiveCallback_OnPlayerTurnEnd
+	
+	if (prefabData.completion_condition_check_type ~= nil) and (prefabData.completion_condition_check_type ~= "Default") then
+		OBJ.CanCheckForCompletion = MissionOMatic_Callback_CanCheckForCompletion
+	end
+	
+	if (prefabData.failure_condition_check_type ~= nil) and (prefabData.failure_condition_check_type ~= "Default") then
+		OBJ.CanCheckForFailure = MissionOMatic_Callback_CanCheckForFailure
+	end
+
+	-- register objective data
+	OBJ.ID = Objective_Register(OBJ)
+	if prefabData.objective_id ~= nil then
+		Obj_SetTelemetryName(OBJ.ID, prefabData.objective_id)
+	end
+	
+	-- add to table with all the mission objectives
+	objective.objectiveData = OBJ
+	
+	--Initializes sub objectives if they exist
+	if objective.subObjectives ~= nil then
+		for k, v in ipairs(objective.subObjectives) do
+			
+			-- Attempt to find the save info for this sub objective if it exists.
+			local subObjectiveSaveInfo = nil
+			if saveInfo ~= nil then
+				subObjectiveSaveInfo = PartialSave_FindSubObjectiveSaveInfo(v, saveInfo.subObjectiveSaveData)
+			end
+			
+			MissionOMatic_InitializeObjective(v, objective, opt_context, subObjectiveSaveInfo)
+		end
+	end
+	
+	-- adds to global table
+	table.insert(g_AllMissionObjectives, objective)
+	
+	-- attaches to mission debug node
+	if Misc_IsDevMode() then
+		MissionDebug_AttachToNode(objective)
+	end
+end
+
+function MissionOMatic_TriggerStartingObjectives()
+	
+	-- TODO - remove once primary objective added to campaign map
+	if g_CurrentObjective <= #g_MissionObjectives then
+		if g_noIntroObjective == true then
+			MissionOMatic_NoneCallback(g_MissionObjectives[g_CurrentObjective].objectiveData)
+		else
+			Objective_Start(g_MissionObjectives[g_CurrentObjective].objectiveData)
+		end
+	end
+	
+end
+
+------------
+--UTILITY--
+------------
+
+function MissionOMatic_StartObjective(id)
+	
+	local objective = MissionOMatic_FindObjective(id)
+	
+	MissionPrint("MissionOMatic_StartObjective " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	-- Starts objective
+	Objective_Start(objective.objectiveData)
+	
+end
+
+function MissionOMatic_NextObjective(completed)
+	
+	local objective = MissionOMatic_GetCurrentPrimaryObjective()
+	
+	g_CurrentObjective = g_CurrentObjective + 1
+	
+	local noMoreObjectives = g_CurrentObjective > #g_MissionObjectives
+	
+	if noMoreObjectives and completed then
+		-- Complete mission since we completed the last primary objective
+		if not World_IsMultiplayerGame() then
+			Action_MissionComplete_Do()
+		end
+	elseif noMoreObjectives or ((not completed) and objective.failResult == "MissionFail") then
+		-- fail the mission since we failed the last mission or the objective says to fail mission when not successful
+		if not World_IsMultiplayerGame() then
+			Action_MissionFail_Do()
+		end
+	else
+		-- Start the next objective since it exists and we don't quit early
+		MissionOMatic_StartObjective(g_MissionObjectives[g_CurrentObjective])
+	end
+	
+end
+
+function MissionOMatic_GetCurrentPrimaryObjective()
+	
+	return g_MissionObjectives[g_CurrentObjective]
+	
+end
+
+function MissionOMatic_GetCurrentPrimaryObjectiveData()
+	
+	return g_MissionObjectives[g_CurrentObjective].objectiveData
+	
+end
+
+function MissionOMatic_FindObjective(id, allowNonExistent)
+	
+	if id == nil or id == '' then
+		MissionPrint("Warning: No ID passed in")
+		return nil
+	end
+	
+	for index, objective in pairs(g_AllMissionObjectives) do
+		
+		if (scartype(id) == ST_TABLE and ((id.objectiveData ~= nil and id.objectiveData.ID == objective.objectiveData.ID) or id.ID == objective.objectiveData.ID)) or -- SCAR objective table OR objective data table
+			(scartype(id) == ST_NUMBER and id == objective.objectiveData.ID) or -- internal objective id
+			(scartype(id) == ST_STRING and id == objective.objectiveID) then -- string identifier from the prefab
+			
+			return objective
+			
+		end
+		
+	end
+	
+	if allowNonExistent then
+		return nil
+	end
+	
+	if id.objectiveData ~= nil then 
+		
+		MissionPrint("WARNING: Could not find an objective with ID " .. id.objectiveData.ID)
+		
+	elseif scartype(id) == ST_NUMBER or scartype(id) == ST_STRING then
+		
+		MissionPrint("WARNING: Could not find an objective with ID " .. id)
+		
+	else
+		
+		MissionPrint("WARNING: Could not find an objective with ID " .. id.ID)
+		
+	end
+
+	return nil
+end
+
+function MissionOMatic_FindAllObjectiveOfType(beatType)
+	
+	local outTable = {}
+	
+	for index, objective in pairs(g_AllMissionObjectives) do
+		if objective.beatType == beatType then
+			table.insert(outTable, objective)
+		end
+	end
+	return outTable
+end
+
+--? @shortdesc Triggers the callback actions stored in the given objective stage callback table. Expect the format to match
+--? the objectives_template.scar schema stored in "objective_stage_callback_schema"
+--? @extdesc Fills outPlaybillIDs with spawned playbillIDs if it is passed in.
+function MissionOMatic_TriggerObjectiveStageCallbackData(objective_stage_callback_data, context, outPlaybillIDs)
+	
+	local addID = function(id)
+		if outPlaybillIDs ~= nil and id ~= nil then
+			outPlaybillIDs[#outPlaybillIDs + 1] = id
+		end
+	end
+	
+	if objective_stage_callback_data ~= nil and #objective_stage_callback_data > 0 then
+		for i=1, #objective_stage_callback_data do
+			local action_data = objective_stage_callback_data[i]
+			
+			-- NOTE: scenref_playbill_key is used to refer to a playbill in the scenref from prefabdata
+			-- in the scenario. It is unfortunately also used to refer to introtype objective lists
+			-- by name, so that scenarios can launch scenref data. This probably should never have been
+			-- implemented but I'm not removing it.
+			if action_data.scenref_playbill_key ~= nil and action_data.scenref_playbill_key ~= "" then
+				-- Start the introtype or playbill.
+				local playbillID = StartPrimaryObjectiveOrPlaybill(action_data.scenref_playbill_key)
+				addID(playbillID)
+			end
+			
+			if action_data.playbill ~= nil then
+				if scartype(action_data.playbill) == ST_STRING or scartype(action_data.playbill) == ST_PREFAB then
+					local prefabData = Prefab_GetInstance(action_data.playbill)
+					if prefabData and prefabData.prefabName == "playbill" then
+						-- Unfortunately the playbill dropdown is of type ST_PREFAB which doesn't filter
+						-- for playbills only. As a result this callback has been used for other prefab
+						-- types, but we need to special case the playbills since we're tracking
+						-- whether or not they complete:
+						-- Need to call playbill_Trigger directly as it supports a return value.
+						local playbillID = playbill_Trigger(action_data.playbill, nil, context)
+						addID(playbillID)
+					else
+						-- Just call the generic trigger function
+						Prefab_DoAction(action_data.playbill, "Trigger", nil, context)
+					end
+
+				elseif scartype(action_data.playbill) == ST_TABLE then
+					local playbillID = Playbill_Start(action_data.playbill, context)
+					addID(playbillID)
+				end
+			end
+			
+			if action_data.actions ~= nil then
+				ActionList_PlayActions(action_data.actions, context or {})
+			end
+		end
+	end
+end
+
+-----------------
+--CALLBACKS--
+-----------------
+
+
+function MissionOMatic_ObjectiveCallback_OnPreStart(obj)				-- called when an objective starts (before the UI popups)
+	
+	--this will eventually need to become a 'find' function to compare objectiveData with the above data parameter
+	local objective = MissionOMatic_FindObjective(obj)
+	local callback_action_data = objective.onPreStart
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnPreStart " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+
+	-- play any OnPreStart playbills
+	MissionOMatic_TriggerObjectiveStageCallbackData(callback_action_data, objective.context)
+	
+end
+
+function MissionOMatic_CallStartFunc(objective, saveInfo)
+	--Calls Start function in objectiveutil OR introtype
+	local startFunc = _G["objectiveutil_"..objective.beatType.."_Start"]
+	if scartype(startFunc) == ST_FUNCTION then
+		startFunc(objective, saveInfo)
+	else
+		local variantType = objective.variantType or ""
+		startFunc = _G["introtype_"..variantType.."_Start"]
+		if scartype(startFunc) == ST_FUNCTION then
+			startFunc(objective)
+		end
+	end
+end
+
+function MissionOMatic_SetupTurnReminder(objective, startTurnOverride)
+	local prefabData = objective.prefabData
+	if prefabData.turn_based == true then
+		objective.startTurn = startTurnOverride or World_GetCurrentTurn()
+		
+		if (prefabData.has_turn_reminder == true) and (objective.objectiveData.Intel_TurnReminder ~= nil) then
+			
+			if scartype(objective.reminder_turn_frequency) ~= ST_NUMBER or objective.reminder_turn_frequency < 1 then
+				objective.reminder_turn_frequency = 1
+			end
+			
+			local conditionData = objective
+			
+			Objective_SetConditionalReminder(
+				obj,
+				objective.objectiveData.Intel_TurnReminder,
+				__ObjectiveReminderTurnsPassed,
+				conditionData)
+		end
+	end
+end
+	
+function MissionOMatic_StartUICallouts(objective)
+	--Sets up UI Callouts
+	if objective.uiCalloutPackages ~= nil then
+		print("UI CALLOUTS -- On Start")
+		MissionOMatic_ObjectiveCallback_UICallouts(objective)
+	end
+end
+
+function MissionOMatic_StartTimers(objective)
+	--Objective Counters and Timers--
+	local prefabData = objective.prefabData
+	local countCondition = prefabData.count_condition
+	if countCondition == "COUNTER" then
+		Objective_SetCounter(objective.objectiveData, 0, objective.objectiveCounterMax)
+	elseif countCondition == "TIMER" then
+		local timerAction = {
+			action = "ObjectiveStartTimer",
+			initialTime = prefabData.timer_start_time,
+			flashThreshold = prefabData.timer_flash_at,
+			countType = "COUNT_DOWN",
+			useTimerBar = false,
+			text = "Timer Bar",
+			id = objective,
+		}
+		objective.timerAction = timerAction
+		Action_ObjectiveStartTimer_Do(timerAction)
+	elseif countCondition == "TURN_COUNTER" then
+		Obj_SetCounterType(objective.objectiveData.ID, COUNTER_TurnsDecreasing)
+		local turnsRemaining = prefabData.expiry_turns - (World_GetCurrentTurn() - objective.startTurn)
+		Obj_SetCounterCount(objective.objectiveData.ID, turnsRemaining)
+	end
+end
+
+function MissionOMatic_ObjectiveCallback_OnStart(obj)				-- called when an objective starts (only hooked up if the objective has a playbill, or includes start.actions)
+	
+	--this will eventually need to become a 'find' function to compare objectiveData with the above data parameter
+	local objective = MissionOMatic_FindObjective(obj)
+	local prefabData = objective.prefabData
+	local callback_action_data = objective.onStart
+	
+	MissionOMatic_SetupTurnReminder(objective)
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnStart " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	-- play any OnStart playbills
+	MissionOMatic_TriggerObjectiveStageCallbackData(callback_action_data, objective.context)
+
+	MissionOMatic_StartTimers(objective)
+	
+	MissionOMatic_StartUICallouts(objective)
+	
+	--Calls Start function in objectiveutil OR introtype
+	MissionOMatic_CallStartFunc(objective)
+	
+	--Also calls any sub objectives attached
+	if objective.subObjectives ~= nil then
+		for i=1, #objective.subObjectives do
+			local subObjective = objective.subObjectives[i]
+			MissionOMatic_StartOrQueueSubObjective(subObjective)
+		end
+	end
+	
+end
+
+function MissionOMatic_StartOrQueueSubObjective(subObjective)
+	if subObjective.startConditions == nil or next(subObjective.startConditions) == nil then
+		Objective_Start(subObjective.objectiveData)
+	else
+		Rule_Add(MissionOMatic_ConditionallyStartObjective, subObjective)
+	end
+end
+
+function MissionOMatic_ConditionallyStartObjective(ruleContext, objective)
+	if ConditionList_CheckList(objective.startConditions, {}) then
+		Objective_Start(objective.objectiveData)
+		Rule_RemoveMe()
+	end
+end
+
+
+function MissionOMatic_ObjectiveEnd(objective, callback_action_data, completed, context)
+	
+	MissionPrint("MissionOMatic_ObjectiveEnd " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	-- Achievements
+	if completed then
+		CMChallenge_CheckObjectiveChallenge(objective)
+		SPChallenge_CheckObjectiveChallenge(objective)
+	end
+	
+	-- play any ending playbills
+	local spawnedPlaybillIDs = {}
+	MissionOMatic_TriggerObjectiveStageCallbackData(callback_action_data, context, spawnedPlaybillIDs)
+	MissionOMatic_TriggerObjectiveStageCallbackData(objective.onObjectiveEnd, context, spawnedPlaybillIDs)
+	
+	-- perform beat specific cleanup
+	local cleanupFunc = _G["objectiveutil_"..objective.beatType.."_Cleanup"]
+	if scartype(cleanupFunc) == ST_FUNCTION then
+		cleanupFunc(objective)
+	end
+	
+	-- if its a subobjective, it has an option to hide the subobjective once it finishes
+	if objective.hide_on_finish ~= nil and objective.hide_on_finish == true then
+		
+			Obj_SetVisible(objective.objectiveData.ID, false)
+		
+	end
+	
+	-- Hide incomplete subobjectives and mark them as invisible if completion_check is "ANY"
+	if objective.subObjectives then
+		if objective.completeConditions and objective.completeConditions.boolean ~= nil and objective.completeConditions.boolean == "ANY" then
+			for i=1, #objective.subObjectives do
+				local subObj = objective.subObjectives[i]
+				local subObjState = Obj_GetState(subObj.objectiveData.ID)
+				if (subObjState ~= OS_Complete) and (subObjState ~= OS_Failed) then
+					Obj_SetState(subObj.objectiveData.ID, OS_Off)
+					Obj_SetVisible(subObj.objectiveData.ID, false)
+				end
+			end
+		end
+	end
+	
+	local start_next_objective_data =
+	{
+		objective = objective,
+		completed = completed
+	}
+	
+	if objective.enable_wait_on_end == nil or objective.enable_wait_on_end == false then
+		StartNextObjective(start_next_objective_data)
+		return
+	end
+	
+	-- Do not proceed to the next part if the enable_wait_on_end is not true
+	
+	-- There are no ongoing playbills to keep track of, start the next objective
+	if #spawnedPlaybillIDs == 0 then
+		StartNextObjective(start_next_objective_data)
+	else
+		
+		local data_playbill_status_checker =
+		{
+			objective = objective,
+			completed = completed,
+			runningPlaybillIDs = spawnedPlaybillIDs,
+		}
+		
+		Rule_Add(PlaybillStatusChecker, data_playbill_status_checker)
+	end
+	
+end
+
+function PlaybillStatusChecker(context, data)
+	local runningPlaybillIDs = data.runningPlaybillIDs
+	for i = 1, #runningPlaybillIDs do
+		local playbillID = runningPlaybillIDs[i]
+		if Playbill_IsActive(nil, playbillID) then
+			return
+		end
+	end
+	
+	StartNextObjective(data)
+	Rule_RemoveMe()
+end
+
+function StartNextObjective(data)
+	if data.objective == MissionOMatic_GetCurrentPrimaryObjective() then
+		MissionOMatic_NextObjective(data.completed)
+	else
+		if (not data.completed) and data.objective.failResult == "MissionFail" then
+			-- fail the mission since the objective says to fail mission when not successful
+			Action_MissionFail_Do()
+		end
+	end
+end
+
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--ON COMPLETE--
+
+function MissionOMatic_ObjectiveCallback_OnPreComplete(data) -- called when an objective is completed, runs BEFORE dialogue, objective popups, and regular OnComplete
+	
+	local objective = MissionOMatic_FindObjective(data)
+	
+	MissionOMatic_TriggerObjectiveStageCallbackData(objective.onPreComplete, objective.context)
+	
+end
+
+function MissionOMatic_ObjectiveCallback_OnComplete(data) -- called when an objective is completed (only hooked up if the objective has a playbill, or if complete.actions are included)
+	
+	local objective = MissionOMatic_FindObjective(data)
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnComplete " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)	
+	
+	local function DoAwardVeterancyToAllPlayerCompanySquads(player, veterancyPoints)
+		local foreach_squad_award_veterancy = function(group, index, squad)
+			Squad_IncreaseVeterancy(squad, veterancyPoints, false, false)
+		end
+		
+		local allPlayerSquads = Player_GetSquads(player)
+		
+		SGroup_Filter(allPlayerSquads, "company", FILTER_KEEP)
+		
+		SGroup_ForEach(allPlayerSquads, foreach_squad_award_veterancy)
+	end
+	
+	if objective.objectiveID ~= nil and objective.objectiveID ~= "" then
+		local campaign = Game_RetrieveTableData("campaign", false)
+		if campaign ~= nil then
+			if campaign.completed_objectives == nil then
+				campaign.completed_objectives = {}
+			end
+			table.insert(campaign.completed_objectives, objective.objectiveID)
+			
+			if World_IsCampaignMetamapGame() then
+				if objective.veterancy_reward_type == "High" then
+					
+					local veterancyPointsToAward = World_GetVeterancyPointsPerObjective_High()
+					DoAwardVeterancyToAllPlayerCompanySquads(Game_GetLocalPlayer(), veterancyPointsToAward)
+					
+				elseif objective.veterancy_reward_type == "Low" then
+					
+					local veterancyPointsToAward = World_GetVeterancyPointsPerObjective_Low()
+					DoAwardVeterancyToAllPlayerCompanySquads(Game_GetLocalPlayer(), veterancyPointsToAward)
+					
+				end
+			else
+				-- if a mission is in progress and the completed objective is a bonus objective, add skill point from tunables
+				if data.Type == OT_Bonus then
+					Player_AddResource(Game_GetLocalPlayer(), RT_Requisition, World_GetSkillPointsForBonusObjective())
+				end
+			end
+			
+			Game_StoreTableData("campaign", campaign)
+		end
+	end
+	
+	-- Command Point Rewards for SP missions ( ADO Follow-up Task: https://relicentertainment.visualstudio.com/Anvil/_workitems/edit/59113 )
+	if objective.cp_cap_boost ~= nil and objective.cp_reward ~= nil then
+		Dev_UpdateCommandPoints(objective.cp_reward, objective.cp_cap_boost)
+	end
+	
+	MissionOMatic_ObjectiveEnd(objective, objective.onComplete, true, objective.context)
+	
+end
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--ON FAIL--
+
+function MissionOMatic_ObjectiveCallback_OnPreFail(data) -- called when an objective is failed, runs BEFORE dialogue, objective popups, and regular OnFail
+	
+	local objective = MissionOMatic_FindObjective(data)
+	
+	MissionOMatic_TriggerObjectiveStageCallbackData(objective.onPreFail, objective.context)
+	
+end
+
+function MissionOMatic_ObjectiveCallback_OnFail(data) -- called when an objective is failed (only hooked up if the objective has a playbill, or if fail.actions are included)
+	
+	local objective = MissionOMatic_FindObjective(data)
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnFail " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	MissionOMatic_ObjectiveEnd(objective, objective.onFail, false, objective.context)
+	
+end
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+--ON EXPIRE--
+function MissionOMatic_ObjectiveCallback_OnPreExpire(data)
+	local objective = MissionOMatic_FindObjective(data)
+	
+	MissionOMatic_TriggerObjectiveStageCallbackData(objective.onPreExpire, objective.context)
+end
+
+function MissionOMatic_ObjectiveCallback_OnExpire(data)
+	
+	local objective = MissionOMatic_FindObjective(data)
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnExpire " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	MissionOMatic_ObjectiveEnd(objective, objective.onTurnExpire, false, objective.context)
+	
+end
+
+function MissionOMatic_NoneCallback(data)
+	
+	MissionOMatic_ObjectiveCallback_OnStart(data)
+	
+	MissionOMatic_ObjectiveCallback_OnComplete(data) --Since none objective cannot be completed, we assume its always the same state
+	
+end
+
+function MissionOMatic_Callback_CheckForComplete(obj, allowPartialObjectiveCompletion)
+	
+	local objective = MissionOMatic_FindObjective(obj)
+	
+	local conditions = objective.completeConditions or {}
+	local context = objective.context or objective -- use a specified context or the objective itself
+	
+	local function checkConditions()
+		
+		local listCurrent = 0
+		local listMax = objective.objectiveCounterMax
+		
+		--exit early if TIMER isn't done
+		if objective.countCondition == "TIMER" and objective.checkCompleteConditions == "After Timer" then
+			
+			local earlyExitTimerCondition = {
+				condition = "ObjectiveTimer",
+				number = 0,
+				id = objective.objectiveData,
+			}
+			if ConditionList_CheckList(earlyExitTimerCondition, {}) == false then
+				return false
+			end
+			
+			--Objective Counters
+		elseif objective.countCondition == "COUNTER" then
+			
+			
+			for k, v in ipairs(conditions.subconditions) do
+				if v.use_subconditions_for_count then
+					local condition_name = v.condition
+					if scartype(condition_name) == ST_FUNCTION then
+						condition_name = v.conditionName
+					end
+					local count_function = _G["Condition_"..condition_name.."_GetCount"]
+					if scartype(count_function) == ST_FUNCTION then
+						listCurrent = listCurrent + count_function(v, context).current
+					end
+				else
+					if ConditionList_CheckList(v, context) then
+						listCurrent = listCurrent + 1
+					end
+				end
+			end
+			Objective_SetCounter(obj, listCurrent, listMax)
+			
+
+			
+			--turn counter
+		elseif objective.countCondition == "TURN_COUNTER" then
+			local turnsRemaining = objective.expiry_turns - (World_GetCurrentTurn() - objective.startTurn)
+			Obj_SetCounterCount(obj.ID, turnsRemaining)
+		end
+		
+		--exit early because this objective can never complete
+		if objective.canComplete == false then
+			return false
+		end
+		
+		--Check the predetermined and additional conditions
+		return ConditionList_CheckList(conditions, context)
+	end
+	
+	-- Set allow partial objective completion for true for the duration
+	-- of this check only:
+	context.allowPartialObjectiveCompletion = true
+	local result = checkConditions()
+	context.allowPartialObjectiveCompletion = false
+	
+	return result
+	
+end
+
+function MissionOMatic_Callback_CheckForFail(data)
+	
+	local objective = MissionOMatic_FindObjective(data)
+	
+	local conditions = objective.failConditions or {}
+	local context = objective.context or objective
+	
+	
+	--exit early if failure conditions are set to false
+	if objective.canFail == false then
+		return false
+	end
+	
+	--exit early if TIMER isn't done
+	if objective.countCondition == "TIMER" and objective.checkFailConditions == "After Timer" then
+	
+		local earlyExitTimerCondition = {
+			condition = "ObjectiveTimer",
+			number = 0,
+			id = objective.objectiveData,
+		}
+				
+		if ConditionList_CheckList(earlyExitTimerCondition, {}) == false then
+			return false
+		end
+				
+	end
+	
+	--CHECK CONDITION
+	if ConditionList_CheckList(conditions, context) then
+		
+		--delay if there's a take-back timer
+		if objective.use_takeback_timer == true then
+			
+			--start take-back timer
+			if objective.takebacktime_triggered == false then
+				
+				Action_StartObjective_Do({id = objective.takebackObjectiveID})
+				objective.takebacktime_triggered = true
+				
+			end
+			--check take-back timer
+			if ConditionList_CheckList(objective.takebacktimeCheck, {}) then
+				
+				objective.takebacktime_triggered = false
+				return true
+				
+			end
+			
+			return false
+			
+		else
+			return true
+		end
+		
+	end
+	
+	if objective.takebacktime_triggered == true then
+		
+		Action_StopObjective_Do(objective.takebacktimeComplete)
+		objective.takebacktime_triggered = false
+		
+	end
+	
+	return false
+	
+end
+
+function MissionOMatic_Callback_CheckForExpire(data)
+	local objective = MissionOMatic_FindObjective(data)
+	return Objective_TurnsExpired(objective)
+end
+
+function MissionOMatic_Callback_CanCheckForCompletion(data)
+	local objective = MissionOMatic_FindObjective(data)
+	local checkCompletionConditions = true
+	if objective.completion_condition_check_type == "TurnStart" then
+		checkCompletionConditions = World_IsTurnStartScriptedPhase()
+	elseif objective.completion_condition_check_type == "TurnEnd" then
+		checkCompletionConditions = World_IsTurnEndScriptedPhase()
+	elseif objective.completion_condition_check_type == "Timed" then
+		if (data.timeLastCompletionCheck == nil) or (currentGameTime - data.timeLastCompletionCheck >= objective.completion_time_interval) then
+			data.timeLastCompletionCheck = currentGameTime
+		else
+			checkCompletionConditions = false
+		end
+	end
+	return checkCompletionConditions
+end
+	
+function MissionOMatic_Callback_CanCheckForFailure(data)
+	local objective = MissionOMatic_FindObjective(data)
+	local checkFailureConditions = true
+	if objective.failure_condition_check_type == "TurnStart" then
+		checkFailureConditions = World_IsTurnStartScriptedPhase()
+	elseif objective.failure_condition_check_type == "TurnEnd" then
+		checkFailureConditions = World_IsTurnEndScriptedPhase()
+	elseif objective.failure_condition_check_type == "Timed" then
+		if (data.timeLastFailureCheck == nil) or (currentGameTime - data.timeLastFailureCheck >= objective.failure_time_interval) then
+			data.timeLastFailureCheck = currentGameTime
+		else
+			checkFailureConditions = false
+		end
+	end
+	return checkFailureConditions
+end
+
+function MissionOMatic_ObjectiveCallback_OnPlayerTurnStart(data)
+	
+	local objective = MissionOMatic_FindObjective(data)
+	local callback_action_data = objective.onPlayerTurnStart
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnPlayerTurnStart " .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	-- play any OnPlayerTurnStart playbills
+	MissionOMatic_TriggerObjectiveStageCallbackData(callback_action_data, objective.context)
+	
+end
+	
+function MissionOMatic_ObjectiveCallback_OnPlayerTurnEnd(data)
+	
+	local objective = MissionOMatic_FindObjective(data)
+	local callback_action_data = objective.onPlayerTurnEnd
+	
+	MissionPrint("MissionOMatic_ObjectiveCallback_OnPlayerTurnEnd" .. objective.objectiveData.Title .. "  ID: " .. objective.objectiveData.ID)
+	
+	-- play any OnTurnEnd playbills
+	MissionOMatic_TriggerObjectiveStageCallbackData(callback_action_data, objective.context)
+	
+end
+
+-----------------------
+----UI CALLOUTS----
+-- Future options: UI_CreateMinimapBlip, UI_EnableEntityMinimapIndicator
+function MissionOMatic_ObjectiveCallback_UICallouts(data)
+
+	local callouts = data.uiCalloutPackages
+	for i=1, #callouts do
+		
+		callouts[i].objectiveData = data.objectiveData
+		
+		Rule_AddInterval(MissionOMatic_UICallouts_Spawn, 1, callouts[i])
+		
+		print("UI CALLOUTS -- Starting Package")
+		
+	end
+	
+end
+
+function MissionOMatic_UICallouts_Spawn(data, context)
+	
+	local package = context
+	
+	if package.startCondition == nil or ConditionList_CheckList(package.startCondition) then
+		
+		local callout = package.callout
+		package.callout = nil
+		-- Fill Package Contents
+		package.icon_name = callout.icon_name
+		package.text = callout.text
+		package.offset = callout.offset
+		package.template = callout.ui_template
+		package.world_arrow = callout.world_arrow
+		package.action_type = callout.action_type
+		
+		-- Default icon set for ObjectiveMarkerDataTemplate
+		if package.icon_name == '' then
+			if package.template == DT_OBJECTIVE_MARKER then
+				package.icon_name = IT_S_Default
+			else
+				package.icon_name = nil
+			end
+		end
+		
+		if callout.end_callout == "Condition" then
+			package.endCondition = callout.end_conditions
+		end
+		
+		local ping_radius = nil
+		if callout.add_blip_area then
+			if callout.blip_radius > 0 then
+				ping_radius = callout.blip_radius
+			elseif scartype(package.where) == ST_MARKER then
+				ping_radius = Marker_GetProximityRadiusOrDefault(package.where, 10.0)
+			end
+		end
+		package.ping_radius = ping_radius
+
+		local reticule_radius = nil
+		if callout.add_reticule then
+			if callout.reticule_radius > 0 then
+				reticule_radius = callout.reticule_radius
+			elseif scartype(package.where) == ST_MARKER then
+				reticule_radius = Marker_GetProximityRadiusOrDefault(package.where, 10.0)
+			end
+		end
+		package.reticule_radius = reticule_radius
+		
+		--If the UI Callout is to a group with a start condition, get the contents now
+		if callout.target == "Group" and callout.start_callout == "Condition" then
+			local ProcessUICalloutPackage = function(group_callout, group)	
+				--basic package contents
+				local sub_package = {}
+				sub_package.objectiveData = package.objectiveData
+				sub_package.icon_name = package.icon_name
+				sub_package.text = package.text
+				sub_package.offset = package.offset
+				sub_package.where = group
+				sub_package.template = package.template
+				sub_package.endCondition = package.endCondition
+				sub_package.world_arrow = package.world_arrow
+				sub_package.action_type = package.action_type
+				sub_package.ping_radius = package.ping_radius
+				sub_package.reticule_radius = package.reticule_radius
+				print("UI CALLOUTS -- Spawning")
+				sub_package.id = Objective_AddUIElements(
+					sub_package.objectiveData,
+					sub_package.where,
+					true,
+					sub_package.text or "",
+					sub_package.world_arrow,
+					sub_package.offset,
+					nil,
+					GetHPATEnumValFromString(sub_package.action_type),
+					sub_package.icon_name,
+					sub_package.template,
+					nil,
+					sub_package.ping_radius,
+					sub_package.reticule_radius)
+				
+				if sub_package.endCondition ~= nil then
+					Rule_AddInterval(MissionOMatic_UICallouts_Despawn, 1, sub_package)
+				end
+			end
+			objectiveutil_CreateGroupUICalloutPackages(callout, ProcessUICalloutPackage)
+		else
+			print("UI CALLOUTS -- Spawning")
+			package.id = Objective_AddUIElements(
+				package.objectiveData,
+				package.where,
+				true,
+				package.text or "",
+				package.world_arrow,
+				package.offset,
+				nil,
+				GetHPATEnumValFromString(package.action_type),
+				package.icon_name,
+				package.template,
+				nil,
+				package.ping_radius,
+				package.reticule_radius)
+				
+			if package.endCondition ~= nil then
+				Rule_AddInterval(MissionOMatic_UICallouts_Despawn, 1, package)
+			end
+		end
+		Rule_RemoveMe()
+	end
+	
+end
+
+function MissionOMatic_UICallouts_Despawn(data, context)
+	
+	local package = context
+	local objectiveData = package.objectiveData
+	
+	if Objective_IsComplete(objectiveData) or
+		Objective_IsFailed(objectiveData) or
+		Objective_IsExpired(objectiveData) then
+		-- No need to remove objective UI as it's already removed by the objective system
+		Rule_RemoveMe()
+	end
+	
+	if ConditionList_CheckList(package.endCondition) then
+		Objective_RemoveUIElements(objectiveData, package.id)
+		
+		Rule_RemoveMe()
+		
+	end
+	
+end
+
+function __ObjectiveReminderTurnsPassed(objective)
+	
+	local currentTurn = World_GetCurrentTurn()
+	
+	if objective.lastReminderTurn == nil then
+		objective.lastReminderTurn = objective.startTurn
+	end
+	
+
+	-- if the delay period is not over yet, then quit early
+	if currentTurn - objective.startTurn < objective.prefabData.reminder_delay_turns then
+		return
+	end
+	
+	local turnFrequency = objective.prefabData.reminder_turn_frequency
+	if scartype(turnFrequency) ~= ST_NUMBER or turnFrequency < 1 then
+		turnFrequency = 1
+	end
+
+	if currentTurn - objective.lastReminderTurn >= turnFrequency then
+		
+		objective.lastReminderTurn = World_GetCurrentTurn()
+		return true
+		
+	else
+		
+		return false
+		
+	end
+end

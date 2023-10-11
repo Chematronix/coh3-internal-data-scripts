@@ -1,0 +1,18 @@
+import( 'tactics.scar' )
+import( 'utility/debug.scar' )
+import( 'ai-view.scar' )
+import( 'anvil_objects.scar' )
+
+--------------------------------------------------------------------
+-- InitializeAI - where the AI starts
+function InitializeSkirmishAI()
+	print("InitializeSkirmishAI - No AI (Do Nothing)")
+end
+
+function InitializeAIPersonality()
+	
+end
+
+InitializeSkirmishAI()
+InitializeAIPersonality()
+

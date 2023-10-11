@@ -1,0 +1,283 @@
+import("table.scar")
+
+function MigrateSave_RenameEntityStateModelBool(from, to)
+    local table = PartialSaveTable.statemodelTable.entity_statemodel_data
+    for key,val in pairs(table) do
+        table[key].bool_data[to] = table[key].bool_data[from]
+        table[key].bool_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameEntityStateModelInt(from, to)
+    local table = PartialSaveTable.statemodelTable.entity_statemodel_data
+    for key,val in pairs(table) do
+        table[key].int_data[to] = table[key].int_data[from]
+        table[key].int_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameEntityStateModelTarget(from, to)
+    local table = PartialSaveTable.statemodelTable.entity_statemodel_data
+    for key,val in pairs(table) do
+        table[key].target_data[to] = table[key].target_data[from]
+        table[key].target_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameEntityStateModelList(from, to)
+    local table = PartialSaveTable.statemodelTable.entity_statemodel_data
+    for key,val in pairs(table) do
+        table[key].list_data[to] = table[key].list_data[from]
+        table[key].list_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameSquadStateModelBool(from, to)
+    local table = PartialSaveTable.statemodelTable.squad_statemodel_data
+    for key,val in pairs(table) do
+        table[key].bool_data[to] = table[key].bool_data[from]
+        table[key].bool_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameSquadStateModelInt(from, to)
+    local table = PartialSaveTable.statemodelTable.squad_statemodel_data
+    for key,val in pairs(table) do
+        table[key].int_data[to] = table[key].int_data[from]
+        table[key].int_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameSquadStateModelTarget(from, to)
+    local table = PartialSaveTable.statemodelTable.squad_statemodel_data
+    for key,val in pairs(table) do
+        table[key].target_data[to] = table[key].target_data[from]
+        table[key].target_data[from] = nil
+    end
+end
+
+function MigrateSave_RenameSquadStateModelList(from, to)
+    local table = PartialSaveTable.statemodelTable.squad_statemodel_data
+    for key,val in pairs(table) do
+        table[key].list_data[to] = table[key].list_data[from]
+        table[key].list_data[from] = nil
+    end
+end
+
+function MigrateSave_RenamePlayerStateModelBool(from, to)
+    local table = PartialSaveTable.statemodelTable.player_statemodel_data
+    for key,val in pairs(table) do
+        table[key].bool_data[to] = table[key].bool_data[from]
+        table[key].bool_data[from] = nil
+    end
+end
+
+function MigrateSave_RenamePlayerStateModelInt(from, to)
+    local table = PartialSaveTable.statemodelTable.player_statemodel_data
+    for key,val in pairs(table) do
+        table[key].int_data[to] = table[key].int_data[from]
+        table[key].int_data[from] = nil
+    end
+end
+
+function MigrateSave_RenamePlayerStateModelFloat(from, to)
+    local table = PartialSaveTable.statemodelTable.player_statemodel_data
+    for key,val in pairs(table) do
+        table[key].float_data[to] = table[key].float_data[from]
+        table[key].float_data[from] = nil
+    end
+end
+
+function MigrateSave_RenamePlayerStateModelTarget(from, to)
+    local table = PartialSaveTable.statemodelTable.player_statemodel_data
+    for key,val in pairs(table) do
+        table[key].target_data[to] = table[key].target_data[from]
+        table[key].target_data[from] = nil
+    end
+end
+
+function MigrateSave_RenamePlayerStateModelList(from, to)
+    local table = PartialSaveTable.statemodelTable.player_statemodel_data
+    for key,val in pairs(table) do
+        table[key].list_data[to] = table[key].list_data[from]
+        table[key].list_data[from] = nil
+    end
+end
+
+function MigrateSave_EvacuateSquadsAroundMarker(player, markerName)
+	-- Move squads outwards from a marker to a position that is outside the marker's radius
+	local markerID = Marker_FromName(markerName, '')
+	local markerPosition = Marker_GetPosition(markerID)
+	local markerRadius = Marker_GetProximityRadiusOrDefault(markerID, 10)
+	local sgTemp = SGroup_Create("temp")
+	Player_GetAllSquadsNearMarker(player, sgTemp, markerPosition, markerRadius)
+	for i=1, SGroup_Count(sgTemp) do
+		local squad = SGRoup_GetSquadAt(sgTemp, i)
+		local squadPosition = Squad_GetPosition(squad)
+		local outwardDirection = Vector_Normalize(squadPosition - markerPosition)
+		local newPosition = markerPosition + outwardDirection * markerRadius
+		local newLookTowards = newPosition + outwardDirection
+		Squad_SetPosition(squad, newPosition, newLookTowards)
+	end
+	SGroup_Destroy(sgTemp)
+end
+
+function MigrateSave_RenamePlaybill(from, to)
+    -- Rename prefab 'fab_foo' to 'fab_bar'
+    local table = PartialSaveTable.playbillSaveTable.playbills
+    for i,v in ipairs(table) do
+		if v.instanceName == from then
+			v.instanceName = to
+		end
+    end
+ 
+    -- Also need to update 'path' roots for objective data
+    local table = PartialSaveTable.objectiveSave.objectiveSaveData
+    for i,v in ipairs(table) do
+        if v.objectivePrefabDataPath[0] == from then
+            v.objectivePrefabDataPath[0] = to
+        end
+    end
+end
+
+function MigrateSave_RemovePlaybill(name)
+	local table = PartialSaveTable.playbillSaveTable.playbills
+	local wasPlaybillActive = Table_RemoveIf(table, #table, function(x) return x.instanceName == name end)
+ 
+    -- Also remove all objective associated with the playbill
+    local table = PartialSaveTable.objectiveSave.objectiveSaveData
+	Table_RemoveIf(table, #table, function(x) return x.objectivePrefabDataPath[0] == name end)
+	
+	return wasPlaybillActive
+end
+
+function MigrateSave_ApplyBlueprintMigrationTableToSaveData(saveTable, upToVersion)
+	local fromVersion = saveTable.blueprintMigrationVersion
+	if fromVersion == upToVersion then
+		return
+	end
+	
+	local playerGameData = saveTable.playerGameData
+	if playerGameData ~= nil then
+		for i,v in ipairs(playerGameData.players) do
+			for j,upgrade in ipairs(v.upgrades) do
+				upgrade.name = BP_ApplyBlueprintNameMigration(upgrade.name, PBG_Upgrade, fromVersion, upToVersion)
+			end
+			for j,ability in ipairs(v.abilities) do
+				ability.name = BP_ApplyBlueprintNameMigration(ability.name, PBG_Ability, fromVersion, upToVersion)
+			end
+			
+			-- Remove elements that have been deleted this update.
+			Table_RemoveIf(v.upgrades, #v.upgrades, function(x) return x.name == "" end)
+			Table_RemoveIf(v.abilities, #v.abilities, function(x) return x.name == "" end)
+		end
+	end
+	
+	saveTable.blueprintMigrationVersion = upToVersion
+end
+
+function MigrateSave_ApplyBlueprintMigrationTableToDataStore(upToVersion)
+	-- Migrate blueprints in campaign datastore fields.
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign == nil then
+		return
+	end
+	
+	-- Assume version 1 if no version number is written.
+	local fromVersion = campaign.blueprintMigrationVersion or 1
+	if fromVersion == upToVersion then
+		return
+	end
+	
+	if campaign.player_data ~= nil then
+		for i,v in ipairs(campaign.player_data) do
+			local ability_data = v.ability_data
+			local ability_data_copy = Table_Copy(ability_data)
+			for k,v in pairs(ability_data_copy) do
+				-- For whatever reason, pbgs here are stored by their longname instead of their shortname...
+				-- The key value isn't actually used anywhere except here, so I guess we'll just replace it
+				-- with the shortname. It's not like we have a way of retrieving the longName in scar anyways...
+				local shortName = string.gsub(k, ".*\\", "")
+				local shortName = BP_ApplyBlueprintNameMigration(shortName, PBG_Ability, fromVersion, upToVersion)
+				ability_data[k] = nil
+				if BP_AbilityExists(shortName) then
+					ability_data[shortName] = BP_GetAbilityBlueprint(shortName)
+				elseif shortName ~= "" then
+					-- If the blueprint doesn't exist, but the name is non-empty then this is likely an intermediate migration.
+					-- Just mark the entry with an empty table until we have a chance to circle back around and properly resolve the fully migrated name.
+					ability_data[shortName] = { }
+				end
+			end
+			
+			local upgrade_data = v.upgrade_data
+			local upgrade_data_copy = Table_Copy(upgrade_data)
+			for k,v in pairs(upgrade_data_copy) do
+				local shortName = string.gsub(k, ".*\\", "")
+				local shortName = BP_ApplyBlueprintNameMigration(shortName, PBG_Upgrade, fromVersion, upToVersion)
+				upgrade_data[k] = nil
+				if BP_UpgradeExists(shortName) then
+					upgrade_data[shortName] = BP_GetUpgradeBlueprint(shortName)
+				elseif shortName ~= "" then
+					upgrade_data[shortName] = { }
+				end
+			end
+		end
+	end
+	
+	if campaign.local_player_ability_modifiers ~= nil then
+		local local_player_ability_modifiers = campaign.local_player_ability_modifiers
+		local local_player_ability_modifiers_copy = Table_Copy(local_player_ability_modifiers)
+		for k,v in pairs(local_player_ability_modifiers_copy) do
+			local shortName = string.gsub(k, ".*\\", "")
+			local shortName = BP_ApplyBlueprintNameMigration(shortName, PBG_Ability, fromVersion, upToVersion)
+			local_player_ability_modifiers[k] = nil
+			if BP_AbilityExists(shortName) then
+				local_player_ability_modifiers[shortName] = BP_GetAbilityBlueprint(shortName)
+			elseif shortName ~= "" then
+				local_player_ability_modifiers[shortName] = { }
+			end
+		end
+	end
+	
+	if campaign.selected_modifiers ~= nil then
+		local selected_modifiers = campaign.selected_modifiers
+		local selected_modifiers_copy = Table_Copy(selected_modifiers)
+		for k,v in pairs(selected_modifiers_copy) do
+			local shortName = string.gsub(k, ".*\\", "")
+			local shortName = BP_ApplyBlueprintNameMigration(shortName, PBG_Ability, fromVersion, upToVersion)
+			selected_modifiers[k] = nil
+			if BP_AbilityExists(shortName) then
+				selected_modifiers[shortName] = BP_GetAbilityBlueprint(shortName)
+			elseif shortName ~= "" then
+				selected_modifiers[shortName] = { }
+			end
+		end
+	end
+	
+	if campaign.ai_ability_modifiers then
+		local ai_ability_modifiers = campaign.ai_ability_modifiers
+		local ai_ability_modifiers_copy = Table_Copy(ai_ability_modifiers)
+		for k,v in pairs(ai_ability_modifiers_copy) do
+			local shortName = string.gsub(k, ".*\\", "")
+			local shortName = BP_ApplyBlueprintNameMigration(shortName, PBG_Ability, fromVersion, upToVersion)
+			ai_ability_modifiers[k] = nil
+			if BP_AbilityExists(shortName) then
+				ai_ability_modifiers[shortName] = BP_GetAbilityBlueprint(shortName)
+			elseif shortName ~= "" then
+				ai_ability_modifiers[shortName] = { }
+			end
+		end
+	end
+	
+	campaign.blueprintMigrationVersion = upToVersion
+	
+	Game_StoreTableData("campaign", campaign)
+	
+	-- The following aren't saved with their pbg names, so we're SOL for migrating them...
+	-- We should probably write a migration that converts the raw PBG IDs into PBG shortnames
+	-- before we ship...
+	-- campaign.mission_data.player_data[-].starting_squads
+	-- campaign.mission_affectors.garrison_attachment_reinforcement_ability
+	-- campaign.mission_affectors.garrison_ability
+	-- campaign.mission_affectors.reinforcement_abilities
+end

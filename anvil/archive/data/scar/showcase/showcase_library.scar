@@ -1,0 +1,198 @@
+-----------------------------------------------------------------------
+-- 'Showcase' library
+--
+-- This game mode has no win conditions. 
+-- It is intended for use in Frontend scenarios like Showcase. 
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+import("scarutil.scar")
+import("core.scar")		-- core script framework
+
+local activeRegion = ""
+
+local showcaseSquads = {}
+local showcaseEntities = {}
+local squadRotation = 0;
+
+function ReplaceInventoryUnit(blueprint, isSquad)
+	DespawnUnits()
+	
+	local markerName = GetInventorySpawnMarkerName(blueprint, isSquad)
+	Rule_Remove(DelayedInventorySpawn)
+	local data = {
+		blueprint = blueprint,
+		isSquad = isSquad,
+		markerName = markerName
+	}
+	Rule_AddOneShot(DelayedInventorySpawn, 0.5, data)
+end
+
+function DelayedInventorySpawn(context, data)
+	Spawn(data.blueprint, data.isSquad, data.markerName)
+end
+
+function Spawn(blueprint, isSquad, markerName)
+	local player = Game_GetLocalPlayer()
+	if (player == nil) then
+  		return
+	end
+	
+	local spawnLocation = Marker_FromName(markerName,"")
+	local pos = Marker_GetPosition(spawnLocation)
+	local lookAtMarker = Marker_FromName("LookAt","")
+	local lookAt = Marker_GetPosition(lookAtMarker)
+	-- create the squad ( 0 in the param means create the whole squad )
+	if (isSquad) then 
+		local squad = Squad_CreateAndSpawnToward(blueprint, player, 0, pos, lookAt)
+		table.insert(showcaseSquads, squad)
+		squadRotation = 0;
+	else
+		snapToTerrain = false
+		local entity = Entity_CreateFacing(blueprint, player, pos, lookAt, snapToTerrain)
+		Entity_Spawn(entity)
+		table.insert(showcaseEntities, entity)
+	end
+end
+
+function GetInventorySpawnMarkerName(blueprint, isSquad)
+	local name = nil
+	if (isSquad) then
+		if(Squad_IsSBPOfType(blueprint,"infantry") or Squad_IsSBPOfType(blueprint,"combat_engineer")) then
+			name = "InventoryInfantrySpawn"
+		end
+		if(Squad_IsSBPOfType(blueprint,"vehicle") or Squad_IsSBPOfType(blueprint,"teamweapon")) then
+			name = "InventoryVehicleSpawn"
+		end
+	else
+		if (Entity_IsEBPOfType(blueprint, "building")) then
+			name = "InventoryBuildingSpawn"
+		end
+		if (Entity_IsEBPOfType(blueprint, "territory_point")) then
+			name = "InventoryTerritoryPointSpawn"
+		end
+	end
+	
+	--If a unit doesn't have any of those tags then assign a default instead of causing a fatal scar error.
+	if (name == nil) then
+		name = "InventoryVehicleSpawn" 
+	end
+	
+	return name
+end
+
+function TransitionToRegion(region)
+	--Always respawn units even if travelling to the same region. Last race or last biome may have changed.
+	activeRegion = region
+
+	DespawnUnits()
+	
+	if(region == "Home") then
+		SetupHomeRegion()
+	elseif(region == "Inventory") then
+		SetupInventoryRegion()
+	end
+end
+
+function SetupHomeMarker(unitName, unitIsSquad, fallbackSquadName, marker)
+	if(unitName ~= nil and unitName ~= "" and unitIsSquad ~= nil) then
+		if (unitIsSquad) then
+			Spawn(BP_GetSquadBlueprint(unitName), unitIsSquad, marker)
+		else
+			Spawn(BP_GetEntityBlueprint(unitName), unitIsSquad, marker)
+		end
+	else
+		Spawn(BP_GetSquadBlueprint(fallbackSquadName), true, marker)
+	end
+end
+
+function SetupHomeRegion()
+	Game_LoadDataStore("inventory_tag", "", false)
+	local inventoryTag = Game_RetrieveTableData("inventory_tag", false)
+	SetupHomeMarker(inventoryTag.vehicle, inventoryTag.vehicle_is_squad, "hellcat_us", "HomeVehicleSpawn")
+	SetupHomeMarker(inventoryTag.infantry1, inventoryTag.infantry1_is_squad, "engineer_us", "HomeInfantrySpawn1")
+	SetupHomeMarker(inventoryTag.infantry2, inventoryTag.infantry2_is_squad, "scout_us", "HomeInfantrySpawn2")
+end
+
+function SetupInventoryRegion()
+	--Initial unit will be determined by the inventory screen. 
+	--Leaving this stub method in case of future setup, as the inventory screen is not complete.
+end
+
+function DespawnUnits()
+	for key, value in pairs(showcaseSquads) do
+		Squad_DeSpawn(value)
+		Squad_Destroy(value)
+	end
+	showcaseSquads = {}
+	
+	for key, value in pairs(showcaseEntities) do
+		Entity_DeSpawn(value)
+		Entity_Destroy(value)
+	end
+	showcaseEntities = {}
+end
+
+-----------------------------------------------------------------------
+-- Script framework
+-----------------------------------------------------------------------
+
+Core_RegisterModule("ShowcaseMode")
+
+
+-- Called by OnInit() in core.scar.
+function ShowcaseMode_OnInit()
+	Camera_SetDeclination(6.0)
+	FOW_RevealAll()
+	Rule_AddOneShot(SetCameraZoom, 1)
+end
+
+-- Called by core.scar after opening cinematics and events are complete.
+function ShowcaseMode_Start()
+	Game_LoadDataStore("flow", "", false)
+	local flow = Game_RetrieveTableData("flow", false)
+	flow.is_showcase_started = true
+	Game_StoreTableData("flow", flow)
+	World_DisableWeathering()
+end
+
+function SetCameraZoom()
+	Camera_SetZoomDist(20)
+end
+
+function OnCosmeticChanged(unitName, isSquad)
+	if(activeRegion == "Inventory") then
+		if(isSquad) then
+			ReplaceInventoryUnit(BP_GetSquadBlueprint(unitName), isSquad)
+		else
+			ReplaceInventoryUnit(BP_GetEntityBlueprint(unitName), isSquad)
+		end
+	end
+end
+
+function SetFrontEndScenarioRegion(region)
+	TransitionToRegion(region)
+end
+
+function OnCameraMoved(markerName)
+	local lookAtMarker = Marker_FromName(markerName,"")
+	local lookAt = Marker_GetPosition(lookAtMarker)
+	Camera_FocusOnPosition(lookAt)
+end
+
+function OnUnitRotated(radians)
+	if(activeRegion == "Inventory") then
+		squadRotation = squadRotation + radians;
+		
+		local firstSquadIndex, firstSquad = next(showcaseSquads)
+		local firstEntityIndex, firstEntity = next(showcaseEntities)
+		
+		if (firstSquad ~= nil) then
+			Squad_ShowcaseSetActorsRotation(firstSquad, squadRotation)
+		elseif (firstEntity ~= nil) then
+			Entity_ShowcaseRotate(firstEntity, radians)
+		end
+	end
+end

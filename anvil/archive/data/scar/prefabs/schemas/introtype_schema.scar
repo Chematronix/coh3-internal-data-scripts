@@ -1,0 +1,1541 @@
+--
+-- WorldBuilder prefab
+-- "introtype"
+--
+
+import("prefabs/templates/playbills_template.scar")
+
+-- Schema
+
+local buildings =
+{
+	type = ST_TABLE,
+	name = "buildings",
+	description = "Markers for each building to spawn",
+	multiplicity = "multiple",
+	itemSchema = {
+		{
+			type = ST_MARKER,
+			name = "position",
+			description = "Starting location for the camera",
+			colour = "yellow",
+			hasDirection = true,
+		},
+		{
+			type = ST_PBG,
+			name = "ebp",
+			displayName = "EBP",
+			blueprintType  = "entity",
+			description = "Building to spawn",
+			category = "Required"
+		},
+		{
+			type = ST_EGROUP,
+			name = "egroup",
+			displayName = "EGroup",
+			description = "If you want these to be assigned a specific egroup",
+			category = "Optional",
+		},
+		--Company type to check for--
+		{
+			type = ST_PBG,
+			name = "company_type",
+			displayName = "Company Type",
+			description = "Company type to check for (Use only for company types)",
+			blueprintType = "squad",
+			category = "Optional",
+		},
+	},
+}
+
+introtype_schema = {-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "introtype", -- name the prefab uses to identify itself
+	description = "introtype", -- name to display for this prefab
+	script = "introtype.scar", -- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a", -- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+		{
+			type = ST_NUMBER,
+			name = "entry_point_id",
+			description = "Use 1 for default entry point, 2 for alternate (e.g. naval) entry point",
+			displayName = "Entry Point ID",
+			multiplicity = "single"
+		},
+		{
+			type = ST_BOOLEAN,
+			name = "is_default",
+			default = false,
+			displayName = "Is Default?",
+			description = "Should we default to this introtype if no entry point is specified? WILL ERROR IF MORE THAN ONE DEFAULT SELECTED",
+			multiplicity = "single"
+		},
+		{
+			type = ST_STRING,
+			name = "pop_cap_preset",
+			displayName = "Pop Cap Preset",
+			description = "Player 1's population cap preset",
+			options = {
+				"NONE","LOW", "STANDARD","HIGH"
+			},
+			multiplicity = "single",
+			default = "NONE",
+		},
+		{
+			type = ST_STRING,
+			name = "annihilation_condition",
+			default = "No HQ, No Units",
+			displayName = "Annihilation Condition",
+			description = "What condition should auto-fail the mission?",
+			options = {
+				"No HQ, No Units", "No HQ", "None"
+			},
+			category = "Annihilation Auto Fail",
+		},
+		{
+			type = ST_NUMBER,
+			name = "cue_red",
+			displayName = "Cue Color - Red",
+			description = "Red component of the cue color (0-255)",
+			min = 0,
+			max = 255,
+			default = 255,
+			category = "Annihilation Auto Fail Text Settings",
+		},
+		{
+			type = ST_NUMBER,
+			name = "cue_green",
+			displayName = "Cue Color - Green",
+			description = "Green component of the cue color (0-255)",
+			min = 0,
+			max = 255,
+			default = 255,
+			category = "Annihilation Auto Fail Text Settings",
+		},
+		{
+			type = ST_NUMBER,
+			name = "cue_blue",
+			displayName = "Cue Color - Blue",
+			description = "Blue component of the cue color (0-255)",
+			min = 0,
+			max = 255,
+			default = 255,
+			category = "Annihilation Auto Fail Text Settings",
+		},
+		{
+			type = ST_NUMBER,
+			name = "cue_alpha",
+			displayName = "Cue Color - Alpha",
+			description = "Alpha/Opacity component of the cue color (0-255)",
+			min = 0,
+			max = 255,
+			default = 255,
+			category = "Annihilation Auto Fail Text Settings",
+		},
+		{
+			type = ST_STRING,
+			name = "icon_name",
+			displayName = "Icon Name",
+			description = "Name of the icon",
+			category = "Annihilation Auto Fail Text Settings",
+		},
+		{
+			type = ST_STRING,
+			name = "sound_name",
+			displayName = "Sound Name",
+			description = "Name of the sound to play",
+			category = "Annihilation Auto Fail Text Settings",
+		},
+		{
+			type = ST_NUMBER,
+			name = "duration",
+			displayName = "Duration",
+			description = "Duration of the annihilation message in seconds",
+			category = "Annihilation Auto Fail Text Settings",
+			default = 5,
+		},
+		{
+			type = ST_STRING,
+			name = "cue_title",
+			displayName = "Cue Title",
+			description = "Locstring of title to be displayed. If no text is provided, default will be used. $11197738 -- Your forces have been annihilated",
+			category = "Annihilation Auto Fail Text Settings",
+			editor =
+			{
+				name = "Essence.Editor.ScenarioEditor.Controls.LocStringEditor, EssenceEditor"
+			},
+		},
+		{
+			type = ST_STRING,
+			name = "cue_description",
+			displayName = "Cue Description",
+			description = "Locstring of description for event cue",
+			category = "Annihilation Auto Fail Text Settings",
+			editor = 
+			{
+				name = "Essence.Editor.ScenarioEditor.Controls.LocStringEditor, EssenceEditor"
+			},
+		},
+		------------------------
+		------------------------ INTRO TYPE
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "objectives",
+			description = "All the mission types available on the",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_STRING,
+					name = "intro_type",
+					description = "Context and dialogue used for this objective",
+					options = {"Land", "Beach", "Airdrop", "Secret"},
+					default = "Land",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "var_none",
+					description = "Skip the intro beat",
+					default = false,
+				},
+				{
+					type = ST_STRING,
+					name = "title",
+					description = "Title for the objective.",
+					editor = 
+					{
+						name = "Essence.Editor.ScenarioEditor.Controls.LocStringEditor, EssenceEditor"
+					},
+				},
+				{
+					type = ST_STRING,
+					name = "objective_id",
+					description = "A unique objective id that can be referenced. ENSURE THERE IS NO DUPLICATE NAME WHEN USING THIS",
+					category = "Optional",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "has_manual_narrative",
+					description = "Determines if a manual SCAR event function could be referenced as an intel even for this objective",
+					category = "Narrative",
+					default = false,
+				},
+				{
+					type = ST_STRING,
+					name = "start_narrative_function",
+					description = "SCAR intel function override to play on start when manually written SCAR code is necessary",
+					requirement = {"has_manual_narrative", true},
+					category = "Narrative",
+				},
+				{
+					type = ST_STRING,
+					name = "complete_narrative_function",
+					description = "SCAR intel function override to play on complete when manually written SCAR code is necessary",
+					requirement = {"has_manual_narrative", true},
+					category = "Narrative",
+				},
+				{
+					type = ST_STRING,
+					name = "fail_narrative_function",
+					description = "SCAR intel function override to play on fail when manually written SCAR code is necessary",
+					requirement = {"has_manual_narrative", true},
+					category = "Narrative",
+				},
+				{
+					type = ST_STRING,
+					name = "start_narrative_event",
+					editor = 
+					{
+						name = "Essence.Editor.Bridge.Editors.ReflectObjectEditor",
+						properties = 
+						{
+							type= "NarrativeEvent"
+						}
+					},
+					description = "The narrative event to play when the objective starts.",
+					category = "Narrative",
+				},
+				{
+					type = ST_STRING,
+					name = "complete_narrative_event",
+					editor = 
+					{
+						name = "Essence.Editor.Bridge.Editors.ReflectObjectEditor",
+						properties = 
+						{
+							type= "NarrativeEvent"
+						}
+					},
+					description = "The narrative event to play when the objective completes.",
+					category = "Narrative",
+				},
+				{
+					type = ST_STRING,
+					name = "fail_narrative_event",
+					editor = 
+					{
+						name = "Essence.Editor.Bridge.Editors.ReflectObjectEditor",
+						properties = 
+						{
+							type= "NarrativeEvent"
+						}
+					},
+					description = "The narrative event to play when the objective fails.",
+					category = "Narrative",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "use_intro_sequence",
+					description = "Use the clear area intro type",
+					default = false,
+				},
+				{
+					type = ST_TABLE,
+					name = "pre_intro_sequence",
+					description = "Sequence to run before running to intro_sequence. This is not affected by -skip_intros arg",
+					multiplicity = "multiple",
+					itemSchema = g_playbills_template,
+				},
+				{
+					type = ST_TABLE,
+					name = "intro_sequence",
+					description = "Detailed variables for this variant",
+					multiplicity = "multiple",
+					requirement = {"use_intro_sequence", true},
+					itemSchema = g_playbills_template,
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "enable_wait_on_end",
+					displayName = "Enable Wait on End",
+					description = "Will wait for all the on_complete/on_end playbills to finish based on a WAIT action specified before proceeding to the next objective",
+					default = false,
+				},
+				{
+					type = ST_TABLE,
+					name = "none",
+					description = "Detailed variables for this variant",
+					multiplicity = "single",
+					requirement = {"var_none", true},
+					itemSchema = {
+						{
+							type = ST_STRING,
+							name = "objective_name",
+							description = "Title for the objective",
+							options = {"None"},
+							default = "None",
+						},
+						{
+							type = ST_STRING,
+							name = "starting_atmosphere",
+							description = "Name of the atmosphere to load on mission start.",
+						},
+						{
+							type = ST_STRING,
+							name = "spawn_buildings",
+							description = "When should production buildings be spawned?",
+							options = {"Never", "On Init", "On Start", "On Complete"},
+							default = "On Init",
+						},
+						{
+							type = ST_TABLE,
+							name = "on_start",
+							description = "Actions triggered when this objective starts",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_complete",
+							description = "Actions triggered when this objective completes",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+					},
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "var_cleararea",
+					description = "Use the clear area intro type",
+					default = false,
+				},
+				{
+					type = ST_TABLE,
+					name = "cleararea",
+					description = "Detailed variables for this variant",
+					multiplicity = "single",
+					requirement = {"var_cleararea", true},
+					itemSchema = {
+						{
+							type = ST_STRING,
+							name = "objective_name",
+							description = "Name of the objective for the objective title",
+							options = {"Clear Area", "Secure Area", "Clear Sector"},
+							default = "Clear Area",
+						},
+						{
+							type = ST_STRING,
+							name = "starting_atmosphere",
+							description = "Name of the atmosphere to load on mission start.",
+						},
+						{
+							type = ST_STRING,
+							name = "spawn_buildings",
+							description = "When should production buildings be spawned?",
+							options = {"Never", "On Start", "On Complete"},
+							default = "Never",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "fade_out_and_in",
+							description = "If you want a fade out and back in to hide the construction of the egroups.",
+							default = false,
+						},
+						{
+							type = ST_NUMBER,
+							name = "fade_time",
+							description = "Length of transition for the fade.",
+							default = 0,
+						},
+						{
+							type = ST_STRING,
+							name = "fade_new_atmosphere",
+							description = "OPTIONAL: Name of a new atmosphere to transition to while the screen is black.",
+						},
+						{
+							type = ST_MARKER,
+							name = "fade_focus_marker",
+							description = "Optional camera position to be focused at, after the fade, if desired.",
+						},
+						{
+							type = ST_STRING,
+							name = "camera_focus_type",
+							description = "Tell camera to focus on building (assuming 1st building if in series), a specific marker location, or do nothing.",
+							options = {"None", "Building", "Marker Location"},
+							default = "None",
+							category = "Camera Focus",
+						},
+						{
+							type = ST_EGROUP,
+							name = "building_to_focus",
+							description = "Building to focus on when Camera Focus Type is set to Building",
+							category = "Camera Focus",
+						},
+						---------------- FADE STUFF
+						{
+							type = ST_SGROUP,
+							name = "friendly_fade_group",
+							description = "Name of friendly group to work with in fade.",
+						},
+						{
+							type = ST_MARKER,
+							name = "friendly_warp_location",
+							description = "Location to warp player units if desired",
+						},
+						{
+							type = ST_SGROUP,
+							name = "enemy_fade_group",
+							description = "Name of enemy group to work with in fade.",
+						},
+						{
+							type = ST_MARKER,
+							name = "enemy_warp_location",
+							description = "Location to warp enemy units if desired",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "stop_friendly_activity",
+							description = "During fade, issue friendly stop command",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_enemy_warp",
+							description = "During fade, issue warp command to enemy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_enemy_despawn",
+							description = "During fade, issue despawn command to enemy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_friendly_warp",
+							description = "During fade, issue warp command to friendly group",
+						},
+						{
+							type = ST_PREFAB,
+							name = "fade_playbill",
+							description = "Linked playbill prefab to use during fade sequence",
+							default = "",
+						},
+						
+						------------------------
+						{
+							type = ST_MARKER,
+							name = "action_area",
+							description = "Location of area to clear",
+							colour = "orange",
+							hasDirection = true,
+						},
+						{
+							type = ST_TABLE,
+							name = "on_start",
+							description = "Actions triggered when this objective starts",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_complete",
+							description = "Actions triggered when this objective completes",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_fail",
+							description = "Actions triggered if this objective fails",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},		
+						},
+					},
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "var_killbuildings",
+					description = "Use the kill buildings intro type",
+					default = false,
+				},
+				{
+					type = ST_TABLE,
+					name = "killbuildings",
+					description = "Detailed variables for this variant",
+					multiplicity = "single",
+					requirement = {"var_killbuildings", true},
+					itemSchema = {
+						{
+							type = ST_STRING,
+							name = "objective_name",
+							description = "Name of the objective for the objective title",
+							options = {"Kill buildings", "Take Out Targets"},
+							default = "Kill buildings",
+						},
+						{
+							type = ST_STRING,
+							name = "starting_atmosphere",
+							description = "Name of the atmosphere to load on mission start.",
+						},
+						{
+							type = ST_STRING,
+							name = "spawn_buildings",
+							description = "When should production buildings be spawned?",
+							options = {"Never", "On Start", "On Complete"},
+							default = "Never",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "fade_out_and_in",
+							description = "If you want a fade out and back in to hide the construction of the egroups.",
+							default = false,
+						},
+						{
+							type = ST_NUMBER,
+							name = "fade_time",
+							description = "Length of transition for the fade.",
+							default = 0,
+						},
+						{
+							type = ST_STRING,
+							name = "fade_new_atmosphere",
+							description = "OPTIONAL: Name of a new atmosphere to transition to while the screen is black.",
+						},
+						{
+							type = ST_MARKER,
+							name = "fade_focus_marker",
+							description = "Optional camera position to be focused at, after the fade, if desired.",						
+						},
+						{
+							type = ST_STRING,
+							name = "camera_focus_type",
+							description = "Tell camera to focus on building (assuming 1st building if in series), a specific marker location, or do nothing.",
+							options = {"None", "Building", "Marker Location"},
+							default = "None",
+						},
+						
+						---------------- FADE STUFF
+						{
+							type = ST_SGROUP,
+							name = "friendly_fade_group",
+							description = "Name of friendly group to work with in fade.",
+						},
+						{
+							type = ST_MARKER,
+							name = "friendly_warp_location",
+							description = "Location to warp player units if desired",
+						},
+						{
+							type = ST_SGROUP,
+							name = "enemy_fade_group",
+							description = "Name of enemy group to work with in fade.",
+						},
+						{
+							type = ST_MARKER,
+							name = "enemy_warp_location",
+							description = "Location to warp enemy units if desired",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "stop_friendly_activity",
+							description = "During fade, issue friendly stop command",
+						},
+						
+						{
+							type = ST_BOOLEAN,
+							name = "activate_enemy_warp",
+							description = "During fade, issue warp command to enemy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_enemy_despawn",
+							description = "During fade, issue despawn command to enemy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_friendly_warp",
+							description = "During fade, issue warp command to friendly group",
+						},
+						{
+							type = ST_PREFAB,
+							name = "fade_playbill",
+							description = "Linked playbill prefab to use during fade sequence",
+							default = "",
+						},
+						
+						------------------------
+						{
+							type = ST_TABLE,
+							name = "spawn_locations",
+							description = "Detailed variables for this variant",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_MARKER,
+									name = "locations",
+									description = "Location for building to spawn",
+									colour = "red",
+									hasDirection = true,
+								},
+								{
+									type = ST_PBG,
+									name = "building_target",
+									blueprintType  = "entity",
+									description = "buildings the player has to take out to complete the intro objective",
+									show = true,
+									showAlways = true,
+									lockedTo = "locations",
+								},
+								{
+									type = ST_PLAYER,
+									name = "buildings_owner",
+									displayName = "Buildings Owner",
+									description = "The owner of the buildings that will be spawned",
+									default = "Player2"
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_start",
+							description = "Actions triggered when this objective starts",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_complete",
+							description = "Actions triggered when this objective completes",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_fail",
+							description = "Actions triggered if this objective fails",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "ui_callouts",
+							description = "UI callouts should appear for this objective, with specified text.",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_STRING,
+									name = "text",
+									description = "What the callout should say next to the arrow.",
+									default = "",
+									category = "Options",
+								},
+								{
+									type = ST_NUMBER,
+									name = "offset",
+									description = "What kind of offset should this ui callout have. Positive numbers raises it higher in world.",
+									default = 0,
+									category = "Options",
+								},
+								{
+									type = ST_STRING,
+									name = "ui_template",
+									description = "How the callout should look.",
+									options = {"PrimaryObjectiveDataTemplate", "SecondaryObjectiveDataTemplate", "BonusObjectiveDataTemplate", "ThreatGroupDataTemplate", "Debug"},
+									default = "PrimaryObjectiveDataTemplate",
+									category = "Options",
+								},
+							},
+						},
+					},
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "var_killunits",
+					description = "Use the kill units intro type",
+					default = false,
+				},
+				{
+					type = ST_TABLE,
+					name = "killunits",
+					description = "Detailed variables for this variant",
+					multiplicity = "single",
+					requirement = {"var_killunits", true},
+					itemSchema = {
+						{
+							type = ST_STRING,
+							name = "objective_name",
+							description = "Name of the objective for the objective title",
+							options = {"Kill Units", "Take Out Targets"},
+							default = "Kill Units",
+						},
+						{
+							type = ST_STRING,
+							name = "starting_atmosphere",
+							description = "Name of the atmosphere to load on mission start.",
+						},
+						{
+							type = ST_STRING,
+							name = "spawn_buildings",
+							description = "When should production buildings be spawned?",
+							options = {"Never", "On Start", "On Complete"},
+							default = "Never",
+						},
+						
+						{
+							type = ST_BOOLEAN,
+							name = "fade_out_and_in",
+							description = "If you want a fade out and back in to hide the construction of the egroups.",
+							default = false,
+						},
+						{
+							type = ST_NUMBER,
+							name = "fade_time",
+							description = "Length of transition for the fade.",
+							default = 0,
+						},
+						{
+							type = ST_STRING,
+							name = "fade_new_atmosphere",
+							description = "OPTIONAL: Name of a new atmosphere to transition to while the screen is black.",
+						},
+						{
+							type = ST_MARKER,
+							name = "fade_focus_marker",                 
+							description = "Optional camera position to be focused at, after the fade, if desired.",
+						},
+						{
+							type = ST_STRING,
+							name = "camera_focus_type",
+							description = "Tell camera to focus on building (assuming 1st building if in series), a specific marker location, or do nothing.",
+							options = {"None", "Building", "Marker Location"},
+							default = "None",
+						},
+						
+						---------------- FADE STUFF
+						{
+							type = ST_SGROUP,
+							name = "friendly_fade_group",
+							description = "Name of friendly group to work with in fade.",
+						},
+						{
+							type = ST_MARKER,
+							name = "friendly_warp_location",                 
+							description = "Location to warp player units if desired",
+						},
+						{
+							type = ST_SGROUP,
+							name = "enemy_fade_group",
+							description = "Name of enemy group to work with in fade.",
+						},
+						{
+							type = ST_MARKER,
+							name = "enemy_warp_location",                 
+							description = "Location to warp enemy units if desired",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "stop_friendly_activity",                 
+							description = "During fade, issue friendly stop command",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_enemy_warp",                 
+							description = "During fade, issue warp command to enemy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_enemy_despawn",                 
+							description = "During fade, issue despawn command to enemy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "activate_friendly_warp",                 
+							description = "During fade, issue warp command to friendly group",
+						},
+						{
+							type = ST_PREFAB,
+							name = "fade_playbill",
+							description = "Linked playbill prefab to use during fade sequence",
+							default = "",
+						},
+						
+						------------------------
+						{
+							type = ST_TABLE,
+							name = "spawn_locations",
+							description = "Detailed variables for this variant",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_MARKER,
+									name = "locations",
+									description = "Location for unit to spawn",
+									colour = "red",
+									hasDirection = true,
+								},
+								{
+									type = ST_SGROUP,
+									name = "sgroup",
+									description = "SGroup to spawn",
+								},
+								{
+									type = ST_PBG,
+									name = "unit_target",
+									blueprintType  = "squad",
+									description = "Units the player has to take out to complete the intro objective",
+									show = true,
+									showAlways = true,
+									lockedTo = "locations",
+								},
+								{
+									type = ST_PLAYER,
+									name = "squads_owner",
+									displayName = "Squads Owner",
+									description = "The owner of the squads that will be spawned",
+									default = "Player2"
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_start",
+							description = "Actions triggered when this objective starts",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_complete",
+							description = "Actions triggered when this objective completes",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "on_fail",
+							description = "Actions triggered if this objective fails",
+							multiplicity = "multiple",
+							itemSchema = {
+								{
+									type = ST_PREFAB,
+									name = "playbill",
+									description = "Linked playbill prefab",
+									default = "",
+								},
+								{
+									type = ST_STRING,
+									name = "scenref_playbill_key",
+									description = "Name of a playbill that should start when this prefab's objectives are finished. Only use for referencing a scenref playbill from a scenario.",
+									default = "",
+								},
+							},
+						},
+						{
+							type = ST_TABLE,
+							name = "ui_callouts",
+							description = "UI callouts should appear for this objective, with specified text.",
+							multiplicity = "multiple",
+							itemSchema = {
+								
+								{
+									type = ST_STRING,
+									name = "text",
+									description = "What the callout should say next to the arrow.",
+									default = "",
+									category = "Options",
+								},
+								{
+									type = ST_NUMBER,
+									name = "offset",
+									description = "What kind of offset should this ui callout have. Positive numbers raises it higher in world.",
+									default = 0,
+									category = "Options",
+								},
+								{
+									type = ST_STRING,
+									name = "ui_template",
+									description = "How the callout should look.",
+									options = {"PrimaryObjectiveDataTemplate", "SecondaryObjectiveDataTemplate", "BonusObjectiveDataTemplate", "ThreatGroupDataTemplate", "Debug"},
+									default = "PrimaryObjectiveDataTemplate",
+									category = "Options",
+								},
+							},
+						},
+					},
+				},	
+				{
+					type = ST_NUMBER,
+					name = "time_limit",
+					description = "Limit until objective fail, -1 means none",
+					default = -1,
+				},
+				{
+					type = ST_NUMBER,
+					name = "interactive_stage",
+					description = "Set to the interactive stage area the player should be restricted to",
+					default = 1,
+				},
+			},
+		},
+		{
+			type = ST_TABLE,
+			name = "camera",
+			description = "Areas for player units to spawn",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_MARKER,
+					name = "start_location",
+					description = "Starting location for the camera",
+					colour = "yellow",
+					hasDirection = false,
+					hasRange = false,
+				},
+				{
+					type = ST_NUMBER,
+					name = "rotation",
+					description = "Rotation for start camera",
+					default = -1,
+				},
+				{
+					type = ST_NUMBER,
+					name = "angle",
+					description = "Angle for start camera",
+					default = -1,
+				},
+				{
+					type = ST_NUMBER,
+					name = "zoom",
+					description = "Zoom for start camera",
+					default = -1,
+				},
+				
+			},
+		},
+		buildings,
+		{
+			type = ST_TABLE,
+			name = "race_specific",
+			multiplicity = "multiple",
+			itemSchema = {
+				{
+					type = ST_PBG,
+					name = "race",
+					displayName = "Race",
+					description = "Race of the buildings/units",
+					blueprintType = "race",
+				},
+				{
+					type = ST_TABLE,
+					name = "spawnables",
+					multiplicity = "multiple",
+					itemSchema = {
+						{
+							type = ST_STRING,
+							name = "boolean",
+							displayName = "Boolean",
+							description = "Checks conditions to see if ANY, ALL or NONE have been completed",
+							options = {"ALL", "ANY", "NONE"},
+							default = "ALL",
+							category = "Conditions",
+						},
+						{
+							type = ST_TABLE,
+							name = "conditions",
+							multiplicity = "multiple",
+							itemSchema = g_conditions_template,
+							requirement = {"boolean", "ANY", "NONE", "ALL"},
+						},
+						buildings,
+						{
+							type = ST_TABLE,
+							name = "units",
+							description = "Unit types to spawn",
+							multiplicity = "multiple",
+							itemSchema = {
+								--Company type to check for--
+								{
+									type = ST_PBG,
+									name = "company_type",
+									displayName = "Company Type",
+									description = "Company type to check for (Use only for company types)",
+									blueprintType = "squad",
+									category = "Optional",
+								},
+								-----------------------------
+								{
+									type = ST_STRING,
+									name = "spawn_where",
+									displayName = "Location",
+									description = "Where to spawn the squads ('POSITION', 'SGROUP', 'EGROUP')",
+									options = {"POSITION", "SGROUP", "EGROUP"},
+									default = "POSITION",
+									category = "Where to spawn"
+								},
+								{
+									type = ST_SGROUP,
+									name = "sgroup",
+									displayName = "SGroup",
+									description = "SGroup that receives the new squads",
+									category = "Optional",
+								},
+								{
+									type = ST_PLAYER,
+									name = "player",
+									displayName = "Player",
+									description = "Player who will own the squads",
+									allowWorld = true,
+									default = "Player1",
+									category = "Required",
+								},
+								{
+									type = ST_SGROUP,
+									name = "hold_sgroup",
+									displayName = "Hold SGroup",
+									description = "If the sgroup is a Hold Squad then the squad is spawned inside of it",
+									requirement = {"spawn_where", "SGROUP"},
+									category = "Hold",
+								},
+								{
+									type = ST_EGROUP,
+									name = "hold_egroup",
+									displayName = "Hold EGroup",
+									description = "If the egroup is a hold entity then the squad is spawned inside of it",
+									requirement = {"spawn_where", "EGROUP"},
+									category = "Hold",
+								},
+								{
+									type = ST_MARKER,
+									name = "start_position",
+									description = "A location or position to spawn or start at",
+									requirement = {"spawn_where", "POSITION"},
+									hasRange = false,
+									hasDirection = true,
+									category = "Target",
+								},
+								{
+									type = ST_MARKER,
+									name = "dest_position",
+									description = "The location to move something to, or do something at",
+									requirement = {"spawn_where", "POSITION"},
+									hasRange = true,
+									hasDirection = true,
+									category = "Target",
+								},
+								{
+									type = ST_BOOLEAN,
+									name = "attack_move",
+									displayName = "Attack Move",
+									description = "In cases where the squads do a simple move to their destination (not attacking or loading into anything), this determines whether they attack move or not",
+									category = "Optional",
+								},
+								{
+									type = ST_PBG,
+									name = "upgradePBG",
+									displayName = "Upgrade",
+									blueprintType = "upgrade",
+									description = "Upgrade to instantly apply to squads when they spawn",
+									category = "Optional",
+								},
+								{
+									type = ST_PBG,
+									name = "squadPBG",
+									displayName = "SBP",
+									blueprintType = "squad",
+									description = "The blueprint for the new squads",
+									category = "Required",
+								},
+								{
+									type = ST_NUMBER,
+									name = "loadout",
+									displayName = "Loadout",
+									description = "Max amount of units to spawn per squad",
+									category = "Optional",
+								},
+								{
+									type = ST_NUMBER,
+									name = "numsquads",
+									displayName = "Num Squads",
+									description = "How many squads to spawn",
+									category = "Optional",
+								},
+								{
+									type = ST_NUMBER,
+									name = "veterancy_rank",
+									displayName = "Veterancy Rank",
+									description = "What veterancy rank the squad should spawn at",
+									default = 0,
+									category = "Veterancy",
+								},
+								{
+									type = ST_BOOLEAN,
+									name = "is_silent_veterancy_promotion",
+									displayName = "Is Silent Veterancy Promotion",
+									description = "No Sound/UI when applying veterancy promotion",
+									default = true,
+									category = "Veterancy",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			type = ST_TABLE,
+			name = "company_units",
+			description = "Company units to spawn",
+			multiplicity = "multiple",
+			itemSchema = {
+				{
+					type = ST_STRING,
+					name = "spawn_where",
+					displayName = "Location",
+					description = "Where to spawn the squads ('POSITION', 'SGROUP', 'EGROUP')",
+					options = {"POSITION", "SGROUP", "EGROUP"},
+					default = "POSITION",
+					category = "Where to spawn"
+				},
+				{
+					type = ST_SGROUP,
+					name = "sgroup",
+					displayName = "SGroup",
+					description = "SGroup that receives the new squads",
+					category = "Optional",
+				},
+				{
+					type = ST_PLAYER,
+					name = "player",
+					displayName = "Player",
+					description = "Player who will own the squads",
+					allowWorld = true,
+					default = "Player1",
+					category = "Required",
+				},
+				{
+					type = ST_SGROUP,
+					name = "hold_sgroup",
+					displayName = "Hold SGroup",
+					description = "If the sgroup is a Hold Squad then the squad is spawned inside of it",
+					requirement = {"spawn_where", "SGROUP"},
+					category = "Hold",
+				},
+				{
+					type = ST_EGROUP,
+					name = "hold_egroup",
+					displayName = "Hold EGroup",
+					description = "If the egroup is a hold entity then the squad is spawned inside of it",
+					requirement = {"spawn_where", "EGROUP"},
+					category = "Hold",
+				},
+				{
+					type = ST_MARKER,
+					name = "start_position",
+					description = "A location or position to spawn or start at",
+					requirement = {"spawn_where", "POSITION"},
+					hasRange = false,
+					hasDirection = true,
+					category = "Target",
+				},
+				{
+					type = ST_MARKER,
+					name = "dest_position",
+					description = "The location to move something to, or do something at",
+					requirement = {"spawn_where", "POSITION"},
+					hasRange = true,
+					hasDirection = true,
+					category = "Target",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "attack_move",
+					displayName = "Attack Move",
+					description = "In cases where the squads do a simple move to their destination (not attacking or loading into anything), this determines whether they attack move or not",
+					category = "Optional",
+				},
+				{
+					type = ST_STRING,
+					name = "starting_unit_type",
+					displayName = "Starting Unit Type",
+					description = "Type of unit to spawn.",
+					category = "Options",
+					default = "basic_infantry",
+					options = {"basic_infantry", "elite_infantry", "light_vehicle", "light_tank", "medium_tank", "medium_vehicle", "suppression", "mortar", "anti_tank", "sniper", "transport", "default"},
+				},
+				{
+					type = ST_NUMBER,
+					name = "numsquads",
+					displayName = "Num Squads",
+					description = "How many squads to spawn",
+					category = "Optional",
+					default = 1,
+				},
+				{
+					type = ST_NUMBER,
+					name = "veterancy_rank",
+					displayName = "Veterancy Rank",
+					description = "What veterancy rank the squad should spawn at",
+					default = 0,
+					category = "Veterancy",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "is_silent_veterancy_promotion",
+					displayName = "Is Silent Veterancy Promotion",
+					description = "No Sound/UI when applying veterancy promotion",
+					default = true,
+					category = "Veterancy",
+				},
+			},
+		},
+		{
+			type = ST_TABLE,
+			name = "units",
+			description = "Areas for player units to spawn",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_TABLE,
+					name = "units",
+					description = "Unit types to spawn",
+					multiplicity = "multiple",
+					itemSchema = {
+						--Company type to check for--
+						{
+							type = ST_PBG,
+							name = "company_type",
+							displayName = "Company Type",
+							description = "Company type to check for (Use only for company types)",
+							blueprintType = "squad",
+							category = "Optional",
+						},
+						-----------------------------
+						{
+							type = ST_STRING,
+							name = "spawn_where",
+							displayName = "Location",
+							description = "Where to spawn the squads ('POSITION', 'SGROUP', 'EGROUP')",
+							options = {"POSITION", "SGROUP", "EGROUP"},
+							default = "POSITION",
+							category = "Where to spawn"
+						},
+						{
+							type = ST_SGROUP,
+							name = "sgroup",
+							displayName = "SGroup",
+							description = "SGroup that receives the new squads",
+							category = "Optional",
+						},
+						{
+							type = ST_PLAYER,
+							name = "player",
+							displayName = "Player",
+							description = "Player who will own the squads",
+							allowWorld = true,
+							default = "Player1",
+							category = "Required",
+						},
+						{
+							type = ST_SGROUP,
+							name = "hold_sgroup",
+							displayName = "Hold SGroup",
+							description = "If the sgroup is a Hold Squad then the squad is spawned inside of it",
+							requirement = {"spawn_where", "SGROUP"},
+							category = "Hold",
+						},
+						{
+							type = ST_EGROUP,
+							name = "hold_egroup",
+							displayName = "Hold EGroup",
+							description = "If the egroup is a hold entity then the squad is spawned inside of it",
+							requirement = {"spawn_where", "EGROUP"},
+							category = "Hold",
+						},
+						{
+							type = ST_MARKER,
+							name = "start_position",
+							description = "A location or position to spawn or start at",
+							requirement = {"spawn_where", "POSITION"},
+							hasRange = false,
+							hasDirection = true,
+							category = "Target",
+						},
+						{
+							type = ST_MARKER,
+							name = "dest_position",
+							description = "The location to move something to, or do something at",
+							requirement = {"spawn_where", "POSITION"},
+							hasRange = true,
+							hasDirection = true,
+							category = "Target",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "attack_move",
+							displayName = "Attack Move",
+							description = "In cases where the squads do a simple move to their destination (not attacking or loading into anything), this determines whether they attack move or not",
+							category = "Optional",
+						},
+						{
+							type = ST_PBG,
+							name = "upgradePBG",
+							displayName = "Upgrade",
+							blueprintType = "upgrade",
+							description = "Upgrade to instantly apply to squads when they spawn",
+							category = "Optional",
+						},
+						{
+							type = ST_PBG,
+							name = "squadPBG",
+							displayName = "SBP",
+							blueprintType = "squad",
+							description = "The blueprint for the new squads",
+							category = "Required",
+						},
+						{
+							type = ST_NUMBER,
+							name = "loadout",
+							displayName = "Loadout",
+							description = "Max amount of units to spawn per squad",
+							category = "Optional",
+						},
+						{
+							type = ST_NUMBER,
+							name = "numsquads",
+							displayName = "Num Squads",
+							description = "How many squads to spawn",
+							category = "Optional",
+						},
+						{
+							type = ST_NUMBER,
+							name = "veterancy_rank",
+							displayName = "Veterancy Rank",
+							description = "What veterancy rank the squad should spawn at",
+							default = 0,
+							category = "Veterancy",
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "is_silent_veterancy_promotion",
+							displayName = "Is Silent Veterancy Promotion",
+							description = "No Sound/UI when applying veterancy promotion",
+							default = true,
+							category = "Veterancy",
+						},
+					},
+				},
+			},
+		},
+		{
+			type = ST_TABLE,
+			name = "starting_territory",
+			description = "Any territories that should be replaced with a starting territory instead of a capture point",
+			multiplicity = "multiple",
+			itemSchema = {
+				{
+					type = ST_EGROUP,
+					name = "replace_egroup",
+					displayName = "Replace EGroup",
+					description = "The egroup for the point that should be replaced",
+				},
+				{
+					type = ST_PBG,
+					name = "ebp",
+					displayName = "EBP",
+					blueprintType  = "entity",
+					description = "The territory entity to spawn. If left blank then no entity is spawned - but the egroup is still deleted.",
+				},
+				{
+					type = ST_PLAYER,
+					name = "player_owner",
+					displayName = "Player Owner",
+					description = "The owner of the starting territory",
+					allowWorld = false,
+					default = "Player1",
+				},
+			},
+		},
+	},
+}

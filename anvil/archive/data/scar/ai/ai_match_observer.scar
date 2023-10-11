@@ -1,0 +1,116 @@
+-----------------------------------------------------------------------
+-- AI Win Observer
+--
+-- (c) Relic Entertainment 2021
+--
+-- The observer's job is to monitor win condition and match events that the AI is
+-- interested in and to post data to the AI blackboard so it can be
+-- queried later for decision making.
+-- Will also apply difficulty modifiers needed when events are fired
+-----------------------------------------------------------------------
+
+import("ai/ai_utils.scar")
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("AIMatchObserver")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function AIMatchObserver_OnInit()
+	_info = {}
+	
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		local playerID = Player_GetID(player)
+		_info[playerID] = {
+			max_tickets = 0,
+			tickets = 0,
+			dirty = true
+		}
+	end
+	
+	EventRule_AddEvent(AIMatchObserver_OnDifficultyChanged, GE_AIPlayer_DifficultyChanged)
+	
+end
+
+function AIMatchObserver_Start()
+	Rule_AddInterval(AIMatchObserver_Update, 1.0)
+end
+
+-- Called by takeover events
+function AIMatchObserver_OnDifficultyChanged(data)
+	AI_SetDifficultyModifiers(data.player, data.difficultyLevel)
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+function AIMatchObserver_OnMaxTicketsChanged(max_tickets, player)
+	for id, info in pairs(_info) do
+		if player then
+			if Player_GetID(player) == id then
+				info.max_tickets = max_tickets
+				info.dirty = true
+				break
+			end
+		else
+			-- Set max tickets for all players
+			info.max_tickets = max_tickets
+			info.dirty = true
+		end
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling the ticket count for a player has changed.
+function AIMatchObserver_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	for id, info in pairs(_info) do
+		if Player_ObserveRelationship(player, Player_FromId(id)) == R_ALLY then
+			info.tickets = tickets
+			info.dirty = true
+		end
+	end
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function AIMatchObserver_OnWinConditionTriggered(match_result)
+	if Rule_Exists(AIMatchObserver_Update) then 
+		Rule_Remove(AIMatchObserver_Update)
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+-- Check if any info for an AI player is dirty and post to the ai blackboard.
+function AIMatchObserver_Update()
+	for playerID, info in pairs(_info) do
+		if info.dirty then
+			local player = Player_FromId(playerID)
+			if not Player_IsHuman(player) and AI_IsEnabled(player) then
+				AIMatchObserver_PostToAIPlayerBlackboard(player, info)
+				info.dirty = false
+			end
+		end
+	end
+end
+
+
+-- Updates priorities of AI players based on ticket and victory point count.
+function AIMatchObserver_PostToAIPlayerBlackboard(player, info)
+	if (info.max_tickets ~= nil) then
+		AI_TableSetNumber(player, "t_ai_blackboard", "max_tickets", info.max_tickets)
+		AI_TableSetNumber(player, "t_ai_blackboard", "tickets", info.tickets)
+	end
+end
+

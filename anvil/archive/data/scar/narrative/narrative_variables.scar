@@ -1,0 +1,52 @@
+function NarrativeVariables_GetAll()
+	local variableTable = {}
+	
+	local variableCount = World_GetNarrativeVariableCount()
+	for i=0,(variableCount - 1) do
+		local variableValue = World_GetNarrativeVariableAt(i)
+		if variableValue ~= nil then
+			local variableName = World_GetNarrativeVariableNameAt(i)
+			variableTable[variableName] = variableValue
+		end
+	end
+
+	return variableTable
+end
+
+function NarrativeVariables_SetAll(variableTable)
+	for k,v in pairs(variableTable) do
+		World_SetNarrativeVariable(k, v)
+	end
+end
+
+--? @shortdesc Set a narrative variable and update its turn tracking
+--? @args variable - variable to change
+--? value - new value 
+function SetNarrativeVariable(variable, value)
+	
+	World_SetNarrativeVariable(variable, value)
+	
+	if (not String_EndsWith(variable, "_turn")) then
+		World_SetNarrativeVariable(variable .. "_turn", GetNarrativeVariable("state_game.turn"))
+	end
+	
+end
+
+--? @shortdesc Get a narrative variable
+--? @args variable - variable to get 
+--? @result value of variable 
+function GetNarrativeVariable(variable)
+	
+	if variable == "game_options.profanity_filter" then
+		return Sound_GetProfanityFilterEnabled()
+	end
+	
+	return World_GetNarrativeVariable(variable)	
+	
+end
+
+function PrintNarrativeVariable(variable)
+	
+	print(GetNarrativeVariable(variable))
+	
+end

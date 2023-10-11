@@ -1,0 +1,348 @@
+-----------------------------------------------------------------------
+--
+-- Shows a customizable panel in the HUD. 
+--
+--
+-- (c) Relic Entertainment 2020
+--
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Scripting framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("ScriptablePanel")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function ScriptablePanel_OnInit()
+	_show_scriptable_panel = {
+		core = true,
+		manual = false,
+		flashing = false,
+	}
+end
+
+
+function ScriptablePanel_Start()	
+	if not g_scriptable_panel_restored then
+		ScriptablePanel_CreateUI()
+	end
+end
+
+
+function ScriptablePanel_OnGameRestore()
+	ScriptablePanel_CreateUI()
+	g_scriptable_panel_restored = true
+	local title = _show_scriptable_panel.title_fn or _show_scriptable_panel.title
+	local description = _show_scriptable_panel.description_fn or _show_scriptable_panel.description
+	if title ~= nil then
+		ScriptablePanel_SetTitle(title)
+	end
+	if description ~= nil then
+		ScriptablePanel_SetDescription(description)
+	end
+	ScriptablePanel_SetVerticalAlignment(_show_scriptable_panel.alignment)
+	if _show_scriptable_panel.icon_name ~= nil then
+		ScriptablePanel_SetIcon(_show_scriptable_panel.icon_name)
+	end
+	ScriptablePanel_CheckShow()
+end
+ 
+-- Called via Core_CallDelegateFunctions("ShowUI") by game mode script to show/hide scripted UI elements. Use ScriptablePanel_SetVisible for manual control
+function ScriptablePanel_ShowUI(show)
+	_show_scriptable_panel.core = show
+	ScriptablePanel_CheckShow()
+end
+
+--Enables the panel, making it visible so long as it should be (Will still be hidden if Core_CallDelegateFunctions has hidden it)
+function ScriptablePanel_Show()
+	_show_scriptable_panel.manual = true
+	ScriptablePanel_CheckShow()
+end
+
+function ScriptablePanel_Hide()
+	_show_scriptable_panel.manual = false
+	ScriptablePanel_CheckShow()
+end
+
+function ScriptablePanel_CheckShow()
+	if _show_scriptable_panel.core and _show_scriptable_panel.manual then 
+		UI_SetPropertyValue("ScriptablePanelText.TextPanel", "Visibility", "Visible")
+		if _show_scriptable_panel.flashing then
+			UI_SetPropertyValue("ScriptablePanelFlashingBacker.BackingPanel", "Visibility", "Visible")
+		else
+			UI_SetPropertyValue("ScriptablePanelStaticBacker.BackingPanel", "Visibility", "Visible")
+		end
+		local id = _show_scriptable_panel.title_id
+		local fn = _show_scriptable_panel.title_fn
+		if fn ~= nil and not (id and Rule_ExistsWithID(id)) then
+			ScriptablePanel_SetTitle(fn)
+		end
+		id = _show_scriptable_panel.description_id
+		fn = _show_scriptable_panel.description_fn
+		if fn ~= nil and not (id and Rule_ExistsWithID(id)) then
+			ScriptablePanel_SetDescription(fn)
+		end
+	else
+		UI_SetPropertyValue("ScriptablePanelText.TextPanel", "Visibility", "Hidden")
+		UI_SetPropertyValue("ScriptablePanelFlashingBacker.BackingPanel", "Visibility", "Hidden")
+		UI_SetPropertyValue("ScriptablePanelStaticBacker.BackingPanel", "Visibility", "Hidden")
+		local id = _show_scriptable_panel.title_id
+		if id and Rule_ExistsWithID(id) then
+			Rule_RemoveWithID(id)
+			_show_scriptable_panel.title_id = nil
+		end
+		id = _show_scriptable_panel.description_id
+		if id and Rule_ExistsWithID(id) then
+			Rule_RemoveWithID(id)
+			_show_scriptable_panel.description_id = nil
+		end
+	end
+end
+
+--Sets the title of the panel to the String/LocString passed in, or to the result of the function passed in every second
+function ScriptablePanel_SetTitle(title)
+	local rule_id = _show_scriptable_panel.title_id
+	--title is a table when Rule_AddInterval calls this function
+	if scartype(title) == ST_TABLE and rule_id and Rule_ExistsWithID(rule_id) then
+		title = _show_scriptable_panel.title_fn()
+	else
+		local id = _show_scriptable_panel.title_id
+		if id and Rule_ExistsWithID(id) then
+			Rule_RemoveWithID(id)
+		end
+		_show_scriptable_panel.title_id = nil
+		_show_scriptable_panel.title_fn = nil
+		if scartype(title) == ST_FUNCTION then
+			_show_scriptable_panel.title_fn = title
+			_show_scriptable_panel.title_id = Rule_AddInterval(ScriptablePanel_SetTitle, 1)
+			title = _show_scriptable_panel.title_fn()
+		end
+	end
+	local locstring = Loc_GetString(title)
+	if locstring ~= Loc_Empty() then
+		title = Loc_ToAnsi(locstring)
+	end
+	_show_scriptable_panel.title = title
+	 UI_SetPropertyValue("ScriptablePanelText.TitleText", "Text", title)
+end
+
+--Sets the description of the panel to the String/LocString passed in, or to the result of the function passed in every second
+function ScriptablePanel_SetDescription(description)
+	local rule_id = _show_scriptable_panel.description_id
+	--description is a table when Rule_AddInterval calls this function
+	if scartype(description) == ST_TABLE and rule_id and Rule_ExistsWithID(rule_id) then
+		description = _show_scriptable_panel.description_fn()
+	else
+		local id = _show_scriptable_panel.description_id
+		if id and Rule_ExistsWithID(id) then
+			Rule_RemoveWithID(id)
+			_show_scriptable_panel.description_id = nil
+			_show_scriptable_panel.description_fn = nil
+		end
+		if scartype(description) == ST_FUNCTION then
+			_show_scriptable_panel.description_fn = description
+			_show_scriptable_panel.description_id = Rule_AddInterval(ScriptablePanel_SetDescription, 1)
+			description = _show_scriptable_panel.description_fn()
+		end
+	end
+	local locstring = Loc_GetString(description)
+	if locstring ~= Loc_Empty() then
+		description = Loc_ToAnsi(locstring)
+	end
+	_show_scriptable_panel.description = description
+	 UI_SetPropertyValue("ScriptablePanelText.DescriptionText", "Text", description)
+end
+
+-- Aligns the panel to either the top ("Top") or the bottom ("Bottom")
+function ScriptablePanel_SetVerticalAlignment(alignment)
+	if alignment == "Top" then
+		UI_SetPropertyValue("ScriptablePanelText.TextPanel", "Margin", "0,56,60,0")
+		UI_SetPropertyValue("ScriptablePanelFlashingBacker.BackingPanel", "Margin", "0,50,60,0")
+		UI_SetPropertyValue("ScriptablePanelStaticBacker.BackingPanel", "Margin", "0,50,60,0")
+	elseif alignment == "Bottom" then
+		UI_SetPropertyValue("ScriptablePanelText.TextPanel", "Margin", "0,0,500,76")
+		UI_SetPropertyValue("ScriptablePanelFlashingBacker.BackingPanel", "Margin", "0,0,500,70")
+		UI_SetPropertyValue("ScriptablePanelStaticBacker.BackingPanel", "Margin", "0,0,500,70")
+	else
+		return
+	end
+	UI_SetPropertyValue("ScriptablePanelText.TextPanel", "VerticalAlignment", alignment)
+	UI_SetPropertyValue("ScriptablePanelFlashingBacker.BackingPanel", "VerticalAlignment", alignment)
+	UI_SetPropertyValue("ScriptablePanelStaticBacker.BackingPanel", "VerticalAlignment", alignment)
+	_show_scriptable_panel.alignment = alignment
+	
+end
+
+--Sets the icon source - relative URL to the assets/ui folder
+function ScriptablePanel_SetIcon(icon_name)
+	UI_SetPropertyValue("ScriptablePanelText.Icon", "Source", icon_name)
+	_show_scriptable_panel.icon_name = icon_name
+end
+
+function ScriptablePanel_SetFlashing(flashing)
+	_show_scriptable_panel.flashing = flashing
+	ScriptablePanel_CheckShow()
+end
+
+
+-- Called when a win condition has been met signalling that the match should end.
+function ScriptablePanel_OnWinConditionTriggered(match_result)
+	UI_Remove("ScriptablePanelText")
+	UI_Remove("ScriptablePanelFlashingBacker")
+	UI_Remove("ScriptablePanelStaticBacker")
+end
+
+
+-----------------------------------------------------------------------
+-- UI functions
+-----------------------------------------------------------------------
+
+function ScriptablePanel_CreateUI()
+	 local flashingBacker = 
+
+	 [[<StackPanel
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:hudModel="clr-namespace:HUDModelTypes"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:esConverters="clr-namespace:WPFGUI.Shared.Converters;assembly=EngineUI"
+		VerticalAlignment="Top"
+		HorizontalAlignment="Right"
+		Margin="0,50,60,0"
+		x:Name="BackingPanel"
+		 Visibility="Hidden">
+
+		<Rectangle Width="284" Height="64"
+				x:Name ="BackerRect"
+				Fill="#272727"
+				StrokeThickness="3"
+				RadiusX="2" RadiusY="2"
+				Opacity = "0.8"> 
+
+
+			<Rectangle.Stroke>
+				<SolidColorBrush x:Name="MyBorder" Color="White" />
+			</Rectangle.Stroke> 
+			<Rectangle.Triggers>
+				<EventTrigger RoutedEvent="Border.Loaded">
+					<BeginStoryboard>
+						<Storyboard>
+							<ColorAnimationUsingKeyFrames FillBehavior="HoldEnd" RepeatBehavior="Forever"
+									Storyboard.TargetName="MyBorder" Storyboard.TargetProperty="(SolidColorBrush.Color)"
+									Duration="0:0:3">
+								<ColorAnimationUsingKeyFrames.KeyFrames>
+									<LinearColorKeyFrame KeyTime="0:0:1.5" Value="Green" />
+									<LinearColorKeyFrame KeyTime="0:0:3" Value="White" />
+								</ColorAnimationUsingKeyFrames.KeyFrames>
+							</ColorAnimationUsingKeyFrames>
+						</Storyboard>
+					</BeginStoryboard>
+				</EventTrigger>
+			</Rectangle.Triggers>
+		 </Rectangle>
+ </StackPanel>]]
+
+	local staticBacker = 
+
+	 [[<StackPanel
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:hudModel="clr-namespace:HUDModelTypes"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:esConverters="clr-namespace:WPFGUI.Shared.Converters;assembly=EngineUI"
+		VerticalAlignment="Top"
+		HorizontalAlignment="Right"
+		Margin="0,50,60,0"
+		x:Name="BackingPanel"
+		 Visibility="Hidden">
+
+		<Rectangle Width="284" Height="64"
+				x:Name ="BackerRect"
+				Fill="#272727"
+				StrokeThickness="3"
+				RadiusX="2" RadiusY="2"
+				Opacity = "0.8"> 
+
+
+			<Rectangle.Stroke>
+				<SolidColorBrush x:Name="MyBorder" Color="White" />
+			</Rectangle.Stroke>
+		 </Rectangle>
+ </StackPanel>]]
+	
+	 UI_AddChild("", "XamlPresenter", "ScriptablePanelFlashingBacker", {IsHitTestVisible = false, Xaml = flashingBacker}) 
+	
+	 UI_AddChild("", "XamlPresenter", "ScriptablePanelStaticBacker", {IsHitTestVisible = false, Xaml = staticBacker}) 
+
+	
+
+	 local xaml = 
+
+	 [[<StackPanel 
+		 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		 xmlns:hudModel="clr-namespace:HUDModelTypes"
+		 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		 xmlns:esConverters="clr-namespace:WPFGUI.Shared.Converters;assembly=EngineUI"
+		 VerticalAlignment="Top"
+		 HorizontalAlignment="Right"
+		 Margin="0,56,60,0"
+		 Visibility="Hidden"
+		x:Name="TextPanel">
+
+	 <Grid x:Name="InfoPanelGrid" Width="284">
+		 <Grid.ColumnDefinitions> 
+			 <ColumnDefinition Width="64" />
+			 <ColumnDefinition Width="220" />
+		 </Grid.ColumnDefinitions>
+		 <Grid.RowDefinitions>
+			 <RowDefinition Height="26" />
+			 <RowDefinition Height="26" />
+		 </Grid.RowDefinitions>
+		<Image x:Name = "Icon"
+				Grid.Row="0"
+				Grid.Column="0"
+				Grid.RowSpan="2"
+				Stretch="Uniform"
+				HorizontalAlignment="Center"
+				VerticalAlignment="Center" />
+		<Viewbox Stretch="Uniform"
+				 Grid.Row="0"
+				Grid.Column="1"
+				Width="216">
+		 <TextBlock x:Name="TitleText"
+				 Style="{StaticResource VictoryPointTextStyle}"
+				 Effect="{StaticResource TextDropShadowEffect}"
+				 Foreground="WhiteSmoke"
+				 TextAlignment="Center"
+				 VerticalAlignment="Center"
+				 Text="!NO TITLE!" />
+		</Viewbox>
+		<Viewbox Stretch="Uniform"
+				 Grid.Row="1"
+				Grid.Column="1"
+				Width="216">
+		 <TextBlock x:Name="DescriptionText"
+				 Style="{StaticResource VictoryPointTextStyle}"
+				 Effect="{StaticResource TextDropShadowEffect}"
+				 Foreground="#95bf9e"
+				 TextAlignment="Center"
+				 VerticalAlignment="Center"
+				 Text="!NO DESC!" /> 
+		</Viewbox>
+	 </Grid> 
+
+ </StackPanel>]] 
+
+	  
+
+	 UI_AddChild("", "XamlPresenter", "ScriptablePanelText", {IsHitTestVisible = false, Xaml = xaml }) 
+
+end
+
+
+

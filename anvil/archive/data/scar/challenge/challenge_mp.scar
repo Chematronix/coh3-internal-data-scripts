@@ -1,0 +1,168 @@
+-----------------------------------------------------------------------
+--
+-- Multi-player achievements
+--
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework
+-----------------------------------------------------------------------
+
+Core_RegisterModule("MPChallenge")
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function MPChallenge_OnInit()
+	if World_IsMultiplayerGame() == false then -- MP means true multiplayer and skirmish versus AI
+		Core_UnregisterModule("MPChallenge")
+	else
+		_challenge_mp = {
+			has_lost_squad = {},
+			has_reinforced = {}
+		}
+	end
+end
+
+-- Called by core.scar after opening cinematics and events are complete.
+function MPChallenge_Start()
+	Rule_AddGlobalEvent(MPChallenge_OnSquadKilled, GE_SquadKilled)
+	Rule_AddGlobalEvent(MPChallenge_OnSquadProduced, GE_SquadProductionQueue)
+end
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up any rules associated with this script module.
+function MPChallenge_OnWinConditionTriggered(match_result)
+
+	-- CE_ACHIEVFLAWLESSVICTORY (Win without losing any tickets)
+	if _challenge_mp.teams then
+		for _, team in pairs(_challenge_mp.teams) do
+			if team.tickets == team.tickets_start then
+				for _, index in pairs(team.players) do
+					MPChallenge_Complete(World_GetPlayerAt(index), CE_ACHIEVFLAWLESSVICTORY, 1, "CE_ACHIEVFLAWLESSVICTORY")
+				end
+			end
+		end
+	end
+	
+	if #match_result.winners > 0 then
+		for k, index in pairs(match_result.winners) do
+			local player = World_GetPlayerAt(index)
+			if _challenge_mp.has_lost_squad[Player_GetID(player)] ~= true then
+				MPChallenge_Complete(player, CE_ACHIEVNOLOSTSQUAD, 1, "CE_ACHIEVNOLOSTSQUAD")
+			end
+			if _challenge_mp.has_reinforced[Player_GetID(player)] ~= true then
+				MPChallenge_Complete(player, CE_ACHIEVNOREINFORCE, 1, "CE_ACHIEVNOREINFORCE")
+			end
+		end
+	end
+
+end
+
+-- Global event callback for GE_SquadKilled.
+function MPChallenge_OnSquadKilled(context, data)
+	if not World_OwnsSquad(context.victim) then
+		if scartype(context.killer) == ST_ENTITY and not World_OwnsEntity(context.killer) then
+			local owner = Squad_GetPlayerOwner(context.victim)
+			_challenge_mp.has_lost_squad[Player_GetID(owner)] = true				
+		end
+	end
+end
+
+-- Global event callback for GE_SquadProductionQueue.
+function MPChallenge_OnSquadProduced(context, data)
+	if not World_OwnsSquad(context.squad) then
+		local owner = Squad_GetPlayerOwner(context.squad)
+		_challenge_mp.has_reinforced[Player_GetID(owner)] = true
+	end
+end
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+function MPChallenge_OnMaxTicketsChanged(max_tickets, player)
+	if max_tickets and max_tickets > 0 then
+		if not _challenge_mp.teams then 
+			_challenge_mp.teams = {}
+			for i = 1, World_GetPlayerCount() do
+				local team = VictoryPoint_GetTeam(World_GetPlayerAt(i))
+				if team then
+					table.insert(_challenge_mp.teams, team)
+				end
+			end
+		end
+		
+		if player then
+			local team = VictoryPoint_GetTeam(player)
+			team.max_tickets = max_tickets
+		else
+			for _, team in pairs(_challenge_mp.teams) do
+				team.max_tickets = max_tickets
+			end
+		end
+		_challenge_mp.max_tickets_set = true
+	end
+end
+
+function MPChallenge_GetTeam(player)
+	local player_index = World_GetPlayerIndex(player)
+	for _, team in pairs(_challenge_mp.teams) do
+		for _, index in pairs(team.players) do
+			if index == player_index or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == R_ALLY then
+				return team
+			end
+		end
+	end
+end
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling ticket count has changed.
+function MPChallenge_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	-- Save the current and starting ticket count
+	local team = MPChallenge_GetTeam(player)
+	if team ~= nil then
+		team.tickets = math.min(math.max(0, tickets), team.max_tickets)
+		team.tickets_start = team.tickets_start or team.tickets
+	end
+end
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+-- Excludes specific challenge(s) from a mission where it/they do not make sense.
+-- (e.g. CE_ACHIEVNOREINFORCE from missions where there is no reinforcement mechanism)
+function MPChallenge_Exclude(exclusions)
+	_challenge_mp.exclude = _challenge_mp.exclude or {}
+	if scartype(exclusions) == ST_TABLE then
+		for _, exclusion in pairs(exclusions) do
+			table.insert(_challenge_mp.exclude, exclusion)
+		end
+	elseif scartype(exclusions) == ST_NUMBER then
+		table.insert(_challenge_mp.exclude, exclusions)
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+
+-- Notifies server that a challenge has met its completion requirement(s).
+function MPChallenge_Complete(player, challenge, value, description)
+	if Player_IsHuman(player) 
+		and not (_challenge_mp.exclude and Table_Contains(_challenge_mp.exclude, challenge)) then
+		
+		Game_SendCustomChallengeEvent(player, challenge, value)
+		print(Loc_ToAnsi(Player_GetDisplayName(player)).." completed achievement "..tostring(challenge).." "..(description or ""))
+		if Misc_IsDevMode() and Misc_IsCommandLineOptionSet("show_achievements") then
+			UI_CreateEventCue(LOC(description), Loc_Empty(),  "low_priority", "icons/common/filled_star_icon", "", ECV_Title, 5.0)
+		end
+	end
+end
+
+

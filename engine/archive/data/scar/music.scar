@@ -1,0 +1,307 @@
+----------------------------------------------------------------------------------------------------------------
+-- Music Functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+ -- Campaigns always start with NIS that transitions into MIX_RETURN_TO_GAME. Only loading a save requires this event
+function _Music_OnGameInitalizedFromRestore()
+	Rule_RemoveMe()
+--	Todo: game-specific mix state Sound_Play2D(MIX_RETURN_TO_GAME)
+	Music_LockIntensity(_musicCurrentIntensity)
+end
+
+function _Music_OnResume()
+	Rule_Add(_Music_OnGameInitalizedFromRestore)
+end
+
+function _Music_OnInit()
+	_default_music_movement = nil
+	Game_SetGameRestoreCallback(_Music_OnResume)
+end
+
+Scar_AddInit(_Music_OnInit)
+
+--? @group scardoc;Music
+
+
+MUSIC_SILENT = "silent"
+-- other music variables set in the project's main scar file 
+
+
+
+--
+-- Music movement
+--
+
+--? @shortdesc Sets the 'default music movement'.  This is the current default that can always be called
+--? @args String newMovement
+function Music_SetDefaultMovement(newMovement)
+	_default_music_movement = newMovement
+end
+
+--? @shortdesc Gets the 'default music movement'.  This is the current default that can always be called
+--? @result String Movement
+function Music_GetDefaultMovement()
+	return _default_music_movement
+end
+
+
+--? @shortdesc Play Music at the 'default music movement'
+--? @extdesc Set current music movement with Music_SetDefaultMovement
+function Music_PlayDefaultMovement()
+	Music_Stop()
+	if (_default_music_movement) then
+		Sound_Play2D(_default_music_movement)
+	end
+end
+
+--? @shortdesc Plays a specific movement immediately - useful for things like NISes
+--? @args String movement
+function Music_PlayMovement(movement)
+	Music_Stop()
+	if (movement) then
+		Sound_Play2D(movement)
+	end
+end
+
+
+--
+-- Music intensity
+--
+
+--? @shortdesc Lock the music's intensity to a given level, for a given length of time (if you omit duration, the music plays indefinately until Music_UnlockIntensity is called)
+--? @extdesc You can chain several level/duration pairs together to create a playlist of sorts. To do this, just use more parameters: Music_LockIntensity(level1, duration1, level2, duration2, ...)
+--? @args Real level [, Real duration]
+function Music_LockIntensity(...)
+
+	if _musicIntensityResetRule ~= nil then 
+		Rule_RemoveWithID(_musicIntensityResetRule)		-- remove any previous rule relating to lock intenisty functionality
+		_musicIntensityResetRule = nil
+	end
+	
+	local args = {...}
+	
+	Music_LockIntensity_Internal(nil, args)
+	
+end
+
+
+function Music_LockIntensity_Internal(context, data)
+		
+	local level = data[1]
+	local duration = data[2]
+
+	if _musicCurrentIntensity == MUSIC_SILENT then 
+		Sound_SetForceSilence(false)			
+		Sound_SetForceMusic(true)
+		Rule_AddOneShot(Music_RemoveForceMusic, 1)
+	end
+		
+	if level ~= nil then
+	
+		if level == MUSIC_SILENT then 
+			Music_PersistentStop()	
+		else
+			Sound_Play2D(level)	
+			Sound_SetManualMusicSelectDuration(-1)	-- this should block out the dynamic combat intensity changes
+			Sound_SetForceSilence(false)	
+		end
+		
+		_musicCurrentIntensity = level
+		
+	end
+	
+
+	
+	if data[3] ~= nil then	-- is there more in the playlist beyond the level and duration that needs to be set now?
+		
+		-- remove items 1 and 2, so data is now the remaining items in the playlist	
+		table.remove(data, 2)
+		table.remove(data, 1)
+
+		-- queue up this function again to play the next items in the playlist
+		_musicIntensityResetRule = Rule_AddOneShot(Music_LockIntensity_Internal, duration, data, RuleGroup.Unpausable)		
+		
+	elseif scartype(duration) == ST_NUMBER then
+		
+		-- this is the last item in the playlist, so queue up a function to unlock the intensity after
+		_musicIntensityResetRule = Rule_AddOneShot(Music_UnlockIntensity, duration, nil, RuleGroup.Unpausable)
+		
+	end
+	
+end
+
+
+
+--? @shortdesc Unlock the music's intensity and revert to gameplay-driven
+function Music_UnlockIntensity()
+
+	if _musicIntensityResetRule ~= nil then 			-- remove any queued playlist items that may still be in the system
+		Rule_RemoveWithID(_musicIntensityResetRule)
+		_musicIntensityResetRule = nil
+	end
+	
+	currentIntensity = Sound_GetCombatIntensity()
+	currentMusicEvent = MUSIC_DEFAULT
+	
+	if (MUSIC_INTENSITY_RANGES ~= nil) then
+		for i, v in pairs(MUSIC_INTENSITY_RANGES) do
+			if (currentIntensity >= v.lowerBound) then
+				currentMusicEvent = v.musicEvent
+			else
+				break
+			end
+		end
+	end
+	
+	Sound_Play2D(currentMusicEvent)
+	Sound_SetManualMusicSelectDuration(0)				-- this should re-enable the dynamic combat intensity changes
+	
+	Sound_SetScriptedMusicDuration(-1)
+	Sound_SetScriptedSilenceDuration(-1)
+	
+	-- always start the music in case it was silent
+	Sound_SetForceSilence(false)			
+	Sound_SetForceMusic(true)
+	Rule_AddOneShot(Music_RemoveForceMusic, 1)
+end
+
+
+function Music_RemoveForceMusic()
+	Sound_SetForceMusic(false)	
+end
+
+function Music_RemoveForceSilence()
+	Sound_SetForceSilence(false)
+end
+
+
+--? @shortdesc This stops music after objective and make sound go to silence
+--? @args Real delay
+function Music_StopAfterObjective(duration) 
+	
+	Rule_AddOneShot(SetSoundSilence, duration)
+	
+end
+
+function SetSoundSilence()
+	Music_Stop()
+    Sound_SetForceSilence(true)	
+end
+
+function SetMinimumIntensityMusicForced() --sets music intensity to 801(tension) and forces it to play indefinitely
+	Sound_SetMinimumMusicCombatIntensity(801, -1)
+end
+
+function SetMinimumIntensityMusicUnforced() --sets music intensity to 801(tension) and allows it to follow the play/silence settings
+	Sound_SetMinimumMusicCombatIntensity(801, 0)
+end
+
+function SetMinimumIntensityCombatMusicForced() --sets music intensity to 801(tension) and forces it to play indefinitely
+	Sound_SetMinimumMusicCombatIntensity(5000, -1)
+end
+
+function ResetMinimumIntensityMusicUnforced()
+	Sound_SetMinimumMusicCombatIntensity(0, 0) --resets music intensity to 0 and allows it to follow the play/silence settings
+end
+--? @shortdesc This restart the music after objective after certain
+--? @args Real duration
+function Music_RestartAfterObjective(duration) 
+	Rule_AddOneShot(Music_UnlockIntensity, duration)		
+	Rule_AddOneShot(Music_SetForce, duration)
+    Rule_AddOneShot(Music_UnsetForce, duration + 1) 
+	
+end
+	
+
+--? @shortdesc This restart the music after objective after certain
+--? @args Real delay, Int level, Real duration
+function Music_SetIntensityAfterObjective(time, level, duration)
+	
+	Rule_AddOneShot(Music_SetForce, time)
+	Rule_AddOneShot(Music_SetIntensity, time, { level = level, duration = duration})
+	
+end
+
+function Music_SetIntensity(context, data)
+	
+	Music_LockIntensity(data.level, data.duration)
+	
+end
+
+
+function Music_SetForce()
+		
+	Sound_SetForceSilence(false)
+	Sound_SetForceMusic(true)
+end
+	
+function Music_UnsetForce()
+	Sound_SetForceMusic(false)
+end
+	
+
+--
+-- Misc functions
+-- 
+
+--? @shortdesc Plays a stinger audio event.  The wwise event should handle ducking, ending, etc.
+--? @args String Stinger
+function Music_PlayStinger(stinger)
+	Sound_Play2D(stinger)
+end
+
+--? @shortdesc Stops all music currently playing
+function Music_Stop() -- allows for the quick stop option with an restart after silence expires (~60 seconds)
+	Sound_SetManualMusicSelectDuration(0)
+	Sound_SetForceMusic(false)
+	Sound_SetForceSilence(true)
+	Sound_MusicStop() -- skip the outro and just directly stop the music
+	Rule_AddOneShot(Music_RemoveForceSilence, 1)
+end
+
+function Music_StopMedium() -- music will need to be manually restarted
+	Sound_SetManualMusicSelectDuration(0)
+	Sound_SetForceMusic(false)
+	Sound_SetForceSilence(true)
+	Sound_StartMusicOutro("mus_core_event_post_combat_state")
+end
+
+function Music_StopLong() -- music will need to be manually restarted
+	Sound_SetManualMusicSelectDuration(0)
+	Sound_SetForceMusic(false)
+	Sound_SetForceSilence(true)
+	Sound_StartMusicOutro("mus_core_event_outro_state")
+end
+
+function Music_CombatMusicOnly()
+	Music_UnlockIntensity()
+	Sound_SetScriptedMusicDuration(0)
+	Sound_SetScriptedSilenceDuration(9999999999)
+end
+
+function Music_StopMedium_With_Restart() -- allows for the post combat stop option with an restart after silence expires (~30 seconds)
+	Sound_SetManualMusicSelectDuration(0)
+	Sound_SetForceMusic(false)
+	Sound_SetForceSilence(true)
+	Sound_StartMusicOutro("mus_core_event_post_combat_state")
+	Rule_AddOneShot(Music_RemoveForceSilence, 1)
+end
+
+function Music_PersistentStop() -- music will need to be manually restarted
+	Sound_SetManualMusicSelectDuration(0)
+	Sound_SetForceMusic(false)
+	Sound_SetForceSilence(true)
+	Sound_MusicStop() -- skip the outro and just directly stop the music
+end
+
+--? @shortdesc Plays the music end outro segement and stop music after for about 50 secs.
+function Music_Outro_End()
+	
+	Sound_Play2D("mus_core_event_outro_state")
+end
+
+--? @shortdesc Plays the music short end outro segement after combat finishes and goes to silence for around 20 secs. 
+--? 
+function Music_PostCombat_End()
+	Sound_Play2D("mus_core_event_post_combat_state") --Please don't use this as it ignore force music and force silent and breaks music. Use "Music_Stop" instead.
+end

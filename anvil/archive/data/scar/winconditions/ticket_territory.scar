@@ -1,0 +1,413 @@
+-----------------------------------------------------------------------
+-- Territory control win condition
+--
+-- (c) Relic Entertainment 2020
+--
+-- In this win condition, all teams start with an initial ticket count.
+-- A team loses tickets when the enemy controls more territories (above a minimum threshold).
+-- Only territories in supply count for the purpose of ticket loss.
+-- A team is defeated when its tickets are exhausted.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Territory")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function Territory_OnInit()
+	_territory = {
+		ticket_update_interval = 3,		-- interval (in seconds) that the territory count is checked
+		ticket_loss_max = 5,			-- maximum ticket loss per update interval
+		threshold = 0.5,				-- territory threshold (minimum number or percent of territories in supply required to trigger ticket loss)
+		points = {},					-- list of entity IDs for all the territory points on the map
+		ui_name = "TerritoryUI",		-- name used to identify the parent element of the scripted UI used by this win condiiton
+		data_context = {},				-- data context used for scripted UI element
+		enable_tooltip = true,
+		is_paused = false,
+	}
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+function Territory_OnMaxTicketsChanged(max_tickets, player)
+	_territory.max_tickets_set = true
+
+	if not _territory.teams then
+		_territory.teams = {}
+		for i = 1, World_GetPlayerCount() do
+			local team = Territory_GetTeam(World_GetPlayerAt(i))
+			if team then
+				table.insert(team.players, i)
+			else
+				table.insert(_territory.teams, {
+						players = {i}, 	-- list of player indices belonging to this team
+						points = 0 		-- number of strategic points currently owned by this team
+					})
+			end
+		end
+	end
+
+	if player then
+		local team = Territory_GetTeam(player)
+		team.max_tickets = max_tickets
+	else
+		for _, team in pairs(_territory.teams) do
+			team.max_tickets = max_tickets
+		end
+	end
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function Territory_Start()
+
+	if not _territory.max_tickets_set or #_territory.teams < 2 then
+		Core_UnregisterModule("Territory")
+		return
+	end
+
+	-- Set initial ticket count if it hasn't already been done elsewhere.
+	for _, team in pairs(_territory.teams) do
+		if not team.tickets then
+			Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), team.max_tickets, team.tickets, true)
+		end
+	end
+
+	-- Cache territory points
+	local eg = EGroup_CreateUnique()
+	World_GetStrategyPoints(eg, false)
+	for i = 1, EGroup_Count(eg) do
+		table.insert(_territory.points, Entity_GetID(EGroup_GetEntityAt(eg, i)))
+	end
+	EGroup_Destroy(eg)
+
+	Territory_SetThreshold(_territory.threshold)
+
+	-- Set initial point count since match could start with players owning territory sectors
+	for _, team in pairs(_territory.teams) do
+		team.points = Territory_GetNumStrategicPoints(team)
+	end
+
+	Territory_CreateUI()
+	Territory_UpdateUI()
+
+	Rule_AddGlobalEvent(Territory_OnStrategicPointChanged, GE_StrategicPointChanged)
+	Rule_AddInterval(Territory_UpdateTickets, _territory.ticket_update_interval)
+end
+
+
+-- Called by core.scar when save game is loaded.
+function Territory_OnGameRestore()
+	g_childAdded = false
+	Territory_CreateUI()
+	Territory_UpdateUI()
+end
+
+
+-- Global event callback for GE_StrategicPointChanged.
+-- Makes territory point visible briefly so players can see that they are captured.
+function Territory_OnStrategicPointChanged(context)
+	if context.strategicPointOwner then
+		for _, team in pairs(_territory.teams) do
+			team.points = Territory_GetNumStrategicPoints(team)
+		end
+		Territory_UpdateUI()
+	end
+
+	if context.changeType == 0 or context.changeType == 3 then
+		FOW_RevealArea(Entity_GetPosition(context.strategicPointEntity), 1.0, 0.25)
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling ticket count has changed.
+function Territory_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	-- Save the new ticket count
+	local team = Territory_GetTeam(player)
+	team.tickets = math.max(0, tickets)
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function Territory_OnWinConditionTriggered(match_result)
+	if Rule_Exists(Territory_UpdateTickets) then
+		Rule_Remove(Territory_UpdateTickets)
+	end
+	Rule_RemoveGlobalEvent(Territory_OnStrategicPointChanged)
+	--UI_Remove(_territory.ui_name)
+end	
+
+
+-- Called via Core_CallDelegateFunctions("ShowUI") by game mode script to show/hide scripted UI elements.
+function Territory_ShowUI(show)
+	if show then 
+		UI_SetPropertyValue( _territory.ui_name .. ".TerritoryControl", "Visibility", "Visible")
+	else
+		UI_SetPropertyValue( _territory.ui_name .. ".TerritoryControl", "Visibility", "Hidden")
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+function Territory_GetTeam(player)
+	local player_index = World_GetPlayerIndex(player)
+	for _, team in pairs(_territory.teams) do
+		for _, index in pairs(team.players) do
+			if index == player_index or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == R_ALLY then
+				return team
+			end
+		end
+	end
+end
+
+
+-- Returns the number of connected strategic points controlled by a given team.
+function Territory_GetNumStrategicPoints(team)
+	local points = 0
+	for _, entity_id in pairs(_territory.points) do
+		local point = Entity_FromID(entity_id)
+		if not World_OwnsEntity(point) then
+			local owner = Entity_GetPlayerOwner(point)
+			--print(string.format("%s owned by %s", BP_GetName(Entity_GetBlueprint(point)), Loc_ToAnsi(Player_GetDisplayName(owner))))
+			if World_IsInSupply(owner, Entity_GetPosition(point)) 
+				and Table_Contains(team.players, World_GetPlayerIndex(owner)) then
+				points = points + 1
+			end
+		else
+			--print(string.format("%s is neutral", BP_GetName(Entity_GetBlueprint(point))))
+		end
+	end
+	--print(string.format("Team owns %d/%d points", points, #_territory.points))
+	return points
+end
+
+
+-- Creates a scripted UI element indicating which team has the territory advantage.
+function Territory_CreateUI()
+	local xaml =
+[[<StackPanel 
+		xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		xmlns:hudModel="clr-namespace:HUDModelTypes"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:esUtility="clr-namespace:WPFGUI.Shared.Utility;assembly=EngineUI"
+		VerticalAlignment="Top"
+		HorizontalAlignment="Center"
+		Orientation="Vertical"
+		Margin="12">
+
+	<ItemsControl x:Name="TerritoryControl"
+			ItemsSource="{Binding [advantage]}"
+			VerticalAlignment="Top" 
+			HorizontalAlignment="Center"
+			Margin="0,48,0,0">
+		<ItemsControl.ItemsPanel>
+			<ItemsPanelTemplate>
+				<WrapPanel />
+			</ItemsPanelTemplate>
+		</ItemsControl.ItemsPanel>
+		<ItemsControl.ItemTemplate>
+			<DataTemplate>
+				<Rectangle Width="22" Height="22" RenderTransformOrigin="0.5,0.5" Margin="1,0">
+					<Rectangle.Fill>
+						<esUtility:Shader>
+							<esUtility:ShaderBrush ImageSource="pack://application:,,,/WPFGUI;component/icons/common/resources/symbols/mm_victory_point.png"
+									PixelShader="Tint" Stretch="Fill" TileMode="None" VertexShader="Common" 
+									Color="{Binding [color]}" />
+						</esUtility:Shader>
+					</Rectangle.Fill>
+				</Rectangle>
+			</DataTemplate>
+		</ItemsControl.ItemTemplate>
+		<ItemsControl.ToolTip>
+			<ToolTip DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
+					HorizontalOffset="-4"
+					VerticalOffset="18" >
+				<ToolTip.Style>
+					<Style TargetType="ToolTip">
+						<Setter Property="HasDropShadow" Value="False" />
+						<Setter Property="OverridesDefaultStyle" Value="True" />
+						<Setter Property="Placement" Value="Bottom" />
+						<Setter Property="Template">
+							<Setter.Value>
+								<ControlTemplate TargetType="{x:Type ToolTip}">
+									<ContentPresenter />
+								</ControlTemplate>
+							</Setter.Value>
+						</Setter>
+					</Style>
+				</ToolTip.Style>
+				<Border Background="Black">
+					<TextBlock Foreground="White" 
+						Margin="10"
+						Style="{StaticResource HUDBodyTextStyle}"
+						Text="{esUtility:LocString $11231868}" />
+				</Border>
+			</ToolTip>
+		</ItemsControl.ToolTip>
+	</ItemsControl>
+</StackPanel>]]
+	
+
+	if g_childAdded then
+		return
+	end
+
+	UI_AddChild("", "XamlPresenter", _territory.ui_name, {
+			IsHitTestVisible = _territory.enable_tooltip,	-- Tooltip is the only element that requires hit detection
+			Xaml = xaml, 
+			DataContext = UI_CreateDataContext(_territory.data_context)
+		})
+	g_childAdded = true
+end
+
+
+-- Updates the UI to indicate the relative territory advantage.
+function Territory_UpdateUI()
+	--Cache colors
+	if not _territory.player_color then
+		_territory.player_color =  UI_GetColourAsString(Player_GetUIColour(Game_GetLocalPlayer()))
+		_territory.enemy_color = UI_GetColourAsString(Player_GetUIColour(Player_FindFirstEnemyPlayer(Game_GetLocalPlayer())))
+	end
+
+	_territory.data_context = {advantage = {}}
+	local least_points, most_points = Territory_GetPointCount()
+	if most_points >= _territory.threshold then
+		for _, team in pairs(_territory.teams) do
+			team.advantage = math.min(team.points - least_points, _territory.ticket_loss_max)
+			local color = _territory.enemy_color
+			if Table_Contains(team.players, World_GetPlayerIndex(Game_GetLocalPlayer())) then
+				color = _territory.player_color
+			end
+			for i = 1, team.advantage do
+				table.insert(_territory.data_context.advantage, {color = color})
+			end
+		end
+	end
+	UI_SetDataContext(_territory.ui_name, _territory.data_context)
+end
+
+
+
+function Territory_GetPointCount()
+	local least_points = 99
+	local most_points = 0
+	for _, team in pairs(_territory.teams) do
+		team.points = Territory_GetNumStrategicPoints(team)
+		if most_points < team.points then
+			most_points = team.points
+		end
+		if least_points > team.points then
+			least_points = team.points
+		end
+	end
+	return least_points, most_points
+end
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+-- Decrements ticket count for teams that don't own the most territory points
+function Territory_UpdateTickets(context, data)
+	if not _territory.is_paused then
+		local least_points, most_points = Territory_GetPointCount()
+		if most_points >= _territory.threshold then
+			for _, team in pairs(_territory.teams) do
+				if most_points > team.points then
+					local ticket_loss = math.min(most_points - team.points, _territory.ticket_loss_max)
+					if ticket_loss > 0 then
+						local tickets_remaining = math.max(0, team.tickets - ticket_loss)
+						Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), tickets_remaining, team.tickets)
+					end
+				end
+			end
+		end
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+--Start/pause/resume countdown
+function Territory_Pause(pause)
+	_territory.is_paused = pause 
+end
+
+
+-- Returns the territory advantage of a given player
+function Territory_GetAdvantage(player)
+	for _, team in pairs(_territory.teams) do
+		if team.advantage and team.advantage > 0 then
+			if Table_Contains(team.players, World_GetPlayerIndex(player)) then
+				return team.advantage
+			else
+				return -team.advantage
+			end
+		end
+	end
+	return 0
+end
+
+
+-- Sets the threshold number (or percentage) of territories in supply required for ticket loss to trigger.
+-- e.g. 0.5 means a team must own at least half the territories on the map in order to reduce enemy tickets.
+-- 3 means that a team needs at least 3 territories in supply to reduce enemy tickets.
+function Territory_SetThreshold(threshold)
+	local eg = EGroup_CreateUnique()
+	World_GetStrategyPoints(eg, false)
+	if threshold < 1 then
+		_territory.threshold = math.ceil(EGroup_CountSpawned(eg) * math.max(0, threshold))
+	else
+		_territory.threshold = math.min(math.floor(threshold), EGroup_CountSpawned(eg))
+	end
+	EGroup_Destroy(eg)
+end
+
+
+-- Returns a table containing the settings parameters and their values.
+function Territory_GetParameters()
+	local params = Table_Copy(_territory)
+	-- Remove data that can't/shouldn't be changed
+	params.points = nil
+	params.ui_name = nil
+	params.data_context = nil
+	params.is_paused = nil
+	return params
+end
+
+-- Overrides default behavior.
+function Territory_SetParameters(params)
+	if scartype(params) == ST_TABLE then
+		if scartype(params.enable_tooltip) == ST_BOOLEAN then
+			_territory.enable_tooltip = params.enable_tooltip
+		end
+		if scartype(params.ticket_update_interval) == ST_NUMBER and _territory.ticket_update_interval ~= params.ticket_update_interval then
+			_territory.ticket_update_interval = params.ticket_update_interval
+			if Rule_Exists(Territory_UpdateTickets) then
+				Rule_Remove(Territory_UpdateTickets)
+				Rule_AddInterval(Territory_UpdateTickets, _territory.ticket_update_interval)
+			end
+		end
+		if scartype(params.ticket_loss_max) == ST_NUMBER then
+			_territory.ticket_loss_max = math.max(1, math.floor(params.ticket_loss_max))
+		end
+		if scartype(params.threshold) == ST_NUMBER then
+			Territory_SetThreshold(params.threshold)
+		end
+	end
+end
+

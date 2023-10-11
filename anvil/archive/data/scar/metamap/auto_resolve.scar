@@ -1,0 +1,627 @@
+import("table.scar")
+import("gamescarutil.scar")
+
+local tuning = 
+{
+	damageScaling = 0.60, -- Damage done per point difference in scores
+	damageDeltaScaling = 1.125, -- Exponent that increases damage dealt based on attacker-to-defender score delta
+	minBaseDamage = 250, -- The max amount of damage that can be dealt based on summed scores
+	minDamagePercent = 0.1, -- Damage that at min must be applied as a percentage of max health
+	maxDamagePercent = Util_DifVar({1,1,0.6,0.6}), -- Max damage that can be applied, as a percentage of max health
+	difficulty = {0.75, 0.95, 1.1, 1.25}, -- Easy, Normal, Hard, Expert
+	marked_target = 0.75,
+	defender = 0.05,
+	improvedDefender = 0.10,
+
+	unitTypes = 
+	{
+		aircraft_carrier = 
+		{
+			navy = 20
+		},
+		battleship = 
+		{
+			navy = 50
+		},
+		destroyer = 
+		{
+			navy = 35
+		},
+		infantry_small_arms = 
+		{
+			armor = 5,
+			infantry = 75
+		},
+		infantry_ballistic = 
+		{
+			armor = 50,
+			infantry = 35
+		},
+		armor_small_arms = 
+		{
+			armor = 30,
+			infantry = 45
+		},
+		armor_ballistic = 
+		{
+			armor = 60,
+			infantry = 40
+		},
+		armor_explosive = 
+		{
+			armor = 10,
+			infantry = 90
+		},
+		detachment_engineer = 
+		{
+			armor = 20,
+			infantry = 20
+		},
+		detachment_hmg = 
+		{
+			armor = 15,
+			infantry = 20
+		},
+		detachment_aa = 
+		{
+			armor = 15,
+			infantry = 20
+		},
+		detachment_howitzer = 
+		{
+			armor = 15,
+			infantry = 25
+		},
+		detachment_rifle = 
+		{
+			armor = 10,
+			infantry = 20
+		},
+		detachment_atg = 
+		{
+			armor = 25,
+			infantry = 10
+		},
+		detachment_medic = 
+		{
+			armor = 15,
+			infantry = 15
+		},
+		detachment_logistics = 
+		{
+			armor = 15,
+			infantry = 15
+		},
+	},
+	health =
+	{
+		HealthModifier = function(maxHealth)
+			local increment = 300
+			return (maxHealth / increment) * 10
+		end,
+	
+		DamageModifier = function(healthPercent)
+			return 200 * healthPercent^2 -- Squared to amplify the penalty of low health
+		end
+	},
+	supply = 2,
+	rank = 30,
+	upgrade = 3,
+	
+	terrainTypes = {
+		Road = {
+			modifier = 10,
+			exceptions = { }},
+		SideRoad = {
+			modifier = 10,
+			exceptions = { }},
+		Forest = {
+			modifier = 20,
+			exceptions = { }},
+		Town = {
+			modifier = 25,
+			exceptions = { }},
+		Hill = {
+			modifier = 20,
+			exceptions = { }},
+		Plains = {
+			modifier = 10,
+			exceptions = { }},
+		MountainPass = {
+			modifier = 20,
+			exceptions = { }},
+		Coast = {
+			modifier = 10,
+			exceptions = { }},
+		PontoonBridge = {
+			modifier = 15,
+			exceptions = { }},
+		},
+	
+	officerAttributes = {
+		-- base for officierAttribute score is 50 so flaw will result in score bonus of 0
+		cmap_officer_trait_tactician = 150,
+		cmap_officer_flaw_predictable = -25,
+	},
+	
+	-- Key = Affector Ability BP Name | Value = Scoring value.
+	missionAffectors = 
+	{	
+		a_american_generic_company_reinforce_us = 100,	
+		a_airborne_company_reinforce_us = 100,	
+		a_armoured_company_reinforce_us = 100,
+		a_special_operations_company_reinforce_us = 100,
+		
+		a_british_generic_company_reinforce_uk = 100,
+		a_armored_company_reinforce_uk = 100,
+		a_airborne_company_reinforce_uk = 100,
+		a_indian_artillery_company_reinforce_uk = 100,
+		
+		a_german_infantry_company_reinforce_ger = 100,
+		a_german_mechanized_company_reinforce_ger = 100,
+		a_german_panzer_company_reinforce_ger = 100,
+		a_german_luftwaffe_company_reinforce_ger = 100,
+		
+		rts_bombardment_battleship = 40,
+		rts_bombardment_destroyer_uk = 25,
+		rts_bombardment_destroyer_ger = 25,
+		rts_emplacement_affector_anti_air_ger = 40,
+		rts_emplacement_affector_anti_air_uk = 40,
+		rts_emplacement_affector_anti_tank_ger = 40,
+		rts_emplacement_affector_howitzer_ger = 40,
+		rts_emplacement_affector_howitzer_uk = 40,
+		rts_emplacement_affector_howitzer_us = 40,
+		rts_emplacement_affector_machine_gun_ger = 40,
+		rts_emplacement_affector_repair_bay_ger = 40,
+		rts_emplacement_affector_supply_cache_ger = 40,
+		rts_emplacement_affector_supply_cache_us = 40,
+		rts_emplacement_affector_triage_center_ger = 40,
+		
+		rts_partisan_disable = 25,
+		rts_partisan_loot_supplies = 25,
+		rts_partisan_observe_report = 25,
+		m_partisan_disrupt_us = 25,
+		
+		rts_recon_airfield_us = 25,
+		rts_recon_airfield_uk = 25,
+		rts_recon_airfield_ger = 25,
+		rts_recon_airfield_passive = 25,
+		rts_strafing_run_airfield_us = 25,
+		rts_strafing_run_airfield_uk = 25,
+		rts_strafing_run_airfield_ger = 25,
+		rts_bombing_run_airfield_us = 25,
+		rts_bombing_run_airfield_uk = 25,
+		rts_bombing_run_airfield_ger = 25,
+		rts_bombing_run_airfield_passive = 25,
+	},
+	
+	maxNumberOfMissionAffectors = 2,
+	
+	overwatch = 
+	{
+		base_damage = 100,
+		damage_multiplier_min = 0.25,
+		hard_counter = 2, 
+		skill_points = 0.0075, 
+		veterancy = 0.1,
+	}
+}
+
+local function UnitTypeScore(attacker, defender)
+	local score = 0
+	
+	local attackerTypeFunc = scartype(attacker) == ST_ENTITY and Entity_IsOfType or Squad_IsOfType
+	local defenderTypeFunc = scartype(defender) == ST_ENTITY and Entity_IsOfType or Squad_IsOfType
+	local foundUnitTypeScore = false
+	
+	for squadType, entry in pairs(tuning.unitTypes) do
+		if attackerTypeFunc(attacker, squadType) then
+			for defenderType,modifier in pairs(entry) do
+				if defenderTypeFunc(defender, defenderType) or defenderType == "All" then
+					score = score + modifier
+					foundUnitTypeScore = true
+				end
+			end
+		end
+	end
+	
+	if not foundUnitTypeScore then
+		print(string.format("### WARNING: Squad/Entity with name ('%s') has no type that matches any entry in the tuning table 'unitTypes'.", attacker.Name))
+	end
+	
+	return score
+end
+
+function MetaMap_GetAutoResolveSelectedAffectorsAndScore(squad, nodeID)
+	
+	local totalScore = 0
+	local chosenAffectors = {}
+	
+	if scartype(squad) ~= ST_SQUAD then
+		return
+		{
+			affectors = chosenAffectors,
+			totalScore = totalScore
+		}
+	end
+	
+	local function DoGet_ModifiersWithTheirAssignedScore(modifiers)
+		local defaultScore = 0.5
+		local modifersWithScore = {}
+		
+		for modifierName, modifierPBG in pairs(modifiers) do
+			local score = tuning.missionAffectors[modifierName]
+			local modifierScore = score 
+			
+			if modifierScore == nil then
+				modifierScore = defaultScore
+				print(string.format("### WARNING: No entry with name ('%s') was found in the tuning table 'missionAffectors'. Assigning default score", modifierName))
+			end
+			
+			table.insert(modifersWithScore, { ['pbg'] = modifierPBG, ['score'] = modifierScore })			
+		end	
+		
+		return modifersWithScore
+	end
+	
+	local function DoGet_SortedModifiersWithAssignedScore_Ascending(modifiers)
+		local sortedModifier = modifiers
+		table.sort(sortedModifier, function (a, b) return a.score > b.score end)
+		
+		return sortedModifier
+	end
+	
+	local function DoGet_ModifersScoreSum(modifierScores)
+		local runningTotal = 0
+		
+		for _, score in pairs(modifierScores) do
+			runningTotal = runningTotal + score
+		end
+		
+		return runningTotal
+	end
+	
+	local function DoExtractModifiersAndScoreInSeparateLists(modifiersWithScore)
+		local modifiers = {}
+		local scores = {}
+		
+		for _, value in pairs(modifiersWithScore) do
+			local pbg = value.pbg
+			local score = value.score
+			
+			table.insert(modifiers, pbg)
+			table.insert(scores, score)
+		end
+			
+		
+		return { modifiers = modifiers, scores = scores }
+	end
+	
+	local function DoGet_ModifiersWithHighestScore(optional_modifiers, forced_modifiers, slots_left)
+		local remainingAffectors = slots_left	
+		local modifiersWithHighestScore = {}
+		local modifiersWithScore = DoGet_ModifiersWithTheirAssignedScore(optional_modifiers)
+		
+		local sortedModifiers = DoGet_SortedModifiersWithAssignedScore_Ascending(modifiersWithScore)
+		
+		for _, value in pairs(forced_modifiers) do
+			if remainingAffectors == 0 then
+				break
+			end
+			
+			-- TODO add this to score list as well?
+			local pbg = value
+			local score = -10
+			
+			table.insert(modifiersWithHighestScore, { ['pbg'] = pbg, ['score'] = score })
+			
+			remainingAffectors = remainingAffectors - 1
+		end
+		
+		for _, value in pairs(sortedModifiers) do
+			if remainingAffectors == 0 then
+				break
+			end
+			
+			local pbg = value.pbg
+			local score = value.score
+			
+			table.insert(modifiersWithHighestScore, { ['pbg'] = pbg, ['score'] = score })
+			
+			remainingAffectors = remainingAffectors - 1
+		end
+		
+		return modifiersWithHighestScore
+	end
+	
+	local playerOwner = Util_GetPlayerOwner(squad)
+	
+	-- We consider the score of all mandatory modifiers (ability and upgrade) even though they are not displayed in the UI
+	local mandatoryAbilityModifiersTable = World_GetNodeMandatoryAbilityModifiersForSquad(playerOwner, nodeID, squad)	
+	local mandatoryUpgradeModifiersTable = World_GetNodeMandatoryUpgradeModifiersForSquad(playerOwner, nodeID, squad)	
+	local mandatoryModifiersTable = Table_Concatenate_Associative(mandatoryAbilityModifiersTable, mandatoryUpgradeModifiersTable)	
+	
+	local mandatoryModifiersWithScore = DoGet_ModifiersWithTheirAssignedScore(mandatoryModifiersTable)
+	local mandatoryModifiersAndScoresExtracted = DoExtractModifiersAndScoreInSeparateLists(mandatoryModifiersWithScore)
+	
+	totalScore = totalScore + DoGet_ModifersScoreSum(mandatoryModifiersAndScoresExtracted.scores)
+	
+	local optionalAbilityModifiersTable = World_GetNodeOptionalAbilityModifiersForSquad(playerOwner, nodeID, squad)
+	local optionalUpgradeModifiersTable = World_GetNodeOptionalUpgradeModifiersForSquad(playerOwner, nodeID, squad)
+	local optionalModifiersTable = Table_Concatenate_Associative(optionalAbilityModifiersTable, optionalUpgradeModifiersTable)	
+	
+	local thresholdModifiersTable = World_GetThresholdModifiersForSquad(squad)
+	
+	local chosenModifiersWithHighestScore = DoGet_ModifiersWithHighestScore(optionalModifiersTable, thresholdModifiersTable, tuning.maxNumberOfMissionAffectors)
+	local chosenModifiersAndScoresExtracted = DoExtractModifiersAndScoreInSeparateLists(chosenModifiersWithHighestScore)
+	
+	totalScore = totalScore + DoGet_ModifersScoreSum(chosenModifiersAndScoresExtracted.scores)
+
+	return 
+	{
+		affectors = chosenModifiersAndScoresExtracted.modifiers,
+		totalScore = totalScore
+	}
+end
+
+local ScoringFunctions = 
+{
+	squad_type = function(attacker, defender)
+		return UnitTypeScore(attacker, defender)
+	end,
+	
+	detachment = function(attacker, defender)
+		if scartype(attacker) ~= ST_SQUAD then
+			return 0
+		end
+		local score = 0
+		local index = 0
+		local detachmentSquads = Anvil_GetSquadDetachments(attacker)
+		
+		local foreach_detachment_squad = function(group, index, squad)
+			score = score + UnitTypeScore(squad, defender)
+		end
+		
+		SGroup_ForEach(detachmentSquads, foreach_detachment_squad)
+		
+		SGroup_Destroy(detachmentSquads)
+		
+		return score * Util_GetHealthPercentage(attacker)
+	end,
+	
+	health = function(attacker)
+		local score = tuning.health.HealthModifier(Util_GetHealthMax(attacker))
+		score = score + tuning.health.DamageModifier(Util_GetHealthPercentage(attacker))
+		return score
+	end,
+	
+	supply = function(attacker)
+		if scartype(attacker) == ST_SQUAD then
+			return tuning.supply * Squad_GetStateModelInt(attacker, "campaign_supply") * Util_GetHealthPercentage(attacker)
+		end
+		return 0
+	end,
+	
+	veterancy = function(attacker)
+		if scartype(attacker) == ST_SQUAD then
+			return tuning.rank * Squad_GetVeterancyRank(attacker) * Util_GetHealthPercentage(attacker)
+		end
+		return 0
+	end,
+	
+	terrainType = function(attacker)
+		local total = 0
+		
+		if scartype(attacker) == ST_SQUAD then	
+			
+			--Find the terrain type
+			local nodeID = Squad_GetCurrentMovementNodeID(attacker)
+			local nodeData = World_GetMovementNodeMapData(nodeID)
+			local nodeTerrainType = nodeData.movement_node_terrain_type
+			
+			for node_type, data in pairs(tuning.terrainTypes) do
+				if node_type == nodeTerrainType then
+					total = total + data.modifier
+					for ability, amount in pairs(data.exceptions) do
+						if Squad_HasAbility(attacker, BP_GetAbilityBlueprint(ability)) then
+							total = total + amount
+						end
+					end
+				end
+			end
+		end
+		
+		return total
+	end,
+	
+	--officer = function(attacker) -- CUT FOR LAUNCH
+		--local total = 50
+		--if scartype(attacker) == ST_SQUAD then
+			--for ability, attribute in pairs(tuning.officerAttributes) do
+				--if Squad_HasAbility(attacker, BP_GetAbilityBlueprint(ability)) then
+					--total = total + attribute
+				--end
+			--end
+		--end
+		--return total
+	--end, -- Checks the squad for any abilities listed in tuning.officerAttributes and applies their associated buffs
+
+	upgrades = function(attacker)
+		if scartype(attacker) == ST_SQUAD then
+			return tuning.upgrade * Squad_GetCompletedUpgradeCost(attacker, RT_Requisition) * Util_GetHealthPercentage(attacker)
+		end
+		return 0
+	end,
+	
+	missionAffectors = function(attacker)
+		local attackerNodeID = 	scartype(attacker) == ST_SQUAD and Squad_GetCurrentMovementNodeID(attacker) or Entity_GetCurrentMovementNodeID(attacker)
+		return MetaMap_GetAutoResolveSelectedAffectorsAndScore(attacker, attackerNodeID).totalScore
+	end
+}
+
+function MetaMap_GetAutoResolveScores(attacker, defender)
+	
+	if attacker == nil or defender == nil then
+		return nil
+	end
+	
+	local function ScoreList(attacker, defender)
+		local difficultyScaling = Util_GetPlayerOwner(attacker) ~= Game_GetLocalPlayer() and tuning.difficulty[Game_GetSPDifficulty()+1] or 1
+		local scores = {total = 0}
+		for scoreType, fn in pairs(ScoringFunctions) do
+			scores[scoreType] = fn(attacker, defender) * difficultyScaling
+			scores.total = scores.total + scores[scoreType]
+		end
+		return scores
+	end
+	 
+	local attackerScores = ScoreList(attacker, defender)
+	local defenderScores = ScoreList(defender, attacker)
+	
+	-- Add in the Marked Target reduction on Defender if they are marked
+	if (scartype(defender) == ST_SQUAD) and (Squad_GetStateModelBool(defender, "campaign_marked_target") == true) then
+		defenderScores.total = tuning.marked_target * defenderScores.total
+	end
+	
+	-- Add in the Marked Target reduction on Attacker if they are marked
+	if (scartype(attacker) == ST_SQUAD) and (Squad_GetStateModelBool(attacker, "campaign_marked_target") == true) then
+		attackerScores.total = tuning.marked_target * attackerScores.total
+	end
+	
+	-- Add in the defender's advantage
+		defenderScores.defender = tuning.defender * defenderScores.total
+
+	defenderScores.total = defenderScores.total + defenderScores.defender
+		
+	return {attacker = attackerScores, defender = defenderScores}
+end
+
+-- These may be squads or entities
+function MetaMap_AutoResolve(attacker, defender)
+	
+	if scartype(defender) == ST_ENTITY and Entity_IsOfType(defender, "emplacement") then
+		-- If defender is emplacement, overwrite calculation to deal kill damage
+		local winningPlayer = Util_GetPlayerOwner(attacker)
+		local isLocalPlayerWinner = winningPlayer ~= nil and winningPlayer.PlayerID == Game_GetLocalPlayerID()
+		return {
+	 		winning_player = winningPlayer,
+			is_local_player_winner = isLocalPlayerWinner,
+			gameLength = 0,
+			auto_resolved = true,
+			attackerDamageTaken = 0,
+			defenderDamageTaken = Entity_GetHealthMax(defender),
+		}
+	end
+	
+	-- Instead switch out to using flat numbers for navy combat, as the fight is a one-sided attack and we don't need to do a lot of the fiddly calculations.
+	if scartype(defender) == ST_SQUAD and Squad_IsOfType(defender, "navy") and scartype(attacker) == ST_SQUAD and Squad_IsOfType(attacker, "navy")  then
+		return MetaMap_AutoResolveNavy(attacker, defender)
+	end
+	
+	local scores = MetaMap_GetAutoResolveScores(attacker, defender)
+
+	local damageScaling = tuning.damageScaling
+	local damageDeltaScaling = tuning.damageDeltaScaling
+	local minBaseDamage = tuning.minBaseDamage
+	local attackerTotal = scores.attacker.total
+	local defenderTotal = scores.defender.total
+	
+	local attackerDamageDealt = math.max(attackerTotal * damageScaling, minBaseDamage)
+	local defenderDamageDealt = math.max(defenderTotal * damageScaling, minBaseDamage)
+	
+	local winner
+	
+	-- Loser takes extra damage, winner damage can't exceed 10% of health
+	if attackerTotal > defenderTotal then
+		winner = attacker
+		defenderDamageDealt = Util_Clamp(defenderDamageDealt, 0, Util_GetHealthMax(attacker) * 0.1)
+		attackerDamageDealt = attackerDamageDealt + (attackerTotal - defenderTotal) ^ damageDeltaScaling
+		local maxDefenderHealth = Util_GetHealthMax(defender)
+		attackerDamageDealt = Util_Clamp(attackerDamageDealt, tuning.minDamagePercent * maxDefenderHealth, tuning.maxDamagePercent * maxDefenderHealth)
+	else
+		winner = defender
+		attackerDamageDealt = Util_Clamp(attackerDamageDealt, 0, Util_GetHealthMax(defender) * 0.1)
+		defenderDamageDealt = defenderDamageDealt + (defenderTotal - attackerTotal) ^ damageDeltaScaling
+		local maxAttackerHealth = Util_GetHealthMax(attacker)
+		defenderDamageDealt = Util_Clamp(defenderDamageDealt, tuning.minDamagePercent * maxAttackerHealth, tuning.maxDamagePercent * maxAttackerHealth)
+	end 
+	
+	local winningPlayer = Util_GetPlayerOwner(winner)
+	local isLocalPlayerWinner = winningPlayer ~= nil and winningPlayer.PlayerID == Game_GetLocalPlayerID()
+	
+	return {
+ 		winning_player = winningPlayer,
+		is_local_player_winner = isLocalPlayerWinner,
+		gameLength = 0,
+		auto_resolved = true,
+		attackerDamageTaken = math.floor(defenderDamageDealt),
+		defenderDamageTaken = math.floor(attackerDamageDealt),
+	}
+end
+
+function MetaMap_ResolveOverwatch(attacker, defender)
+	local multiplier = 1
+	
+	if MetaMap_CheckHardCounter(attacker,defender) then
+		multiplier = multiplier + tuning.overwatch.hard_counter
+	end
+	
+	if scartype(defender) == ST_SQUAD then
+		multiplier = multiplier - tuning.overwatch.skill_points * Squad_GetCompletedUpgradeCost(defender, RT_Requisition)
+		multiplier = multiplier - tuning.overwatch.veterancy * Squad_GetVeterancyRank(defender)
+	end
+
+	if scartype(attacker) == ST_SQUAD then
+		multiplier = multiplier + tuning.overwatch.skill_points * Squad_GetCompletedUpgradeCost(attacker, RT_Requisition)
+		multiplier = multiplier + tuning.overwatch.veterancy * Squad_GetVeterancyRank(attacker)
+	end
+	
+	if multiplier < tuning.overwatch.damage_multiplier_min then
+		multiplier = tuning.overwatch.damage_multiplier_min
+	end
+	
+	return {
+		attacker = attacker,
+		defender = defender,
+		attackerDamageTaken = 0,
+		defenderDamageTaken = multiplier * tuning.overwatch.base_damage,
+	}
+end
+		
+function MetaMap_CheckHardCounter(attacker, defender) -- Check if an overwatch attack is armor vs anti-armor or infantry vs. anti-infantry
+	if (scartype(defender) == ST_SQUAD and scartype(attacker) == ST_ENTITY) then
+		
+		return (Squad_IsOfType(defender, "armor") and Entity_IsOfType(attacker, "emplacement_atg")) 
+		or (Squad_IsOfType(defender, "infantry") and (Entity_IsOfType(attacker, "emplacement_hmg") or Entity_IsOfType(attacker, "emplacement_mortar")))
+	
+	elseif (scartype(defender) == ST_SQUAD and scartype(attacker) == ST_SQUAD) then
+		
+		return (Squad_IsOfType(defender, "armor") and (Squad_IsOfType(attacker, "armor_ballistic") or (Squad_IsOfType(attacker, "infantry_ballistic"))))
+		or (Squad_IsOfType(defender, "infantry") and Squad_IsOfType(attacker, "armor_small_arms") or (Squad_IsOfType(attacker, "infantry_small_arms")))
+		
+	end				
+end
+				
+function MetaMap_AutoResolveNavy(attacker, defender)
+	local winningPlayer = Util_GetPlayerOwner(attacker)
+	local isLocalPlayerWinner = winningPlayer ~= nil and winningPlayer.PlayerID == Game_GetLocalPlayerID()
+	
+	local damage_amount = 200
+
+	if scartype(attacker) == ST_SQUAD then
+		if Squad_IsOfType(attacker, "battleship") then
+			damage_amount = 250
+		elseif Squad_IsOfType(attacker, "aircraft_carrier") then
+			damage_amount = 150
+		end
+	end
+	
+	return {
+	 		winning_player = winningPlayer,
+			is_local_player_winner = isLocalPlayerWinner,
+			gameLength = 0,
+			auto_resolved = true,
+			attackerDamageTaken = 0,
+			defenderDamageTaken = damage_amount,
+	}
+end

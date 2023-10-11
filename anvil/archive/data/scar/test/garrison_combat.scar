@@ -1,0 +1,208 @@
+-- Copyright 2020 SEGA Corporation, Developed by Relic Entertainment
+
+--?    @shortdesc
+--?    Garrison a Squad and verify that they can attack enemies to the East and to the West
+--?    
+--?    @extdesc 
+--?    Spawns a structure at the centre of the map and garrisons a squad within it.
+--?    Then spawns enemies to the East and West one at a time, and verifies that they get attacked by the garrisoned squad.
+--?    The test will finish and count as a success if both enemy squads are attacked.
+--?    
+--?    @args
+--?    table t_test_group,
+--?    table t_params {
+--?        string structure_ebp,
+--?        string garrison_unit_sbp,
+--?        string east_enemy_sbp,
+--?        string west_enemy_sbp,
+--?        real timeout_seconds,
+--?        string input_name,
+--?        string input_description }
+
+import("anvil.scar")
+import("scarutil.scar")
+import("test/common.scar")
+import("test/testutil.scar")
+
+function Test_GarrisonCombat(t_test_group, t_params)
+	-- creating local test variables
+	local timeout_seconds = t_params.timeout_seconds or 60
+	local test_name = t_params.input_name or ("Garrison Combat Test")
+	local test_description = t_params.input_description or ("Tests the ability for Garrisoned units to attack enemy units from the East, and West")
+	local ebp_structure = t_params.structure_ebp
+	local sbp_garrison_unit = t_params.garrison_unit_sbp
+	local sbp_east_enemy = t_params.east_enemy_sbp
+	local sbp_west_enemy = t_params.west_enemy_sbp
+	-- creating garrison test specific variables
+	local egroupBuilding = nil
+	local egroupBlueprint = nil
+	local sgroupGarrison = nil
+	local sgroupGarrisonBlueprint = nil
+	local sgroupEast = nil
+	local sgroupWest = nil
+	local sgroupEastBlueprint = nil
+	local sgroupWestBlueprint = nil
+	local position_phase = nil
+	local test_success = false
+
+	local function Start()
+		-- setting values for garrison test specific variables
+		egroupBuilding = EGroup_CreateIfNotFound("group_building")
+		egroupBlueprint = BP_GetEntityBlueprint(ebp_structure)
+		sgroupGarrison = SGroup_CreateIfNotFound("group_garrison")
+		sgroupGarrisonBlueprint = BP_GetSquadBlueprint(sbp_garrison_unit)
+		sgroupEast = SGroup_CreateIfNotFound("east_p2")
+		sgroupWest = SGroup_CreateIfNotFound("west_p2")
+		sgroupEastBlueprint = BP_GetSquadBlueprint(sbp_east_enemy)
+		sgroupWestBlueprint = BP_GetSquadBlueprint(sbp_west_enemy)
+		position_phase = 0
+		test_success = false
+		-- focus camera on startup
+		Camera_FocusOnPosition(Util_ScarPos(0, 0))
+	end
+	
+	local function Update()
+		if (position_phase == 0) then
+			-- test has initialized, spawn the building
+			Util_CreateEntities(
+				World_GetPlayerAt(1),
+				egroupBuilding,
+				egroupBlueprint,
+				Util_ScarPos(0, 0),
+				1)
+			-- Check if building exists
+			if (EGroup_ContainsBlueprints(egroupBuilding, egroupBlueprint, true) == true) then
+				standard_test.print("Phase 0: Building was spawned successfully.")
+				position_phase = 1
+			end	
+		elseif (position_phase == 1) then
+			-- spawn garrison squad
+			Util_CreateSquads(
+				World_GetPlayerAt(1),
+				sgroupGarrison,
+				sgroupGarrisonBlueprint,
+				Util_ScarPos(-10, 0))
+			-- check if squad exists in sgroup
+			if (SGroup_ContainsBlueprints("group_garrison", sgroupGarrisonBlueprint, true) == true) then
+				standard_test.print("Phase 1: An SGroup containing the garrison squad exists.")
+				position_phase = 2
+			end			
+		elseif (position_phase == 2) then
+			-- garrison the squad
+			standard_test.print("Phase 2: Commanding Garrison Squad to Garrison.")
+			Cmd_Garrison(sgroupGarrison, egroupBuilding, true)
+			position_phase = 3
+		elseif (position_phase == 3) then
+			-- check if squad was garrisoned
+			if (SGroup_IsInHoldEntity(sgroupGarrison, ALL) == true) then
+				standard_test.print("Phase 3: Garrison Squad is garrisoned in a structure.")
+				position_phase = 4
+			end				
+		elseif (position_phase == 4) then
+			-- spawn the eastern squad
+			Util_CreateSquads(
+				World_GetPlayerAt(2),
+				sgroupEast,
+				BP_GetSquadBlueprint(sbp_east_enemy),
+				Util_ScarPos(0, -20))
+			standard_test.print("Phase 4: Spawning the Eastern Squad.")
+			position_phase = 5
+		elseif (position_phase == 5) then
+			-- check if eastern squad exists in sgroup
+			if (SGroup_ContainsBlueprints("east_p2", sgroupEastBlueprint, true) == true) then
+				standard_test.print("Phase 5: Eastern Squad exists in an SGroup.")
+				position_phase = 6
+			end
+		elseif (position_phase == 6) then
+			-- check if eastern squad is attacked
+			if (Squad_IsUnderAttack(SGroup_GetSquadAt(sgroupEast, 1), 5) == true) then
+				SGroup_DeSpawn(sgroupEast)
+				standard_test.print("Phase 6: Eastern Squad was attacked successfully.")
+				position_phase = 7
+			end
+		elseif (position_phase == 7) then
+			-- spawn the western squad
+			Util_CreateSquads(
+				World_GetPlayerAt(2),
+				sgroupWest,
+				BP_GetSquadBlueprint(sbp_west_enemy),
+				Util_ScarPos(0, 20))
+			standard_test.print("Phase 7: Spawning the Western Squad.")
+			position_phase = 8
+		elseif (position_phase == 8) then
+			-- check if western squad exists in sgroup
+			if (SGroup_ContainsBlueprints("west_p2", sgroupWestBlueprint, true) == true) then
+				standard_test.print("Phase 8: Western Squad exists in an SGroup")
+				position_phase = 9
+			end
+		elseif (position_phase == 9) then
+			-- check if western squad is attacked
+			if (Squad_IsUnderAttack(SGroup_GetSquadAt(sgroupWest, 1), 5) == true) then
+				SGroup_DeSpawn(sgroupWest)
+				standard_test.print("Phase 9: Western Squad was attacked successfully.")
+				position_phase = 10
+				return false
+			end
+			
+		end
+		return true
+	end
+		
+	local function Finish()
+		if (position_phase == 0) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase .. 
+				": Setup completed, but the garrison structure failed to spawn or was destroyed.")
+		elseif (position_phase == 1) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Garrison Squad does not exist in an sgroup. Squad was either not spawned, or was destroyed unexpectedly.")
+		elseif (position_phase == 2) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Garrison Squad did not garrison inside the structure.")
+		elseif (position_phase == 3) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Garrison Squad did not garrison inside the structure.")
+		elseif (position_phase == 4) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Eastern Squad was not spawned successfully.")
+		elseif (position_phase == 5) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Eastern Squad does not exist in an sgroup. Squad was either not spawned, or was destroyed unexpectedly.")
+		elseif (position_phase == 6) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Eastern Squad was not attacked by the Garrison Squad.")
+		elseif (position_phase == 7) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Eastern Squad was not spawned successfully.")
+		elseif (position_phase == 8) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Western Squad does not exist in an sgroup. Squad was either not spawned, or was destroyed unexpectedly.")
+		elseif (position_phase == 9) then
+			standard_test.printFail("Test failed on phase " ..
+				position_phase ..
+				" : The Western Squad was not attacked by the Garrison Squad.")
+		elseif (position_phase == 10) then
+			standard_test.print("Test succeeded! All criteria were met.")
+			test_success = true
+		end
+		TestUtil_DestroyAllSquadsAndEntities()
+		return test_success
+	end
+		
+	TestUtil_RegisterTest(
+		t_test_group,
+		test_name,
+		test_description,
+		Start,
+		Update,
+		Finish,
+		timeout_seconds)
+end

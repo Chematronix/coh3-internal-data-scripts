@@ -1,0 +1,8 @@
+import("campaign.scar")
+
+function InitializeAIPersonality()
+	
+end
+
+InitializeCampaignAI()
+InitializeAIPersonality()

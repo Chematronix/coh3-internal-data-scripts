@@ -1,0 +1,42 @@
+import("partialsave.scar")
+import("metamap/metamap_save_migration_helpers.scar")
+import("metamap/metamap_save_migrations.scar")
+
+function PartialSave_PerformScarDataMigrations()
+    local goalVersion = g_PartialSaveVersion
+ 
+    if PartialSaveTable.version > goalVersion then
+        error("File being loaded is a newer than the maximum version supported.")
+    end
+ 
+    while PartialSaveTable.version < goalVersion do
+        PartialSave_PerformScarDataMigration()
+    end
+	
+	MigrateSave_ApplyBlueprintMigrationTableToSaveData(PartialSaveTable, BP_GetBlueprintMigrationVersion())
+end
+
+function PartialSave_PerformScarDataMigration()
+    local versionFrom = PartialSaveTable.version
+    local versionTo = versionFrom + 1
+    local migrationFunc = __PartialSave_MigrationFunctions[versionTo]
+ 
+    migrationFunc()
+ 
+    -- Update the version recorded in the PartialSaveTable so we can refer back to it as we go.
+    PartialSaveTable.version = versionTo
+end
+
+function PartialSave_PerformDataStoreMigrations()
+	-- Ideally, this would use a per-version migration function map here like we do for the above,
+	-- but we're kicking that can down the road, so for now we just do blueprint migrations.
+	MigrateSave_ApplyBlueprintMigrationTableToDataStore(BP_GetBlueprintMigrationVersion())
+	
+	-- Some extra future proofing so we have viable version numbers to work with when we need this.
+	local campaign = Game_RetrieveTableData("campaign", false)
+	campaign.campaignSystemVersion = g_PartialSaveVersion
+	Game_StoreTableData("campaign", campaign)
+end
+
+PartialSave_AddMigrateFunction(PartialSave_PerformScarDataMigrations)
+PartialSave_AddMigrateFunction(PartialSave_PerformDataStoreMigrations)

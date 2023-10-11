@@ -1,0 +1,5 @@
+import( 'anvil_objects.scar' )
+
+function InitializeAIWorld()
+	print("InitializeAIWorld (Anvil)")
+end

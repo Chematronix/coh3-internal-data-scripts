@@ -1,0 +1,81 @@
+-------------------------------------------------------------------------
+-- Partial Save Script
+-- 
+-- Relic Entertainment 2022
+--
+-- This script handles generating a 'partial' save table through client-specified
+-- save callbacks and restoring the scar lua state during OnGameRestore through
+-- client-specified restore callbacks.
+--
+-- Partial save clients (those importing partialsave.scar and adding save/restore
+-- steps) can specify a global partial save version by setting g_PartialSaveVersion.
+-- This should be set once.
+-------------------------------------------------------------------------
+
+g_PartialSaveVersion = 0
+
+__PartialSave_SaveFunctions = {}
+__PartialSave_RestoreFunctions = {}
+__PartialSave_MigrateFunctions = {}
+
+--? @shortdesc Adds the specified function as a step that will be called during save.
+--? @extdesc The function will be passed the save table to edit as the first argument.
+function PartialSave_AddSaveFunction(func)
+	__PartialSave_SaveFunctions[#__PartialSave_SaveFunctions + 1] = func
+end
+
+--? @shortdesc Adds the specified function as a step that will be called during restore.
+--? @extdesc The function will be passed the save table to read from as the first argument.
+function PartialSave_AddRestoreFunction(func)
+	__PartialSave_RestoreFunctions[#__PartialSave_RestoreFunctions + 1] = func
+end
+
+function PartialSave_AddMigrateFunction(func)
+	__PartialSave_MigrateFunctions[#__PartialSave_MigrateFunctions + 1] = func 
+end
+
+--? @shortdesc Determines whether or not this game should be using the partial SCAR save/load flow
+function PartialSave_ShouldPerformPartialSave()
+	return World_IsCampaignMetamapGame() and PartialSaveTable ~= nil
+end
+
+-- Called as the first step in core's OnGameRestore
+function PartialSave_RestoreFromSaveTable()
+	local saveTable = PartialSaveTable
+	
+	if saveTable == nil then
+		return
+	end
+	
+	local migrateFunctionCount = #__PartialSave_MigrateFunctions
+	for i=1,migrateFunctionCount do
+		__PartialSave_MigrateFunctions[i](saveTable)
+	end
+	
+	local restoreFunctionCount = #__PartialSave_RestoreFunctions
+	for i=1, restoreFunctionCount do
+		local restoreFunction = __PartialSave_RestoreFunctions[i]
+		restoreFunction(saveTable)
+	end
+	
+	saveTable = nil
+end
+
+-- Called by the engine during the save process
+function PartialSave_GenerateSaveTable()
+	
+	local saveTable = {}
+	
+	-- This should be set once by client scripts using this partialsave
+	-- framework (e.g. the script that imports this one).
+	saveTable.version = g_PartialSaveVersion or 1
+	saveTable.blueprintMigrationVersion = BP_GetBlueprintMigrationVersion()
+	
+	local saveFunctionCount = #__PartialSave_SaveFunctions
+	for i=1, saveFunctionCount do
+		local saveFunction = __PartialSave_SaveFunctions[i]
+		saveFunction(saveTable)
+	end
+	
+	PartialSaveTable = saveTable
+end

@@ -1,0 +1,62 @@
+--
+-- "Pre-roll Destruction"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+
+--? @group scardoc;Prefabs
+
+
+function prerolldestruction_Init(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+end
+
+function prerolldestruction_Trigger(data)
+	local instance = Prefab_GetInstance(data)
+	
+	local playerID = 0 -- Spawn as neutral
+	for key,value in pairs(instance.bombing_locations) do
+		local markerPos = Marker_GetPosition(value.position)
+		local weapon = instance.weapon
+		if value.weapon ~= nil then
+			weapon = value.weapon
+		end
+		
+		if weapon ~= nil then
+			Entity_SpawnLiveMunition(weapon, playerID, markerPos, markerPos)
+		end
+	end
+end
+
+-- Specifies whether this prefab should be loaded or not.
+function prerolldestruction_Condition(data)
+	local instance = Prefab_GetInstance(data)
+	
+	local prefabTags = instance.layer_set_tags
+	local tagLookup = { }
+	for tag in string.gmatch(prefabTags, "%w+") do
+		tagLookup[tag] = true
+	end
+	
+	local activate = false
+	if next(tagLookup) == nil then
+		-- No tags means we always activate
+		return true
+	else
+		-- Otherwise we only activate if there's a matching layer tag
+		local layerTags = Game_GetActiveLayerTags()
+		for i, tag in ipairs(layerTags) do
+			if tagLookup[tag] == true then
+				return true
+			end
+		end
+	end
+	
+	return false
+end

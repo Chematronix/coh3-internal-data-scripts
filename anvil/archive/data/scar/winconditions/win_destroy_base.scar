@@ -1,0 +1,207 @@
+-----------------------------------------------------------------------
+-- The classic 'Annihilation' win condition (i.e. destroy all enemy base buildings)
+--
+-- (c) Relic Entertainment 2020
+--
+-- A player is eliminated when all of their production buildings are destroyed 
+-- or reduced to zero health. A team is eliminated when all players on the team 
+-- are eliminated. The win condition is triggered when all teams but one have 
+-- been eliminated.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("DestroyBase")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by core.scar after opening cinematics and events are complete.
+function DestroyBase_Start()
+	DestroyBase_OnRelationshipChanged()
+
+	-- Verify at least one team with at least one building on match start
+	local remaining_teams = DestroyBase_GetRemainingTeams()
+	if #remaining_teams < 2 then
+		print("Insufficient teams or production buildings")
+		_destroy_base = nil
+		Core_UnregisterModule("DestroyBase")
+		return
+	end
+
+	-- GE_EntityKilled is not triggered when an HQ is destroyed since it is not technically killed.
+	-- Hence the need to periodically poll for production buildings in order to detect eliminated players.
+	Rule_AddInterval(DestroyBase_CheckWinCondition, 3)
+	
+	Rule_AddGlobalEvent(DestroyBase_OnConstructionComplete, GE_ConstructionComplete)
+end
+
+
+-- Callback (that should be) invoked when a player relationship changes
+function DestroyBase_OnRelationshipChanged(observer, target)
+	local _GetTeam = function(player)
+		local player_index = World_GetPlayerIndex(player)
+		for _, team in pairs(_destroy_base.teams) do
+			for _, index in pairs(team.players) do
+				if index == player_index 
+					or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == R_ALLY then
+					return team
+				end
+			end
+		end
+		local team = {
+			players = {},
+		}
+		table.insert(_destroy_base.teams, team)
+		return team
+	end
+
+	_destroy_base = _destroy_base or  {}
+	_destroy_base.teams = {}
+	for i = 1, World_GetPlayerCount() do
+		local team = _GetTeam(World_GetPlayerAt(i))
+		table.insert(team.players, i)
+	end
+	
+	-- Link music level to health of base buildings
+	Audio_TrackHealth(DestroyBase_GetProductionBuildingsByTeam(), ALL)
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function DestroyBase_OnWinConditionTriggered(match_result)
+	if Rule_Exists(DestroyBase_CheckWinCondition) then
+		Rule_Remove(DestroyBase_CheckWinCondition)
+	end
+	if Rule_Exists(DestroyBase_OnConstructionComplete) then
+		Rule_RemoveGlobalEvent(DestroyBase_OnConstructionComplete)
+	end
+end
+
+
+-- Global event callback for GE_ConstructionComplete.
+-- Updates lists of base buildings used for music tempo changes.
+function DestroyBase_OnConstructionComplete(context, data)
+	if context.player and Entity_IsSpawner(context.entity) then
+		-- Add to player's building list
+		local buildings = DestroyBase_GetProductionBuildingsForPlayer(World_GetPlayerIndex(context.player))
+		table.insert(buildings, Entity_GetID(context.entity))
+		-- Add to team's building list
+		for _, team in pairs(_destroy_base.teams) do
+			for _, player_index in pairs(team.players) do
+				if player_index == World_GetPlayerIndex(context.player) 
+					or Player_ObserveRelationship(context.player, World_GetPlayerAt(player_index)) == R_ALLY then
+					table.insert(team.buildings, Entity_GetID(context.entity))
+					return
+				end
+			end
+		end
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+function DestroyBase_GetProductionBuildingsByTeam()
+	local buildings_by_team = {}
+	for _, team in pairs(_destroy_base.teams) do
+		team.buildings = {}
+		for _, player_index in pairs(team.players) do
+			for _, building_id in pairs(DestroyBase_GetProductionBuildingsForPlayer(player_index)) do
+				table.insert(team.buildings, building_id)
+			end
+		end
+		table.insert(buildings_by_team, team.buildings)
+	end
+	return buildings_by_team
+end
+
+
+function DestroyBase_GetProductionBuildingsForPlayer(player_index)
+	_destroy_base.player_buildings = _destroy_base.player_buildings or {}
+	_destroy_base.player_buildings[player_index] = _destroy_base.player_buildings[player_index] or {}
+	if #_destroy_base.player_buildings[player_index] == 0 then
+		local player = World_GetPlayerAt(player_index)
+		if Player_IsAlive(player) then
+			local eg = Player_GetEntities(player)
+			for i = 1, EGroup_CountSpawned(eg) do
+				local entity = EGroup_GetSpawnedEntityAt(eg, i)
+				if Entity_IsSpawner(entity) then
+					table.insert(_destroy_base.player_buildings[player_index], Entity_GetID(entity))
+				end
+			end
+			EGroup_Destroy(eg)
+		end
+	end
+	return _destroy_base.player_buildings[player_index]
+end
+
+
+function DestroyBase_GetRemainingTeams()
+	-- Returns true if player has no entities that can produce units
+	local _IsPlayerEliminated = function(player)
+		if Player_IsAlive(player) then
+			local eg = Player_GetEntities(player)
+			for i = 1, EGroup_CountSpawned(eg) do
+				local entity = EGroup_GetSpawnedEntityAt(eg, i)
+				if Entity_GetHealth(entity) > 0 and Entity_IsSpawner(entity) and Entity_GetBuildingProgress(entity) == 1 then
+					--print("_IsPlayerEliminated("..Loc_ToAnsi(Player_GetDisplayName(player))..") = false => "..BP_GetName(Entity_GetBlueprint(entity)).. " remains")
+					return false
+				end
+			end
+			EGroup_Destroy(eg)
+		end
+		return true
+	end
+
+	-- Add teams with at least one remaining player to a table of remaining teams
+	local remaining_teams = {}
+	for _, team in pairs(_destroy_base.teams) do
+		for _, player_index in pairs(team.players) do
+			if not _IsPlayerEliminated(World_GetPlayerAt(player_index)) then
+				table.insert(remaining_teams, team)
+				break
+			end
+		end
+	end
+	return remaining_teams
+end
+
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+-- Rule that checks whether any team has lost all of its production buildings
+function DestroyBase_CheckWinCondition()
+
+	-- Trigger win condition when only one team remains
+	local remaining_teams = DestroyBase_GetRemainingTeams()
+	if #remaining_teams == 1 then
+		Rule_RemoveMe()
+		local winning_team = remaining_teams[1]
+		local match_result = {
+			winners = {},
+			losers = {},
+			win_reason = WR_ANNIHILATE,
+			point_of_interest = poi,
+		}
+		for i = 1, World_GetPlayerCount() do
+			if Table_Contains(winning_team.players, i) then
+				table.insert(match_result.winners, i)
+			else
+				table.insert(match_result.losers, i)
+			end
+		end
+		Core_CallDelegateFunctions("OnWinConditionTriggered", match_result)
+	end
+end
+

@@ -1,0 +1,212 @@
+--
+-- "Destroy Mission Type"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("anvil.scar")
+import("missionomatic/missionomatic.scar")
+import("objectiveutil.scar")
+
+--? @group scardoc;Prefabs
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function missionobjectives_Init(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+	
+end
+
+-- Called only when this mission is being used
+function missionobjectives_Initialize(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	local objectives = {}
+	local objectiveNumber = 1
+	local previous_obj_key = nil
+	-- Register Objectives
+	for k, v in ipairs(instance.objectives) do
+		
+		--Registers prefab unique name
+		v.instanceName = instance.instanceName
+		
+		local obj = objectiveutil_ObjectiveInit(v)
+		
+		--Adds objective data to a list of objectives for this mission
+		table.insert(objectives, obj)
+		
+		-- setup objective path tracing for debug
+		if previous_obj_key ~= nil then
+			obj.previous_obj_key = previous_obj_key
+			obj.parent_playbill = instance
+		end
+		previous_obj_key = k
+	end
+	
+	instance.thisObjective = objectives
+	
+	return objectives
+	
+end
+
+function missionobjectives_PresetComplete(data)
+	
+	local instance = Prefab_GetInstance(data)
+	local playbills = instance.initialize
+	
+	for i = #playbills, 1, -1 do
+		
+		if playbills[i].check_entry_point == true then
+			
+			assert(g_entryPointID ~= nil, "The global entry point ID (g_entryPointID) is not set")
+			
+			if playbills[i].entry_point ~= g_entryPointID then
+				
+				table.remove(playbills, i)
+				
+			end
+			
+		end
+		
+	end
+	
+	-- play any Initialization playbills
+	MissionOMatic_TriggerObjectiveStageCallbackData(playbills)
+end
+
+function missionobjectives_Start(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	-- TODO - MULTI OBJECTIVE SYSTEM
+	--[[MissionOMatic_TriggerStartingObjectives()]]
+	
+end
+
+
+--? @args Table/String instance
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function missionobjectives_Trigger(data)
+	
+	MissionOMatic_SetupMission(data)
+	
+end
+
+
+
+-- Stop the encounter associated with this instance and destroys any spawned squads the player can't see
+function missionobjectives_Stop(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	error("Not Supported!")
+	
+end 
+
+
+-----------------
+-- ARTILLERY --
+-----------------
+
+--function missionobjectives_Artillery_Start()
+	
+	----GAMEPLAY IDEAS
+	---- patrols that spot?
+	---- artillery lock down specific area (which area do you want to relieve first?)
+	
+	--local currentObjective = MissionOMatic_GetCurrentPrimaryObjective()
+	--local targets = currentObjective.variantData.targetGroups
+	
+	--for i=1, SGroup_Count(targets) do
+		--local data = {}
+		--data.playertarget = SGroup_CreateUnique("")
+		--data.enemy = SGroup_CreateUnique("")
+		--SGroup_Add(data.enemy, SGroup_GetSpawnedSquadAt(targets, i))
+		--data.ability = ABILITY.GERMAN.BARRAGE_LE_FH18_105MM_MP_GER
+		----missionobjectives_Artillery_Fire(data)
+		--Rule_AddInterval(missionobjectives_Artillery_Fire, 3, data)
+		----Rule_AddInterval(missionobjectives_Artillery_Fire, 3, data)
+	--end
+	
+	--MissionOMatic_UICalloutsPreset(currentObjective)
+	
+--end
+
+--function missionobjectives_Artillery_Fire(context, data)
+	
+	--local enemy = data.enemy
+	--local playertarget = nil
+	--local ability = data.ability
+	
+	--if SGroup_IsAlive(enemy) then
+	
+		--playertarget = missionobjectives_Artillery_GetTarget(data)
+		
+		--if playertarget ~= nil and Player_CanSeeSGroup(player2, playertarget, ANY) then --SGroup_CanCastAbilityOnPosition(enemy, ability, Util_GetPosition(playertarget), ANY)  and
+			--Cmd_Ability(enemy, ability, playertarget)
+			----Cmd_Attack(enemy, playertarget)
+			
+			--missionobjectives_Artillery_Cooldown(data)
+			--Rule_RemoveMe()
+		--end
+	--else
+		--missionobjectives_Artillery_Stop(data)
+		--Rule_RemoveMe()
+	--end
+	
+--end
+
+--function missionobjectives_Artillery_Cooldown(data)
+	
+	--local enemy = data.enemy
+	--local playertarget = data.playertarget
+	--local ability = data.ability
+	
+	--Rule_AddInterval(missionobjectives_Artillery_Fire, 30, data)
+	
+--end
+
+--function missionobjectives_Artillery_Stop(data)
+	----Finished
+--end
+
+
+
+--function missionobjectives_Artillery_GetTarget(data)
+	
+	--local enemy = data.enemy
+	--local playersquads = data.playertarget
+	
+	--Player_GetAllSquadsNearMarker(player1, playersquads, SGroup_GetPosition(enemy), 30)
+	--if Player_CanSeeSGroup(player2, playersquads, ANY) and SGroup_Count(playersquads) > 0 then
+		--return playersquads
+	--end
+	
+	--Player_GetAllSquadsNearMarker(player1, playersquads, Util_GetPosition(enemy), 100)
+	--if Player_CanSeeSGroup(player2, playersquads, ANY) and SGroup_Count(playersquads) > 0 then
+		--return playersquads
+	--end
+	
+	--Player_GetAllSquadsNearMarker(player1, playersquads, Util_GetPosition(enemy), 150)
+	--if Player_CanSeeSGroup(player2, playersquads, ANY) and SGroup_Count(playersquads) > 0 then
+		--return playersquads
+	--end
+	
+	--Player_GetAllSquadsNearMarker(player1, playersquads, Util_GetPosition(enemy), 220)
+	--if Player_CanSeeSGroup(player2, playersquads, ANY) and SGroup_Count(playersquads) > 0 then
+		--return playersquads
+	--end
+	
+	--return nil
+	----testest = AIPlayer_GetBestClumpForPositionIdx(AIPlayer_GetLocalFromPlayer(player2), Marker_GetPosition(mkr_testtest), ABILITY.GERMAN.BARRAGE_LE_FH18_105MM_MP_GER, 0, 100, 0, 1)
+	
+--end
+

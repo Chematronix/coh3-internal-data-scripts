@@ -1,0 +1,280 @@
+-----------------------------------------------------------------------
+--
+--  Officer Unlock
+--
+-- (c) Relic Entertainment 2021
+--
+-----------------------------------------------------------------------
+
+import("metamap/metamap_library.scar")
+
+local officer_candidates = nil
+local officer_choice = nil
+local recipient_squad = nil
+
+function OfficerUnlock_OfficerSelection(context, data)
+	if Event_IsAnyRunning() then
+		return
+	end
+	
+	recipient_squad = data.squad
+	officer_candidates = Squad_GetOfficerCandidates(recipient_squad, 1)
+	
+	if officer_candidates[1] == nil then
+		UI_CreateSquadKickerMessage(data.player, recipient_squad, "Debug: There are not enough remaining officers to award one to the recipient")
+		Rule_RemoveMe()
+		return
+	end
+	
+	local function Get_SanitizedString(str)
+		local word = "%g"
+		local reservedCharacters = 
+		{
+			["%"] = "%%",
+			["\\"] = "/"
+		}
+		
+		local result = str:gsub(word, reservedCharacters)
+		return result
+	end
+	
+	local officer_info = { 
+		name = Loc_ToAnsi(officer_candidates[1].name), 
+		trait_name = Loc_ToAnsi(officer_candidates[1].trait_name), 
+		trait_description = Get_SanitizedString(Loc_ToAnsi(officer_candidates[1].trait_description)),
+		flaw_name = Loc_ToAnsi(officer_candidates[1].flaw_name),
+		flaw_description = Get_SanitizedString(Loc_ToAnsi(officer_candidates[1].flaw_description)),
+		portraitIcon = string.format("pack://application:,,,/WPFGUI;component/%s.png", Get_SanitizedString(officer_candidates[1].portrait))
+		}
+	
+	local ui_info = BP_GetSquadUIInfo(Squad_GetBlueprint(recipient_squad), Player_GetRace(Game_GetLocalPlayer()))
+	
+	local squad_info = {
+		health = Util_GetHealthPercentage(recipient_squad),
+		rank = Squad_GetVeterancyRank(recipient_squad),
+		name = Loc_ToAnsi(ui_info.screenName), 
+		icon = string.format("pack://application:,,,/WPFGUI;component/%s.png", Get_SanitizedString(ui_info.iconName)),
+		symbolIcon = string.format("pack://application:,,,/WPFGUI;component/%s.png", Get_SanitizedString(ui_info.symbolIconName)),
+		portraitIcon = string.format("pack://application:,,,/WPFGUI;component/%s.png", Get_SanitizedString(ui_info.portraitIconName))
+		}
+	
+	-- local squad_name = Loc_ToAnsi(recipient_squad.name)
+
+	-- TODO make xaml pretty: can access following from officer candidate:
+	-- name: locstring
+	-- description: locstring
+	-- specialization: locstring
+	-- rating: uint32_t
+	-- trait_name: locstring
+	-- trait_description: locstring
+	-- flaw_name: locstring
+	-- flaw_description: locstring
+	
+	--localXamlTest = XAML_LoadXaml("pack://application:,,,/UnitTests/Texttest.xaml")
+
+	local xaml =
+	string.format([[<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+	              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" xmlns:esCommands="clr-namespace:WPFGUI.Shared.Commands;assembly=EngineUI"
+	              xmlns:esEffects="clr-namespace:WPFGUI.Shared.Effects;assembly=EngineUI" xmlns:feModels="clr-namespace:FrontEndModelsTypes"
+	              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="clr-namespace:WPFGUI"
+				  xmlns:esUtility="clr-namespace:WPFGUI.Shared.Utility;assembly=EngineUI" xmlns:wm="clr-namespace:WPFGUI.Shared.MarkupExtensions;assembly=EngineUI">
+					<Page.Resources>
+						<ResourceDictionary>
+					        <ResourceDictionary.MergedDictionaries>
+					            <ResourceDictionary Source="pack://application:,/WPFGUI;component/Resources/HUDResources.xaml" />
+					            <ResourceDictionary Source="pack://application:,/WPFGUI;component/Resources/ButtonResources.xaml" />
+					        </ResourceDictionary.MergedDictionaries>
+					    </ResourceDictionary>
+					</Page.Resources>
+					<ContentControl Width="1150"
+									Height="820"
+				          			Margin="{StaticResource MainModalPageMargin}"
+			                        HorizontalAlignment="Center" VerticalAlignment="Center"
+			                        Template="{StaticResource LargeDynamicPanelStyle}">
+				
+				        <Grid Margin="{StaticResources MainModalContentMargin}" VerticalAlignment="Stretch" >
+				            <Grid.RowDefinitions>
+				                <RowDefinition Height="Auto" />
+				                <RowDefinition Height="Auto" />
+								<RowDefinition Height="*" />
+				            </Grid.RowDefinitions>
+						
+							<!--  Title  -->
+				            <TextBlock Grid.Row="0"
+				                       Margin="45,30,0,0"
+				                       Style="{StaticResource ModalTitleTextStyle}"
+				                       Text="{esUtility:LocString $11223582}" />
+				
+				            <!--  Officer Selection General Description  -->
+				            <TextBlock Grid.Row="1"
+				                       Margin="45,0,0,0"
+				                       Style="{StaticResource ModalSubTitleTextStyle}"
+				                       Text="{esUtility:LocString $11223583}"
+				                       TextWrapping="Wrap" />
+						
+							<Grid Grid.Row="2" VerticalAlignment="Stretch" Margin="45,15,45,35" Background="#323232">
+								<Grid.RowDefinitions>
+				                    <RowDefinition Height="Auto" />
+				                    <RowDefinition Height="*" />
+				                </Grid.RowDefinitions>
+				
+				                <Grid.ColumnDefinitions>
+				                    <ColumnDefinition Width="1*" />
+				                    <ColumnDefinition Width="1*" />
+				                </Grid.ColumnDefinitions>
+							
+								<!--  Company Information  -->
+				                <Grid Grid.Row="0" Grid.Column="0"
+				                      Margin="55,0,40,0" VerticalAlignment="Top">
+				                    <Grid.RowDefinitions>
+										<RowDefinition Height="Auto" />
+										<RowDefinition Height="Auto" />
+				                    </Grid.RowDefinitions>
+										
+									<Grid Grid.Row="0" Height="244" Width="356" HorizontalAlignment="Left" Margin="{StaticResource SmallMarginBottom}">
+										<!--  Background Image	-->
+										<Image VerticalAlignment="Bottom" Height="204" Width="356" Source="pack://application:,,,/WPFGUI;component/icons/campaign/hud/officer_portrait_background.png" Stretch="Fill" />
+								        
+										<!--  Portrait Image  -->
+										<Image Source="]] .. squad_info.portraitIcon .. [[" Stretch="Uniform"/>
+										
+										<!--  Decorator and Veterancy	-->
+										<Grid VerticalAlignment="Bottom" Height="204" Width="356" HorizontalAlignment="Left">
+											<Grid Margin="0,6,6,0" HorizontalAlignment="Right" VerticalAlignment="Top">
+												<!--  Shield  -->
+												<Image Width="{StaticResource DecoratorShieldWidth}"
+												       Height="{StaticResource DecoratorShieldHeight}"
+												       Source="{StaticResource SquadDecoratorShield}"
+												       Stretch="Uniform">
+												</Image>										
+												
+												<!--  Health Bar  -->
+												<Grid Width="34" Height="12" Margin="0,2,0,0"
+					                                  HorizontalAlignment="Center" VerticalAlignment="Top">		
+			                                        <ProgressBar Width="34" Height="10"
+			                                                 Margin="0,2,0,0" HorizontalAlignment="Stretch"
+			                                                 VerticalAlignment="Stretch" Minimum="0" Maximum="1"
+			                                                 Value="]] .. squad_info.health .. [[">
+			                                            <ProgressBar.Template>
+			                                                <ControlTemplate TargetType="ProgressBar">
+			                                                    <Grid x:Name="TemplateRoot">
+			                                                        <Grid>
+		                                                                <Rectangle x:Name="PART_Track" Fill="Transparent" />
+		                                                                <Grid x:Name="PART_Indicator" HorizontalAlignment="Left">
+							                                                <Rectangle Opacity="1" Fill="{StaticResource AlliedHealthBarBGBrush}" />
+							                                                <Border x:Name="PART_Indicator"
+													                                HorizontalAlignment="Left"
+													                                Background="{StaticResource HUDSquadPortraitProgressBarFillBrush}"
+													                                CornerRadius="0" />
+													                        <Border Background="{StaticResource HUDSquadPortraitProgressBarHighlightBrush}"
+													                                BorderBrush="{StaticResource HUDProgressBarBorderBrush}"
+													                                BorderThickness="1" CornerRadius="0" />
+							                                            </Grid>
+			                                                        </Grid>
+			                                                    </Grid>
+			                                                </ControlTemplate>
+			                                            </ProgressBar.Template>
+			                                        </ProgressBar>
+			                                    </Grid>
+			                                    
+			                                    <!--  Shield Selected  -->
+												<Image x:Name="ShieldSelected"
+												       Width="{StaticResource DecoratorShieldWidth}"
+												       Height="{StaticResource DecoratorShieldHeight}"
+												       Source="{StaticResource SquadDecoratorActive}"
+												       Stretch="Uniform">
+												</Image>
+												
+												<!--  Unit Icon  -->
+												<Image x:Name="UnitIcon"
+												       Width="26" Height="26"
+												       Margin="0,6,0,0" HorizontalAlignment="Center"
+												       VerticalAlignment="Center"
+												       Source="]] .. squad_info.symbolIcon .. [["
+												       Stretch="Uniform">
+												</Image>                       
+					                        </Grid>
+					                       
+					                        <StackPanel Margin="4" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+					                                    Orientation="Horizontal">
+					                        	<Image Width="32" Height="32" Style="{StaticResource ModalVeterancyStar}" />
+					                        	<Image Width="32" Height="32" Style="{StaticResource ModalVeterancyStar}" />
+					                        	<Image Width="32" Height="32" Style="{StaticResource ModalVeterancyStar}" />
+					                        </StackPanel>
+										</Grid>
+									</Grid>
+									
+				                    <TextBlock Grid.Row="1"
+				                               Margin="6,0,20,20"
+				                               Style="{StaticResource ModalHeaderTextStyle}"
+				                               Text="]] .. squad_info.name .. [[" />
+				                </Grid>
+				
+				                <!--  Officer Information  -->
+				                <Border Grid.Row="0" Grid.Column="1"
+				                      Margin="40,40,55,0" HorizontalAlignment="Right"
+				                      VerticalAlignment="Top">
+				                    <Grid>
+				                        <Grid.RowDefinitions>
+				                            <RowDefinition Height="Auto" />
+				                            <RowDefinition Height="Auto" />
+				                        </Grid.RowDefinitions>
+				                        <Border Grid.Row="0" Background="{StaticResource BlackOpacity75Brush}"
+				                                Height="204" Width="356"
+				                                Margin="{StaticResource SmallMarginBottom}"
+				                                HorizontalAlignment="Left" VerticalAlignment="Top">
+				                                <Grid>
+				                                	<!--  Background Image	-->
+				                                	<Image HorizontalAlignment="Center" Source="pack://application:,,,/WPFGUI;component/icons/campaign/hud/officer_portrait_background.png" Stretch="Fill"/>
+				                                	
+				                                	<!--  Portrait Image  -->
+				                                	<Image HorizontalAlignment="Center" Source="]] .. officer_info.portraitIcon .. [[" Stretch="Uniform"/>
+				                                </Grid>
+				                        </Border>
+				                        <StackPanel Grid.Row="1"
+				                                    Margin="6,0,20,20"
+				                                    Orientation="Vertical">
+				                            <TextBlock Margin="{StaticResource SmallMarginBottom}"
+				                                       Style="{StaticResource ModalHeaderTextStyle}"
+				                                       Text="]] .. officer_info.name .. [[" />
+				                            <TextBlock Style="{StaticResource ModalSubTitleTextStyle}" Text="]] .. officer_info.trait_name .. [[" />
+				                            
+				                            <TextBlock MaxHeight="{wm:UserDIP 80}"
+				                                       Margin="{StaticResource SmallMarginBottom}"
+				                                       Style="{StaticResource ModalBodyTextStyle}"
+				                                       Text="]] .. officer_info.trait_description .. [[" />
+				                            <TextBlock Style="{StaticResource ModalSubTitleTextStyle}" Text="]] .. officer_info.flaw_name .. [[" />
+				                            <TextBlock MaxHeight="{wm:UserDIP 80}"
+				                                       Style="{StaticResource ModalBodyTextStyle}"
+				                                       Text="]] .. officer_info.flaw_description .. [[" />
+				                        </StackPanel>
+				                    </Grid>
+				                </Border>
+				
+				                <Button Grid.Row="1" Grid.Column="1" x:Name="AcceptButton"
+				                        Width="250"
+				                        Margin="20" HorizontalAlignment="Right"
+				                        VerticalAlignment="Bottom"
+				                        Content="Accept"
+				                        Style="{StaticResource PrimaryFrontendButton}" />
+							</Grid>	
+				        </Grid>
+			        </ContentControl>
+	    		</Page>
+	]], officer_info, 
+		squad_info)
+	
+	UI_AddChild("", "XamlPresenter", "OfficerUnlock", { Xaml = xaml })
+	UI_AddEventHandler("OfficerUnlock.AcceptButton", "Click", "officer_clicked")
+	Rule_RemoveMe()
+end
+
+function officer_clicked()
+	officer_choice = officer_candidates[1].id
+	officer_selection_confirmed()
+end
+
+function officer_selection_confirmed()
+	UI_Remove("OfficerUnlock")
+	Squad_AddOfficer(recipient_squad, officer_choice)
+end

@@ -1,0 +1,234 @@
+--
+-- Narrative Vignette Screen Data
+-- Generated from Articy project - Italy Campaign
+--
+-- Exported by RE\harrisp
+-- Monday, June 6, 2022 8:55:04 AM
+--
+-- Essence Toolkit v1.1.9 - 2 June 2022
+--
+
+g_narrative_vignette_screens = {
+    skvig_default_failure = 
+    {
+        enabled = true,
+
+        content = 
+        {
+            text = "skvig_default_failure",
+            position =
+            {
+                left = 1869,
+                top = 170,
+            },
+            size =
+            {
+                width = 559,
+                height = 840,
+            },
+            rotation = -11.4097315893806,
+        },
+
+        contentBackground = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/content_backgrounds/soldier_story_paper_letterhead1.png",
+            position =
+            {
+                left = 1810,
+                top = 124,
+            },
+            size =
+            {
+                width = 668,
+                height = 941,
+            },
+            rotation = -10.7602501616562,
+        },
+
+        background = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/backgrounds/soldier_story_background_dark_wood.png",
+            position =
+            {
+                left = 960,
+                top = 1,
+            },
+            size =
+            {
+                width = 1920,
+                height = 1078,
+            },
+            rotation = 0,
+        },
+
+    },
+
+    skvig_default_failure = 
+    {
+        enabled = true,
+
+        content = 
+        {
+            text = "skvig_default_failure",
+            position =
+            {
+                left = 909,
+                top = 170,
+            },
+            size =
+            {
+                width = 559,
+                height = 840,
+            },
+            rotation = -11.4097315893806,
+        },
+
+        contentBackground = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/content_backgrounds/soldier_story_paper_letterhead1.png",
+            position =
+            {
+                left = 850,
+                top = 124,
+            },
+            size =
+            {
+                width = 668,
+                height = 941,
+            },
+            rotation = -10.7602501616562,
+        },
+
+        background = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/backgrounds/soldier_story_background_dark_wood.png",
+            position =
+            {
+                left = 0,
+                top = 1,
+            },
+            size =
+            {
+                width = 1920,
+                height = 1078,
+            },
+            rotation = 0,
+        },
+
+    },
+
+    skvig_default_failure = 
+    {
+        enabled = true,
+
+        content = 
+        {
+            text = "skvig_default_failure",
+            position =
+            {
+                left = 909,
+                top = 170,
+            },
+            size =
+            {
+                width = 559,
+                height = 840,
+            },
+            rotation = -11.4097315893806,
+        },
+
+        contentBackground = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/content_backgrounds/soldier_story_paper_letterhead1.png",
+            position =
+            {
+                left = 850,
+                top = 124,
+            },
+            size =
+            {
+                width = 668,
+                height = 941,
+            },
+            rotation = -10.7602501616562,
+        },
+
+        background = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/backgrounds/soldier_story_background_dark_wood.png",
+            position =
+            {
+                left = 0,
+                top = 1,
+            },
+            size =
+            {
+                width = 1920,
+                height = 1078,
+            },
+            rotation = 0,
+        },
+
+    },
+
+    skvig_default_failure = 
+    {
+        enabled = true,
+
+        content = 
+        {
+            text = "skvig_default_failure",
+            position =
+            {
+                left = 909,
+                top = 170,
+            },
+            size =
+            {
+                width = 559,
+                height = 840,
+            },
+            rotation = -11.4097315893806,
+        },
+
+        contentBackground = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/content_backgrounds/soldier_story_paper_letterhead1.png",
+            position =
+            {
+                left = 850,
+                top = 124,
+            },
+            size =
+            {
+                width = 668,
+                height = 941,
+            },
+            rotation = -10.7602501616562,
+        },
+
+        background = 
+        {
+            filename = "pack://application:,,,/WPFGUI;component/Images/narrative/soldierstories/backgrounds/soldier_story_background_dark_wood.png",
+            position =
+            {
+                left = 0,
+                top = 1,
+            },
+            size =
+            {
+                width = 1920,
+                height = 1078,
+            },
+            rotation = 0,
+        },
+
+    },
+
+    msvig_pomigliano_goggles = 
+    {
+        enabled = true,
+
+    },
+
+}

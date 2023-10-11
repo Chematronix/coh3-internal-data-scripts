@@ -1,0 +1,56 @@
+-----------------------------------------------------------------------
+--
+--  mstest_utils
+--
+-- (c) Relic Entertainment 2023
+--
+-- Scar Utilities for C# autotests, can be called by SendConsoleCommand bifrost hook after
+-- importing this file.
+-----------------------------------------------------------------------
+
+function Test_LaunchMission(map_pool_name)
+	
+	local map_pool = BP_GetMapPoolBlueprint(map_pool_name)
+	
+	local localSGroup = SGroup_CreateIfNotFound("local_mission_squad")
+	local enemySGroup = SGroup_CreateIfNotFound("enemy_mission_squad")
+	
+	if SGroup_Count(localSGroup) < 1 then
+		Util_CreateSquads(
+			World_GetPlayerAt(1),
+			localSGroup,
+			BP_GetSquadBlueprint("company_armoured_us"),
+			World_Pos(0, World_GetHeightAt(0, 0), 0),
+			nil,
+			1)
+	end
+	
+	if SGroup_Count(enemySGroup) < 1 then
+		Util_CreateSquads(
+			World_GetPlayerAt(2),
+			enemySGroup,
+			BP_GetSquadBlueprint("company_armored_ger"),
+			World_Pos(10, World_GetHeightAt(0, 0), 0),
+			nil,
+			1)
+	end
+	
+	MetaMap_LaunchCustomMissionNoEntryPoint(SGroup_GetSquadAt(localSGroup, 1), SGroup_GetSquadAt(enemySGroup, 1), map_pool)
+
+end
+
+function Test_SelectBattleplan(choice)
+	__SelectionComplete(choice)
+end
+
+function Test_EndMission(win)
+	if win then
+		AnvilMissionWin()
+	else
+		AnvilMissionLose()
+	end
+end
+
+function Test_SelectNarrativeOption(choice)
+	QueueDynamicNarrativeSelection(choice)
+end

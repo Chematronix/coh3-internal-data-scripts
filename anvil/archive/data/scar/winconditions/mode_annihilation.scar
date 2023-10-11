@@ -1,0 +1,74 @@
+-----------------------------------------------------------------------
+-- Annihilation game mode
+--
+-- Classic casual game mode in which the last team with at least one base building standing wins.
+--
+-- (c) Relic Entertainment 2020
+--
+-----------------------------------------------------------------------
+
+import("scarutil.scar")
+import("game_modifiers.scar")
+import("core.scar")
+
+import("ui/ticket_ui.scar")
+import("ui/outcome_ui.scar")
+
+import("audio/audio.scar")
+
+import("ai/ai_match_observer.scar")
+import("winconditions/options.scar")
+
+import("winconditions/win_disconnect.scar")
+import("winconditions/win_destroy_base.scar")
+import("winconditions/win_surrender.scar")
+
+import("challenge/challenge_mp.scar")
+
+
+-----------------------------------------------------------------------
+-- Scripting framework (see  http://relicwiki/display/EE/Core+SCAR+Initialization+Framework)
+-----------------------------------------------------------------------
+
+Core_RegisterModule("AnnihilationMode")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function AnnihilationMode_OnInit()
+	print("Game mode: Annihilation")
+	
+	-- Remove any victory points
+	local eg = EGroup_CreateUnique()
+	local pos = {}
+	World_GetStrategyPoints(eg, true)
+	EGroup_ForEach(eg, function(egroup, index, entity)
+		if Entity_IsVictoryPoint(entity) then
+			table.insert(pos, Entity_GetPosition(entity))
+			Entity_Destroy(entity)
+		end
+	end)
+	EGroup_Destroy(eg)
+
+	-- Remove ghost image
+	for _, p in pairs(pos) do
+		FOW_RevealArea(p, 2.0, 1.0)	
+	end
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function AnnihilationMode_Start()
+	-- Show scripted UI elements
+	Core_CallDelegateFunctions("ShowUI", true)
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module and end the match.
+function AnnihilationMode_OnWinConditionTriggered(match_result)		
+	Core_CallDelegateFunctions("OnGameOver", match_result)
+end

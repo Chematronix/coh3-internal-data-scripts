@@ -1,0 +1,128 @@
+-----------------------------------------------------------------------
+-- Mission affectors for campaign skirmishes
+--
+-- (c) Relic Entertainment 2021
+-----------------------------------------------------------------------
+
+
+-- Spawns mission affector reinforcements from off-map
+function Affectors_SpawnReinforcements(player, start, destination, silent)
+	local affectors = Affectors_GetTable()
+	if affectors then
+		local _SpawnSquadsFromAbilities = function(abilities)
+			if abilities then
+				for squad, ability in pairs(abilities) do
+					if Player_HasAbility(player, BP_GetAbilityBlueprintByPbgID(ability.PropertyBagGroupID)) then
+						local squad_bp = BP_GetSquadBlueprint(squad)
+						local squads_available = BP_GetCompanyStartingSquadsTable(squad_bp)
+						local sbp = squads_available["default"]
+						if not start then
+							start = Player_GetStartingPosition(player)
+							if Player_HasMapEntryPosition(player) then
+								start = Player_GetMapEntryPosition(player)
+							end
+						end				
+						local facing = Util_GetDirectionFromAtoB(start, World_Pos(0,0,1))
+						local dest = destination or World_GetOffsetPosition(start, facing, OFFSET_FRONT, 30.0)
+						local sg = SGroup_CreateUnique()
+						Util_CreateSquads(player, sg, sbp, start, dest)
+						if not silent and Game_GetLocalPlayer() == player then 
+							local ui_info = BP_GetSquadUIInfo(sbp, Player_GetRace(player))
+							local icon = string.gsub(ui_info.symbolIconName, "\\" , "/" )
+							EventCue_Create(11169599, "low_priority", SGroup_GetSquadAt(sg, 1), icon, "", "")	-- "Reinforcements incoming"
+							UI_CreateMinimapBlip(SGroup_GetPosition(sg), 12.0, "defend_here")
+						end
+						Core_CallDelegateFunctions("OnSquadSpawned", SGroup_GetSquadAt(sg, 1))
+						SGroup_Destroy(sg)
+					end
+				end
+			end
+		end
+		if not Player_IsHuman(player) then
+			_SpawnSquadsFromAbilities(affectors.reinforcement_abilities)
+		end
+		_SpawnSquadsFromAbilities(affectors.garrison_attachment_reinforcement_ability)
+	end
+end
+
+
+function Affectors_StartPartisanObservation(points, max, visible_duration, rule_duration)
+	local data = {
+		player = Game_GetLocalPlayer(),
+		affector_data = {
+			rule_duration = rule_duration or 360,
+			duration = visible_duration or 30,
+			observe_and_report_data = {},
+		}
+	}
+	if scartype(points) == ST_EGROUP then
+		EGroup_ForEach(points, 
+			function(egroup, i, entity)
+				table.insert(data.affector_data.observe_and_report_data, { observe_position = Util_GetPosition(entity) })
+			end)
+	elseif scartype(points) == ST_TABLE then
+		for _, point in pairs(points) do
+			table.insert(data.affector_data.observe_and_report_data, { observe_position = Util_GetPosition(point) })
+		end
+	elseif scartype(points) == ST_NIL then
+		-- Get territory points near enemy base
+		local sectors = Territory_GetAdjacentSectors(Territory_FindClosestSectorToPoint(Player_GetStartingPosition(enemy_player)))
+		for i = 1, #sectors do 
+			local entity = Territory_GetSectorCreatorEntity(sectors[i])
+			if Entity_GetBlueprint(entity) ~= BP_GetEntityBlueprint("starting_territory_team") then 
+				table.insert(data.affector_data.observe_and_report_data, { observe_position = Util_GetPosition(entity) })
+			end
+		end
+	end
+	if scartype(max) == ST_NUMBER and max >= 0 and #data.affector_data.observe_and_report_data > max then
+		data.affector_data.observe_and_report_data = Table_GetRandomItem(data.affector_data.observe_and_report_data, max)
+	end
+	Affectors_PartisanObserveReport_Use(data)
+end
+
+
+function Affectors_StartPartisanSupplies(points, ebp, text)
+	local data = {
+		player = Game_GetLocalPlayer(),
+		affector_data = {
+			collectibles = {},
+			hintpoint_text = text or 11223030, 	-- "Partisan Munition Cache"
+			hintpoint_visible = true,
+			add_hintpoint_to_group = false,
+			opt_hintpoint_visible_in_fow = false,
+			opt_hintpoint_data_template = "InfoObjectiveDataTemplate",
+			opt_hintpoint_icon_name = "",
+			opt_hintpoint_height = 2.5,
+		}
+	}
+	for _, point in pairs(points) do
+		table.insert(data.affector_data.collectibles, { 
+				collectible_ebp = ebp or EBP.AMERICAN.MUNITION_PARADROP_60_US,
+				collectible_position = Util_GetPosition(point),
+			})
+	end
+	Affectors_PartisanLootSupplies_Use(data)
+end
+
+
+-- Prints list of mission affectors for each player from a campaign data table.
+function Affectors_Log(campaign_data)
+	if not campaign_data then
+		campaign_data = Game_RetrieveTableData("campaign", false)
+	end
+	if campaign_data and campaign_data.player_data then
+		for i = 1, #campaign_data.player_data do
+			print("Player "..i.." affectors:")
+			if campaign_data.player_data[i].ability_data then
+				for _, ability in pairs(campaign_data.player_data[i].ability_data) do
+					print("    (ability) "..BP_GetName(BP_GetAbilityBlueprintByPbgID(ability.PropertyBagGroupID)))
+				end
+			end
+			if campaign_data.player_data[i].upgrade_data then
+				for _, upgrade in pairs(campaign_data.player_data[i].upgrade_data) do 
+					print("    (upgrade) "..BP_GetName(BP_GetUpgradeBlueprintByPbgID(upgrade.PropertyBagGroupID)))
+				end
+			end
+		end
+	end
+end

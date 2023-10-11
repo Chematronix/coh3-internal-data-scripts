@@ -1,0 +1,547 @@
+--
+-- Mission-o-Matic - Playbills
+--
+-- Trigger a sequence of condition/action blocks
+--
+
+--
+-- See: Mission-o-Matic: Playbills
+--      http://relicwiki/display/CARD/Mission-o-Matic%3A+Playbills		(in the EE, you can Control-click on this link to go there)
+--
+-- See also: 
+--      Conditions and Actions - http://relicwiki/display/CARD/Mission-o-Matic%3A+Conditions+and+Actions	
+--      Player Objectives - http://relicwiki/display/CARD/Mission-o-Matic%3A+Player+Objectives
+--
+
+-- IMPORTS
+import("prefabs/schemas/locationgroupinfo.scar")
+import("context_selection.scar")
+
+g_additional_functions_on_condition_fulfilled = {}
+__playbill_pause_count = 0
+
+function Playbill_Start(playbillTable, context, turnFrequency, delayTurn, opt_additionalCallback, context_selection_info)
+	
+	local instanceName = playbillTable.instanceName
+	if instanceName ~= nil then
+		-- Triggering a world builder playbill.
+		-- Ideally this function would only be built to support this case, or dynamically
+		-- constructed playbills that fit this format. But there seem to be about 3 different
+		-- types of data you could pass in here...
+		-- I think on Anvil we could refactor to only support this type.
+		playbillTable = playbillTable.playbills
+	end
+
+	context = context or {}
+	local id = Playbill_GenerateID()				-- all parallel sequences have the same ID
+	
+	if t_allRunningPlaybills == nil then
+		t_allRunningPlaybills = {}
+	end 
+
+	--
+	-- preprocess the playbill to "fix" the format if necessary
+	--
+	if scartype(playbillTable[1]) ~= ST_TABLE then		-- if it's a single condition/action pairs (i.e. no item [1]) then make it a sequence of one item
+		playbillTable = {playbillTable}
+	end
+	if scartype(playbillTable[1][1]) ~= ST_TABLE then	-- now, if it's a single sequence then make it a list of parallel sequences (with just one item)
+		playbillTable = {playbillTable}
+	end
+													-- after all of this we are guaranteed to have a table of parallel sequences, each one a table of one or more condition/action sets
+		
+	if World_IsCampaignMetamapGame() and not World_IsScriptedTurnPhaseEnabled() then
+		World_SetScriptedTurnPhaseEnabled(true)	
+	end
+		
+	--
+	-- add each parallel sequence
+	--
+	for index, sequence in pairs(playbillTable) do 
+	
+		-- This is where things get a bit tricky - a playbill is a group of groups of actions, and now we're creating this bundle of data ABOUT that metastructure!
+		-- For the sake of clarity, let's use "playbillInfo" for this collection of information about the action metastructure, and "playbill" to refer to that structure itself
+
+		local playbillInfo = {
+			instanceName = instanceName,
+			playbill = sequence,
+			context = Clone(context, false),	-- non-recursive copy, so tracking data put into this context table doesn't cross-contaminate between parallel sequences
+			id = id, 
+			active = true,
+			 -- use stage 0 if context selection enabled as a precursor to the sequence:
+			currentStage = 0,
+			debug_node_id = sequence.debug_node_id,
+			context_selection_info = context_selection_info,
+			runningActionlists = {},
+		}
+		MissionDebug_AttachToNode(playbillInfo)
+		if opt_additionalCallback ~= nil then
+			playbillInfo.additionalCallback = opt_additionalCallback
+		end
+		-- If the playbill should be executed at a certain turn frequency, then 
+		-- make sure the playbill will be tested whenever a turn advances using
+		-- the Turn_Manager callback
+		local turnFrequencyInfo = nil
+		if scartype(turnFrequency) == ST_NUMBER and turnFrequency > 0 then
+			
+			playbillInfo.loop = true
+			
+			turnFrequencyInfo = {
+				frequency = turnFrequency,
+				delayTurn = delayTurn or 1,
+				initialTurn = delayTurn or World_GetCurrentTurn(),
+				lastExecuted = -1,
+			}
+			
+			playbillInfo.turnFrequencyInfo = turnFrequencyInfo
+			
+		end
+		local print_string = "Playbill_Start - ID: " .. id
+		if sequence.debug_node_id ~= nil and scartype(MissionDebug_GetNode) == ST_FUNCTION then
+			local node = MissionDebug_GetNode(sequence.debug_node_id)
+			if node.displayname ~= nil then
+				print_string = print_string .. ", Name: "
+				print_string = print_string .. node.displayname
+			end
+		end
+		MissionPrint(print_string)
+		
+		table.insert(t_allRunningPlaybills, playbillInfo)
+		Playbill_InitLastUpdatedTurn(playbillInfo)
+	
+		if turnFrequencyInfo ~= nil then
+			Playbill_Turn_Manager(playbillInfo)
+		else
+			Playbill_Manager(playbillInfo)
+		end
+		
+		if playbillInfo.active == true then
+			if not Rule_Exists(Playbill_UpdateAllPlaybills) then
+				Rule_Add(Playbill_UpdateAllPlaybills)
+			end
+		end
+		
+	end
+		
+	if World_IsCampaignMetamapGame() and not Rule_Exists(Playbill_CheckForEndScriptedTurnPhase) then
+		Rule_AddInterval(Playbill_CheckForEndScriptedTurnPhase, 1)
+	end
+	
+	return id
+	
+end
+
+function Playbill_PauseAllPlaybills()
+	__playbill_pause_count = __playbill_pause_count + 1
+	g_playbillsPaused = true
+end
+
+function Playbill_UnpauseAllPlaybills()
+	__playbill_pause_count = __playbill_pause_count - 1
+	if __playbill_pause_count < 1 then
+		__playbill_pause_count = 0
+		g_playbillsPaused = false
+	end
+end
+
+function Playbill_UpdateAllPlaybills()
+	
+	if g_playbillsPaused then
+		return
+	end
+	
+	local currentTime = World_GetGameTime()
+	local allPlaybills = t_allRunningPlaybills
+	local playbillCount = #allPlaybills
+	for i=1, playbillCount do
+		local playbillInfo = allPlaybills[i]
+		if playbillInfo.turnFrequencyInfo ~= nil then
+			Playbill_Turn_Manager(playbillInfo)
+		else
+			if (currentTime - (playbillInfo.lastUpdateTime or 0)) > 1 then
+				playbillInfo.lastUpdateTime = currentTime
+				Playbill_Manager(playbillInfo)
+			end
+		end
+	end
+	
+	-- Remove any inactive playbills
+	Table_RemoveIf(
+		t_allRunningPlaybills,
+		#t_allRunningPlaybills,
+		function(info) return not info.active end)
+end
+
+function Playbill_IsActive(instanceName, id)
+	if t_allRunningPlaybills == nil then
+		t_allRunningPlaybills = {}
+	end
+	for index = #t_allRunningPlaybills, 1, -1 do
+		local playbill = t_allRunningPlaybills[index]
+		
+		if id ~= nil then
+			if playbill.id == id then
+				return playbill.active
+			end
+		else
+			if playbill.playbill.instanceName == instanceName and playbill.active then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+function Playbill_Stop(data, id)
+
+	if t_allRunningPlaybills == nil then
+		t_allRunningPlaybills = {}
+	end
+	if id ~= nil then
+		MissionPrint("Playbill_Stop ID: " .. id)
+	else
+		MissionPrint("Playbill_Stop instanceName: " .. data.instanceName)
+	end
+
+	for index = #t_allRunningPlaybills, 1, -1 do
+		
+		local playbillInfo = t_allRunningPlaybills[index]
+		
+		if (id ~= nil and playbillInfo.id == id) or
+			playbillInfo.playbill.instanceName == data.instanceName then
+			
+			Playbill_PlaybillInfoStop(playbillInfo)
+		end
+		
+	end
+	
+
+end
+
+function Playbill_PlaybillInfoStop(playbillInfo)
+	
+	-- The on-complete callback for this playbill may be a function or a table
+	-- with a function and input for the function
+	local callback_type = scartype(playbillInfo.additionalCallback)
+	if callback_type == ST_FUNCTION then
+		playbillInfo.additionalCallback(playbillInfo)
+	elseif callback_type == ST_TABLE then
+		local callback_func = playbillInfo.additionalCallback.callback
+		local callback_data = playbillInfo.additionalCallback.callback_data
+		callback_func(callback_data)
+	end
+	playbillInfo.active = false -- Disable & mark the playbill for removal
+end
+
+function Playbill_GenerateID()
+
+	if i_lastUsedPlaybillID == nil then
+		i_lastUsedPlaybillID = 1	
+	else
+		i_lastUsedPlaybillID = i_lastUsedPlaybillID + 1
+	end
+	
+	return i_lastUsedPlaybillID
+
+end
+
+function Playbill_GetIDIfRunning(instance_name)
+	for i = 1, #t_allRunningPlaybills do
+		local playbillInfo = t_allRunningPlaybills[i]
+		if playbillInfo.playbill.instanceName == instance_name then
+			return playbillInfo.id
+		end
+	end
+end
+
+function Playbill_InsertAdditionalFunctionsOnConditionFulfilled(playbill_id, func, data)
+	if g_additional_functions_on_condition_fulfilled[playbill_id] == nil then
+		g_additional_functions_on_condition_fulfilled[playbill_id] = {}
+	end
+	table.insert(g_additional_functions_on_condition_fulfilled[playbill_id], {func = func, data = data})
+end
+
+function Playbill_Manager(playbillInfo)
+
+	if World_IsCampaignMetamapGame() and not World_IsSetupTurnPhase() then
+		Playbill_UpdateLastUpdatedTurn(playbillInfo)
+	end
+	
+	if playbillInfo.active == false then
+		return
+	end
+	
+	-- Dynamic Context Selection:
+	-- If enabled, then we attempt to pick a context from the specified context lists
+	-- in the playbill. The context must ultimately match all of the conditions that
+	-- were specified in the context_selection_info.
+	if playbillInfo.currentStage == 0 then
+		if playbillInfo.context_selection_info == nil then
+			playbillInfo.currentStage = 1
+		else
+			-- stage 0 means we are selecting a playbill context still, so
+			-- we will try to resolve the context for this playbill.
+			local selected_context = Context_SelectContext(playbillInfo.context_selection_info, playbillInfo)
+			
+			if selected_context then
+				-- Move on to the first stage and begin the playbill
+				playbillInfo.context = selected_context
+				playbillInfo.currentStage = 1
+			else
+				-- Not ready to continue until we successfully
+				-- select a context so exit now.
+				return
+			end
+		end
+	end
+	
+	-- Update the status of the running actionlists that this playbill is tracking to see
+	-- if any of them have completed. Actionlists that are no longer active are removed
+	-- from the updated list.
+	local runningActionlists = playbillInfo.runningActionlists
+	local newRunningActionlists = {}
+	local runningActionlistCount = #runningActionlists
+	for i=1, runningActionlistCount do
+		local listInfo = runningActionlists[i]
+		if ActionList_IsActionlistRunning(listInfo) then
+			newRunningActionlists[#newRunningActionlists + 1] = listInfo
+		end
+	end
+	playbillInfo.runningActionlists = newRunningActionlists
+	
+	if #newRunningActionlists > 0 then
+		-- Early out since we're still processing either dedicated actionlists
+		-- or we're processing the current stage's actions before advancing.
+		return
+	end
+	
+	-- All Actionlists have been completed
+	
+	-- Advances the currentStage int (looping if necessary) and prints debug info.
+	-- Either advances to the passed in stage, or the current stage + 1 if nothing 
+	-- is passed in.
+	local AdvanceStage = function(overrideStage)
+		
+		local previousStage = playbillInfo.currentStage
+		playbillInfo.currentStage = overrideStage or (previousStage + 1)
+		
+		-- Loop if necessary
+		if playbillInfo.currentStage > #playbillInfo.playbill and playbillInfo.loop then
+			playbillInfo.currentStage = 1
+		end
+		
+		if playbillInfo.context ~= nil then playbillInfo.context.firstTurn = nil end
+		
+		if Misc_IsDevMode() then
+			local print_string = "Playbill advancing from: " .. previousStage .. " -> " ..playbillInfo.currentStage
+			if playbillInfo.debug_node_id ~= nil and scartype(MissionDebug_GetNode) == ST_FUNCTION then
+				local node = MissionDebug_GetNode(playbillInfo.debug_node_id)
+				if node.displayname ~= nil then
+					print_string = print_string .. ", Name: "
+					print_string = print_string .. node.displayname
+				end
+			end
+			MissionPrint(print_string)
+		end
+	end
+
+	if playbillInfo.waitingForAdvanceTo then
+		-- Now that all the actionlists have finished, we can actually advance the next stage.
+		-- This stage might not be the current + 1, it could be overriden by the Loop action.
+		AdvanceStage(playbillInfo.waitingForAdvanceTo)
+		playbillInfo.waitingForAdvanceTo = nil
+	end
+	
+	local stage = playbillInfo.playbill[playbillInfo.currentStage]
+	
+	-- Skip disabled stages
+	while stage ~= nil and stage.enabled == false do
+		AdvanceStage() -- Advances to next stage
+		stage = playbillInfo.playbill[playbillInfo.currentStage]
+	end
+	
+	if stage == nil  then
+		-- If the stage is nil at this point, then we've advanced past the end
+		-- of the playbill and no actionlists are running. Time to end the playbill!
+		Playbill_PlaybillInfoStop(playbillInfo)
+		return
+	end
+	
+	-- Check that this playbill should be tested & executed if it's marked for a scripted turn
+	-- phase.
+	if World_IsCampaignMetamapGame() and stage.scripted_turn_phase then
+		local player = stage.player_turn_for_scripted_phase
+		local player_index = nil
+		if player ~= "World" then
+			player_index = World_GetPlayerIndex(player)
+		end
+		
+		if not World_IsScriptedTurnPhase() then
+			return
+		end
+		
+		if player_index ~= nil and not World_IsPlayersTurn(World_GetPlayerAt(player_index)) then
+			return
+		end
+	end
+	
+	-- check conditions and run actions if they are passed
+	if stage.conditions == nil or stage.conditions[1] == nil or ProcessAllConditions(stage.conditions, playbillInfo.context, playbillInfo) then
+		
+		if g_additional_functions_on_condition_fulfilled[playbillInfo.id] ~= nil then
+			local additional_functions = g_additional_functions_on_condition_fulfilled[playbillInfo.id]
+			for i = 1, #additional_functions do
+				additional_functions[i].func(additional_functions[i].data)
+			end
+			
+		end
+		
+		-- Notify the update loop that we are ready to advance since we passed the conditions.
+		-- (Delay advance until the actionlists that have been registered are completed)
+		playbillInfo.waitingForAdvanceTo = playbillInfo.currentStage + 1
+		
+		-- Execute the actions for this stage
+		Playbill_RegisterAndPlayActions(playbillInfo, stage.actions)
+
+	end
+end
+
+function Playbill_RegisterAndPlayActions(playbillInfo, actions)
+		
+	if scartype(actions) == ST_TABLE then
+		
+		-- Some actions, such as Loop, need playbillInfo to function! So we need to add that to whatever else we're sending down
+		playbillInfo.context.playbillInfo = playbillInfo
+		
+		local listInfo = ActionList_PlayActions(actions, playbillInfo.context)
+		
+		-- Add this actionlist to the list of actionlists that we're tracking. While this has
+		-- actionlists that are active, the playbill will not test the conditions for the
+		-- next stage.
+		local runningActionlists = playbillInfo.runningActionlists
+		runningActionlists[#runningActionlists + 1] = listInfo
+	end
+	
+end
+
+function Playbill_Turn_Manager(playbillInfo)
+	
+	if not World_IsSetupTurnPhase() and (not Playbill_IsCurrentStageScriptedPhase(playbillInfo) or World_IsScriptedTurnPhase()) then
+		Playbill_UpdateLastUpdatedTurn(playbillInfo)
+	end
+	
+	local currentTurn = World_GetCurrentTurn()
+	local turnFrequencyInfo = playbillInfo.turnFrequencyInfo
+	if ((currentTurn - turnFrequencyInfo.initialTurn) % turnFrequencyInfo.frequency == 0) and turnFrequencyInfo.lastExecuted ~= currentTurn 
+		and Playbill_CheckTurnPlayerForScriptedPhase(playbillInfo) then
+		
+		if currentTurn >= turnFrequencyInfo.delayTurn then
+			turnFrequencyInfo.lastExecuted = currentTurn
+			Playbill_Manager(playbillInfo)
+		end
+
+	end
+	
+ end
+
+-- During the action phase of a playbill, request an override
+-- to the next phase the playbill will test after this action
+-- phase is completed.
+function Playbill_SetNextStage(playbillInfo, stage)
+	playbillInfo.waitingForAdvanceTo = stage
+end
+
+function Playbill_IsCurrentStageScriptedPhase(data)
+	if not World_IsCampaignMetamapGame() then
+		return false
+	end
+	
+	local currentStage = data.currentStage
+	if currentStage == 0 then
+		currentStage = 1
+	end
+	local stage = data.playbill[currentStage]
+	if stage.scripted_turn_phase then
+		return true
+	end
+	return false
+end
+
+function Playbill_CheckForEndScriptedTurnPhase()
+	local currentTurn = World_GetCurrentTurn()
+	local currentPlayerID = World_GetCurrentTurnPlayerID()
+	for i, data in ipairs(t_allRunningPlaybills) do
+		local lastUpdatedTurn = data.lastUpdatedTurn.turn
+		local player = data.lastUpdatedTurn.player
+		if data.active and (lastUpdatedTurn ~= currentTurn or player ~= currentPlayerID) then
+			return false
+		end
+	end
+	
+	if World_IsScriptedTurnPhase() and World_IsLastTurnActionFinished() then
+		World_EndScriptedTurnPhase()
+	end
+	return true
+end
+
+function Playbill_InitLastUpdatedTurn(data)
+	if not World_IsCampaignMetamapGame() then
+		return
+	end
+	
+	if data.lastUpdatedTurn == nil then
+		data.lastUpdatedTurn = {}
+		data.lastUpdatedTurn.turn = 0
+		data.lastUpdatedTurn.player = World_GetCurrentTurnPlayerID()
+	end
+end
+
+function Playbill_UpdateLastUpdatedTurn(data)
+	if not World_IsCampaignMetamapGame() then
+		return
+	end
+	
+	-- don't want scripted turn events to mark as updated if they weren't able to run because of another running turn action
+	if not World_IsLastTurnActionFinished() then
+		return
+	end
+	
+	if data.lastUpdatedTurn.turn ~= World_GetCurrentTurn() or data.lastUpdatedTurn.player ~= World_GetCurrentTurnPlayerID() then
+		data.lastUpdatedTurn.turn = World_GetCurrentTurn()
+		data.lastUpdatedTurn.player = World_GetCurrentTurnPlayerID()
+	end
+end
+
+-- TODO document "Checks that it is the players turn and that we're in the scripted turn phase of the turn, if scripted_turn_phase ~= true
+function Playbill_CheckTurnPlayerForScriptedPhase(data)
+	if not World_IsCampaignMetamapGame() then
+		return true
+	end
+	
+	local currentStage = data.currentStage
+	if currentStage == 0 then
+		-- Context selection stage will use the settings for
+		-- the first stage, make sure to check that stage
+		-- even if we're currently before it, in stage '0'
+		currentStage = 1
+	end
+	
+	local stage = data.playbill[currentStage]
+	if stage.scripted_turn_phase then
+		local player = stage.player_turn_for_scripted_phase
+		local player_index = nil
+		if player ~= "World" then
+			player_index = World_GetPlayerIndex(player)
+		end
+		
+		if not World_IsScriptedTurnPhase() then
+			return false
+		end
+		
+		if player_index ~= nil and not World_IsPlayersTurn(World_GetPlayerAt(player_index)) then
+			return false
+		end
+	end
+
+	return true
+end

@@ -1,0 +1,136 @@
+import ("ai/campaign_personality_base.scar")
+
+local personality_name = "abandon_frontline"
+
+--[[ 
+ Player does not engage in capture or attack encounters as long as it has capture points to defend instead
+--]] 
+
+t_ai_campaign_commander_personalities[personality_name] =
+{
+	name = personality_name,
+	
+	preferred_types = {"defensive"},
+	
+	squad_assignment =
+	{		
+		-- let S be a military target's score greater than min_target_score_to_start_encounter
+		-- let C be the number of squads we're allowed to send to that target's encounter.
+		-- then C = 1 + (S - min_target_score_to_start_encounter)/additional_score_to_add_squad
+		-- if S < min_target_score_to_start_encounter, no squads are sent
+		min_target_score_to_start_encounter = 3000,
+		additional_score_to_add_squad = 1000,
+		max_squads = 3,
+		distribute_squads_evenly = true -- if true, assign squads evenly between chosen enounters (up to their respective
+		-- limits). If false, try to assign full target number of squads to an encounter before assigning squads to the next
+	},
+	
+	-----------------------------------------------
+	-- military target scoring
+	military_target_scoring =
+	{
+		front_line_score = 0,
+		
+		ai_military_engagement_type_tuning = 
+		{
+			DefendStructure = 100,
+			AttackStructure = 0,
+			Capture = 0, -- no encounter implemented in ai player state tree (use attack_structure, we try to capture attack_structure targets)
+			Gather = 0, -- no encounter implemented in ai player state tree
+			AllyClump = 0, -- no encounter implemented in ai player state tree
+			EnemyClump = 1,
+			NeutralClump = 0, -- no encounter implemented in ai player state tree
+			AttackArea = 0, -- no encounter implemented in ai player state tree
+			DefendArea = 0, -- no encounter implemented in ai player state tree
+		},
+		
+		enemy_proximity_tuning_per_engagement_type =
+		{
+			DefendStructure = {prefer_close = true, scale = 100, max_range = 75},
+			AttackStructure = {prefer_close = false, scale = 100, max_range = 200},
+			Capture = nil, -- no encounter implemented in ai player state tree (use attack_structure, we try to capture attack_structure targets)
+			Gather = nil, -- no encounter implemented in ai player state tree
+			AllyClump = nil, -- no encounter implemented in ai player state tree
+			EnemyClump = {prefer_close = true, scale = 100, max_range = 200},
+			NeutralClump = nil, -- no encounter implemented in ai player state tree
+			AttackArea = nil, -- no encounter implemented in ai player state tree
+			DefendArea = nil, -- no encounter implemented in ai player state tree
+		},
+		
+		capture_point_desired_percent_score =
+		{
+			below_threshold_max_contribution = 100,
+			below_threshold_min_contribution = 10,
+			threshold_met_max_contribution = 100,
+			threshold_met_min_contribution = 10,
+		},
+		
+		capture_point_desired_percents = 
+		{
+			[manpower_type_name] = 0,
+			[munitions_type_name] = 0.1,
+			[fuel_type_name] = 0.1,
+			[seaport_type_name] = 0.1,
+			[airfield_type_name] = 0.1,
+			[hospital_type_name] = 0.1,		
+		},
+		
+		entity_type_scoring =
+		{
+		},
+		
+		squad_type_scoring =
+		{
+			company = 0,
+			navy = 1600
+		},
+	},
+	
+	-----------------------------------------------
+	-- position scoring
+	-- Higher is better. Values are normalized to [0.0, 1.0] in MovementNodePositionalUtilityFunctor where they are used 
+	position_scoring =
+	{
+		terrain =
+		{
+			attachment_team_weapon_hmg_ger =
+			{
+				Plain = 2,
+				Road = 1,
+				Forest = 4,
+				Hill = 3,
+				SideRoad = 2,
+				Town = 4,
+			},
+						
+			attachment_team_weapon_mortar_ger =
+			{
+				Plain = 2,
+				Road = 1,
+				Forest = 3,
+				Hill = 4,
+				SideRoad = 2,
+				Town = 4,
+			},
+			
+			default =
+			{
+				Plain = 2,
+				Road = 1,
+				Mountain = 0,
+				Forest = 3,
+				Hill = 3,
+				Ocean = 0,
+				Coast = 0,
+				MountainPass = 0,
+				SideRoad = 2,
+				Town = 4,
+				River = 0,
+			}
+		}
+	},
+	
+	-----------------------------------
+	-- defend encounter attack tuning	
+	attack_range_nodes_out_of_territory = 6,
+}

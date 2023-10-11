@@ -1,0 +1,63 @@
+
+g_narrative_intel_pool = { }
+
+function RegisterNarrativeIntel(intel_node, lifetime)
+	
+	UnregisterNarrativeIntel(intel_node)
+	
+	table.insert(g_narrative_intel_pool, { node = intel_node, turns_remaining = lifetime } )
+	
+end
+
+function UnregisterNarrativeIntel(intel_node)
+	
+	for index = #g_narrative_intel_pool, 1, -1 do
+		
+		local intel = g_narrative_intel_pool[index]
+		
+		if (intel.node == intel_node) then
+			table.remove(g_narrative_intel_pool, index)			
+		end
+
+	end	
+end
+
+function UpdateNarrativeIntel()
+
+	for index = #g_narrative_intel_pool, 1, -1 do
+		
+		local intel = g_narrative_intel_pool[index]
+		
+		if (intel.turns_remaining > 0) then
+			intel.turns_remaining = intel.turns_remaining - 1
+		else
+			table.remove(g_narrative_intel_pool, index)			
+		end
+
+	end
+	
+end
+
+function DisplayNarrativeIntel()
+	
+	if (#g_narrative_intel_pool > 0) then
+		
+		local intel_index = World_GetRand(1, #g_narrative_intel_pool)
+		
+		ExecuteDynamicNarrativeNode(g_narrative_intel_pool[intel_index].node)
+		
+		table.remove(g_narrative_intel_pool, intel_index)
+		
+	end
+	
+end
+
+function PrintNarrativeIntelList()
+
+	for key, intel in pairs(g_narrative_intel_pool) do
+		
+		print(intel.node .. " (" .. intel.turns_remaining .. " turns remaining)")
+
+	end
+	
+end

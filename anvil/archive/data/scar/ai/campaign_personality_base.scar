@@ -1,0 +1,25 @@
+if t_ai_campaign_commander_personalities == nil then
+	t_ai_campaign_commander_personalities = {}
+end
+
+Easy = AID_EASY
+Normal = AID_NORMAL
+Hard = AID_HARD
+Expert = AID_EXPERT
+
+manpower_type_name = "resource_point_manpower"
+munitions_type_name = "resource_point_munition"
+fuel_type_name = "resource_point_fuel"
+seaport_type_name = "seaport"
+airfield_type_name = "air_support_center"
+hospital_type_name = "triage_center"
+
+g_capture_point_tunings =
+{
+	manpower_type_name,
+	munitions_type_name,
+	fuel_type_name,
+	seaport_type_name,
+	airfield_type_name,
+	hospital_type_name,
+}

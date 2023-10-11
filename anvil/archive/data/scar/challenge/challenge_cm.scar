@@ -1,0 +1,175 @@
+-----------------------------------------------------------------------
+--
+-- Campaign map achievements
+--
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+local local_player = Game_GetLocalPlayer()
+-----------------------------------------------------------------------
+-- Script framework
+-----------------------------------------------------------------------
+
+Core_RegisterModule("CMChallenge")
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function CMChallenge_OnInit()
+	if --Misc_IsDevMode() or 
+		not World_IsCampaignMetamapGame() or 
+		World_IsMultiplayerGame() then
+		Core_UnregisterModule("CMChallenge")
+		return
+	end
+	_challenge_cm = {
+		requisition = false,
+		detachment = false,
+		foothold = false,
+		loyal_b = false,
+		loyal_n = false,
+		loyal_v = false,
+	}
+end
+
+-- Called by core.scar after opening cinematics and events are complete.
+function CMChallenge_InitComplete()
+	Rule_AddInterval(CMChallenge_Update, 5)
+end
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up any rules associated with this script module.
+function CMChallenge_OnWinConditionTriggered(match_result)
+
+	CMChallenge_OnCampaignEnd(Table_Contains(match_result.winners, World_GetPlayerIndex(local_player)))
+
+	-- Remove rules
+	Rule_Remove(CMChallenge_Update)
+end
+
+-- Check for objective completion achievements
+function CMChallenge_CheckObjectiveChallenge(objective) 
+	local ID = objective.objectiveID
+	if ID == "obj_volturno" then
+		CMChallenge_Complete(local_player, CE_ACHIEVMAJOROBJECTIVEB, 1, "CE_ACHIEVMAJOROBJECTIVEB")
+	elseif ID == "gustav_line" then
+		CMChallenge_Complete(local_player, CE_ACHIEVMAJOROBJECTIVEC, 1, "CE_ACHIEVMAJOROBJECTIVEC")
+	elseif ID == "obj_baridisaster" then
+		CMChallenge_Complete(local_player, CE_ACHIEVBARIEVENT, 1, "CE_ACHIEVBARIEVENT")
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+-- Periodic rule used for challenges that can't be checked through events.
+function CMChallenge_Update(context, data)
+	
+	-- CE_ACHIEVMAJOROBJECTIVEA (Choose where to go after Salerno)
+	local condition = {id = "foothold_target_chosen", number = 1}
+	if Condition_CheckLedgerValue_Check(condition, {}) and _challenge_cm.foothold == false then
+		CMChallenge_Complete(local_player, CE_ACHIEVMAJOROBJECTIVEA, 1, "CE_ACHIEVMAJOROBJECTIVEA")
+		_challenge_cm.foothold = true
+	end
+	
+	--CE_ACHIEVSPENDSKILLPOINT (Player spent at least one skill point)
+	--CE_ACHIEVPURCHASEDETACHMENT (Player owns a detachment)
+	
+	local squads = Player_GetSquads(local_player)
+	local check = function (gid, idx, squad)
+		if Squad_GetCompletedUpgradeCost(squad, RT_Requisition) > 0 and _challenge_cm.requisition == false then
+			CMChallenge_Complete(local_player, CE_ACHIEVSPENDSKILLPOINT, 1, "CE_ACHIEVSPENDSKILLPOINT")
+			_challenge_cm.requisition = true
+		end
+		if Squad_IsOfType(squad, "platoon") and Squad_IsInHoldSquad(squad) and _challenge_cm.detachment == false then
+			CMChallenge_Complete(local_player, CE_ACHIEVPURCHASEDETACHMENT, 1, "CE_ACHIEVPURCHASEDETACHMENT")
+			_challenge_cm.detachment = true
+		end
+	end
+	SGroup_ForEach(squads, check)
+	
+	-- Loyalty Achievements; reaching max loyalty
+	if World_GetNarrativeInfluenceValueToUse("buckram") >= 100 and not _challenge_cm.loyal_b then
+		CMChallenge_Complete(local_player, CE_ACHIEVLOYALBUCKRAM, 1, "CE_ACHIEVLOYALBUCKRAM")
+		_challenge_cm.loyal_b = true
+	end
+	if World_GetNarrativeInfluenceValueToUse("norton") >= 100 and not _challenge_cm.loyal_n then
+		CMChallenge_Complete(local_player, CE_ACHIEVLOYALNORTON, 1, "CE_ACHIEVLOYALNORTON")
+		_challenge_cm.loyal_n = true
+	end
+	if World_GetNarrativeInfluenceValueToUse("valenti") >= 100 and not _challenge_cm.loyal_v then
+		CMChallenge_Complete(local_player, CE_ACHIEVLOYALVALENTI, 1, "CE_ACHIEVLOYALVALENTI")
+		_challenge_cm.loyal_v = true
+	end
+	
+	-- Ice Cream Healing
+	local condition_us = {id = "ice_cream_us", number = 1}
+	local condition_uk = {id = "ice_cream_british", number = 1}
+	if Condition_CheckLedgerValue_Check(condition_us, {}) or Condition_CheckLedgerValue_Check(condition_uk, {}) then
+		CMChallenge_Complete(local_player, CE_ACHIEVICECREAMEVENT, 1, "CE_ACHIEVICECREAMEVENT")
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+-- Excludes specific challenge(s) from a mission where it/they do not make sense.
+-- (e.g. CE_ACHIEVNOREINFORCE from missions where there is no reinforcement mechanism)
+function CMChallenge_Exclude(exclusions)
+	_challenge_cm.exclude = _challenge_cm.exclude or {}
+	if scartype(exclusions) == ST_TABLE then
+		for _, exclusion in pairs(exclusions) do
+			table.insert(_challenge_cm.exclude, exclusion)
+		end
+	elseif scartype(exclusions) == ST_NUMBER then
+		table.insert(_challenge_cm.exclude, exclusions)
+	end
+end
+
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+
+-- Notifies server that a challenge has met its completion requirement(s).
+function CMChallenge_Complete(player, challenge, value, description)
+	if Player_IsHuman(player) 
+		and not (_challenge_cm.exclude and Table_Contains(_challenge_cm.exclude, challenge)) then
+		
+		Game_SendCustomChallengeEvent(player, challenge, value)
+		print(Loc_ToAnsi(Player_GetDisplayName(player)).." completed achievement "..tostring(challenge).." "..(description or ""))
+		if Misc_IsDevMode() and Misc_IsCommandLineOptionSet("show_achievements") then
+			UI_CreateEventCue(LOC(description), Loc_Empty(),  "low_priority", "icons/common/filled_star_icon", "", ECV_Title, 5.0)
+		end
+	end
+end
+
+function CMChallenge_OnCampaignEnd(local_player_won)
+	if Game_GetScenarioFileName() == "italy_tutorial" and local_player_won then
+		CMChallenge_Complete(local_player, CE_ACHIEVWINCALABRIA, 1, "CE_ACHIEVWINCALABRIA")
+	elseif Game_GetScenarioFileName() == "italy_base" and local_player_won then
+		CMChallenge_Complete(local_player, CE_ACHIEVWINCAMPAIGN, 1, "CE_ACHIEVWINCAMPAIGN")
+	end
+end
+
+function CMChallenge_Save(saveTable)
+  	saveTable.challengeSave = _challenge_cm
+   	CMChallenge_InitComplete()
+end
+
+function CMChallenge_Restore(saveTable)
+  	_challenge_cm = saveTable.challengeSave
+	if _challenge_cm == nil then
+		CMChallenge_OnInit()
+	end
+ 	CMChallenge_InitComplete() -- Re-adds the update rule
+end

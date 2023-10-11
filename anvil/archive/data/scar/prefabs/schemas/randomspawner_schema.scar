@@ -1,0 +1,85 @@
+--
+-- WorldBuilder prefab
+-- "Encounter"
+--
+
+
+-- Schema
+
+randomspawner_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "randomspawner",																						-- name the prefab uses to identify itself
+	description = "randomspawner",																				-- name to display for this prefab
+	script = "randomspawner.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+
+		------------------------
+		------------------------ PLAYBILLS
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "spawner",
+			description = "One area to spawn at",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_TABLE,
+					name = "locations",
+					description = "Potential locations to spawn at",
+					multiplicity = "multiple",
+					itemSchema = {
+						
+						{
+							type = ST_MARKER,
+							name = "position",
+							description = "Where to check. May take into account range.",							
+							hasDirection = true,
+							category = "Options",
+						},
+						
+						{
+							type = ST_PLAYER,
+							name = "player",
+							description = "The target player",
+							category = "Options",
+							default = "Player2",
+						},
+						
+						{
+							type = ST_PBG,
+							name = "entity",
+							blueprintType = "entity",
+							description = "Entity to spawn",							
+							lockedTo = "position",
+							category = "Options",
+						},
+						
+					},
+				},
+				
+				{
+					type = ST_NUMBER,
+					name = "chance",
+					description = "Chance out of 100 that one of these will locations will spawn",
+					category = "Options",
+					default = 0,
+				},
+				
+				{
+					type = ST_NUMBER,
+					name = "number_to_spawn",
+					description = "How many locations to spawn",
+					category = "Options",
+					default = 1,
+				},
+				
+			},
+		},
+		
+	},
+}

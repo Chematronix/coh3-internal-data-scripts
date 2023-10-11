@@ -1,0 +1,1402 @@
+--
+-- "MissionOMatic Debug"
+--
+--  Sets up debug menu
+--
+import("anvil.scar")
+import("conditionlist_debug.scar")
+import("missionomatic/missionomatic_objectives.scar")
+
+g_mission_skip_debug_in_progress = false -- global state for debugging
+DEBUG_WAIT = true -- if returned, must wait on complete
+DEBUG_SKIP_MEDIUM_COST = 256 -- could slightly break things if path taken
+DEBUG_SKIP_HEAVY_COST = 4096 -- path will probably do unexpected things
+
+g_skirmish_map_override = nil -- used to choose skirmish map using MissionDebug_SetSkirmishMapOverride
+
+Game_StoreTableData("MissionDebug", {})
+
+-------                                                      -------
+--                                                                --
+-- The actual traversal functionality for getting to a goal state --
+--                                                                --
+-------                                                      -------
+-- get the shortest path to the goal node, then iteratively complete it,
+-- waiting as needed. Can also append a path if something like an
+-- ObjectiveIsComplete condition is encountered along the way
+function MissionDebug_StartNode(goal_node, opt_append)
+	if scartype(goal_node) == ST_NUMBER or scartype(goal_node) == ST_INTEGER then
+		goal_node = MissionDebug_GetNode(goal_node)
+	end
+	if goal_node == nil or goal_node.parent == nil then
+		error("Goal node is nil or has no parent!!!")
+	end
+	if g_mission_skip_debug_in_progress then
+		if opt_append then
+			-- If we encounter an ObjectiveIsComplete condition or sim., we currently
+			-- just append its path to our current position and checkresume
+			local data = g_mission_skip_debug_in_progress_data
+			data.next_index = data.next_index - 1
+			local sub_path = MissionDebug_ShortestPath(goal_node)
+			for i = #sub_path, 1, -1 do
+				table.insert(data.path, data.next_index, sub_path[i])
+			end
+			MissionDebug_CheckResume()
+		end
+		return
+	end
+	g_mission_skip_debug_in_progress = true
+
+	if MissionDebug_IsComplete(goal_node, nil) then
+		g_mission_skip_debug_in_progress = false
+		return -- no work required
+	end
+	g_mission_skip_debug_in_progress_data = {
+		path = MissionDebug_ShortestPath(goal_node),
+		next_index = 1
+	}
+	MissionDebug_CheckResume()
+end
+
+-- This function actually iterates through the path and completes each node,
+-- waiting for objective states to update as needed
+function MissionDebug_CheckResume()
+	if not g_mission_skip_debug_in_progress then
+		if g_mission_win_in_progress then
+			MissionDebug_MissionWin()
+		end
+		return
+	end
+	local path = g_mission_skip_debug_in_progress_data.path
+		
+	for i = g_mission_skip_debug_in_progress_data.next_index, #path do
+		local node = path[i]
+		local sub_goal = path[i + 1] -- this will be nil on the last iteration
+		MissionDebug_ShowProgressText(path, i)
+		g_mission_skip_debug_in_progress_data.next_index = i + 1
+		if not MissionDebug_IsComplete(node, sub_goal) then
+			if MissionDebug_Complete(node, sub_goal) == DEBUG_WAIT then
+				return DEBUG_WAIT
+			end
+		end
+	end
+	MissionDebug_ShowProgressText(path, #path, 5)
+	if path[#path].object ~= nil and path[#path].object.has_debug_actions then
+		MissionOMatic_TriggerObjectiveStageCallbackData(path[#path].object.onDebugSkipStart)
+	end
+	
+	g_mission_skip_debug_in_progress = false
+	g_mission_skip_debug_in_progress_data = nil
+	if g_mission_win_in_progress then
+		MissionDebug_MissionWin()
+	end
+end
+
+--Shortcut function for calling StartNode on an objective's complete node
+function MissionDebug_CompleteObjectiveNode(goal_node, opt_append)
+	if scartype(goal_node) == ST_NUMBER or scartype(goal_node) == ST_INTEGER then
+		goal_node = MissionDebug_GetNode(goal_node)
+	end
+	if goal_node.Complete == nil then
+		goal_node.Complete = MissionDebug_CreateNode("ObjectiveComplete", goal_node)
+		goal_node.Complete.object = goal_node.object
+	end
+	MissionDebug_StartNode(goal_node.Complete, opt_append)
+end
+
+function MissionDebug_MissionWin()
+	local next_objective = MissionOMatic_GetCurrentPrimaryObjective()
+	if next_objective == nil then
+		g_mission_win_in_progress = false
+		g_mission_win_visited = nil
+		return
+	end
+	g_mission_win_in_progress = true
+	if Objective_IsStarted(next_objective.objectiveData) then
+		MissionDebug_CompleteObjectiveNode(next_objective.debug_node_id)
+	end
+end
+-------                                                -------
+--                                                          --
+-- Load Functions for specific prefabs/table configurations --
+--                                                          --
+-------                                                -------
+
+--The main function to init the graph, loads the intro and all immediate playbills as well as the list of endpoints
+function MissionDebug_Load(introObjective)
+	if g_mission_debug_nodes ~= nil and #g_mission_debug_nodes > 0 then
+		return
+	end
+	local root = MissionDebug_CreateNode("MissionStart", nil)
+	if introObjective ~= nil then
+		MissionDebug_Objective_Load(introObjective, root)
+	end
+	for id, playbill in pairs(g_AllPlaybills) do
+		if playbill.immediate then
+			playbill_DebugLoad(playbill, root)
+		end
+	end
+end
+
+function MissionDebug_Prefab_Load(prefab, parent, opt_index)
+	-- These actions are defined further down in this file
+	Prefab_DoAction(prefab, "DebugLoad", parent, opt_index)
+end
+
+function MissionDebug_Objective_Load(objective, parent, opt_index)
+	if MissionDebug_CheckLoaded(objective, parent, opt_index) then
+		return MissionDebug_GetNode(object.debug_node_id)
+	end
+	
+	local debug_node =  MissionDebug_CreateNode("Objective", parent, opt_index, objective)
+	objective.debug_node_id = debug_node.id
+	debug_node.objective_type = objective.objective_type
+	
+	-- Load all the playbill/prefab lists
+	MissionDebug_ListOfOn_Load(objective.onPreStart or objective.on_prestart, debug_node, "Start")
+	MissionDebug_ListOfOn_Load(objective.onStart or objective.on_start, debug_node, "Start")
+	MissionDebug_ListOfOn_Load(objective.onPreComplete or objective.on_precomplete, debug_node, "Complete")
+	MissionDebug_ListOfOn_Load(objective.onComplete or objective.on_complete, debug_node, "Complete")
+	MissionDebug_ListOfOn_Load(objective.onFail or objective.on_fail, debug_node, "Fail")
+	MissionDebug_ListOfOn_Load(objective.onTurnExpire or objective.on_turnexpire, debug_node, "Expire")
+	MissionDebug_ListOfOn_Load(objective.onPlayerTurnStart or objective.on_player_turn_start, debug_node, "PlayerTurnStart")
+	MissionDebug_ListOfOn_Load(objective.onPlayerTurnEnd or objective.on_player_turn_end, debug_node, "PlayerTurnEnd")
+	MissionDebug_ListOfOn_Load(objective.onObjectiveEnd or objective.on_objective_end, debug_node, "ObjectiveEnd")
+	
+	if scartype(objective.pre_intro_sequence) == ST_TABLE then
+		for i = 1, #objective.pre_intro_sequence do
+			MissionDebug_Playbill_Load(objective.pre_intro_sequence[i], debug_node, i, "ObjectiveIntroSequence")
+		end
+	end
+	
+	if scartype(objective.introSequence) == ST_TABLE then
+		for i = 1, #objective.introSequence do
+			MissionDebug_Playbill_Load(objective.introSequence[i], debug_node, i, "ObjectiveIntroSequence")
+		end
+	end
+	
+	MissionDebug_NarrativeEvent_Load(objective.start_narrative_event, debug_node, "Start")
+	MissionDebug_NarrativeEvent_Load(objective.complete_narrative_event, debug_node, "Complete")
+	MissionDebug_NarrativeEvent_Load(objective.fail_narrative_event, debug_node, "Fail")
+	MissionDebug_NarrativeEvent_Load(objective.expire_narrative_event, debug_node, "Expire")
+	MissionDebug_NarrativeEvent_Load(objective.reminder_narrative_event, debug_node, "TurnReminder")
+	if objective.beat_type == "CompleteMission" then
+		MissionDebug_NarrativeEvent_Load(objective.mission_loss_narrative_event, debug_node, "MissionLoss")
+		MissionDebug_NarrativeEvent_Load(objective.mission_win_narrative_event, debug_node, "MissionWin")
+		debug_node.MissionWin = debug_node.MissionWin or MissionDebug_CreateNode("ObjectiveMissionWin", debug_node)
+	elseif objective.beat_type == "CompletePopupMission" then
+		debug_node.MissionWin = MissionDebug_CreateNode("ObjectiveMissionWin", debug_node)
+	end
+		
+	
+	-- If it's a SubObjective beat, we need to register all the subobjectives
+	if objective.beat_type == "SubObjective" then
+		for i = 1, #objective.sub_objectives do
+			local sub_objective = objective.sub_objectives[i]
+			if debug_node.Start == nil then
+				debug_node.Start = MissionDebug_CreateNode("ObjectiveStart", debug_node)
+				debug_node.Start.object = debug_node.object
+			end
+			MissionDebug_Objective_Load(sub_objective, debug_node.Start)
+		end
+	end
+	return debug_node
+end
+
+function MissionDebug_Playbill_Load(playbill, parent, opt_index, opt_type)
+	if MissionDebug_CheckLoaded(playbill, parent, opt_index) then
+		return MissionDebug_GetNode(playbill.debug_node_id)
+	end 
+	
+	local debug_node = MissionDebug_CreateNode(opt_type or "Playbill", parent, opt_index, playbill)
+	playbill.debug_node_id = debug_node.id
+	debug_node.object = playbill
+	
+	if scartype(playbill.conditions) == ST_TABLE then
+		for i = 1, # playbill.conditions do
+			if scartype(playbill.conditions[i].optional_dedicated_actions) == ST_TABLE then
+				MissionDebug_PlaybillCondition_Load(playbill.conditions[i], debug_node)
+			end
+		end
+	end
+	if scartype(playbill.actions) == ST_TABLE then
+		debug_node.Actions = MissionDebug_Actions_Load(playbill.actions, debug_node)
+	end
+	return debug_node
+end
+
+function MissionDebug_PlaybillCondition_Load(condition, parent, opt_index)
+	if MissionDebug_CheckLoaded(condition, parent, opt_index) then
+		return
+	end
+	
+	local debug_node = MissionDebug_CreateNode("PlaybillCondition", parent, opt_index, condition)
+	condition.debug_node_id = debug_node.id
+	debug_node.object = condition
+	
+	MissionDebug_Actions_Load(condition.optional_dedicated_actions, debug_node)
+end
+
+function MissionDebug_Actions_Load(actions, parent, opt_index)
+	if MissionDebug_CheckLoaded(actions, parent, opt_index) then
+		return
+	end
+	
+	if #actions == 0 then
+		return nil
+	end
+	
+	local debug_node = MissionDebug_CreateNode("Actions", parent, opt_index)
+	actions.debug_node_id = debug_node.id
+	debug_node.object = actions
+	
+	for i = 1, #actions do
+		local action = actions[i]
+		-- Most actions can be ignored for the traversal, these are all the ones
+		-- That affect the current objectives
+		if action.action == "StartObjective" then
+			local objective = MissionOMatic_FindObjective(action.id)
+			if objective ~= nil then
+				MissionDebug_Objective_Load(objective, debug_node, i)
+			end
+		elseif action.action == "LaunchPrefabOrPlaybill" then
+			MissionDebug_Prefab_Load(action.prefab_playbill, debug_node, i)
+		elseif action.action == "StartPrimaryObjectiveOrPlaybill" then
+			local prefabs = _FindFromScenrefKey({action.scenref_playbill_key})
+			
+			if #prefabs == 1 then
+				MissionDebug_Prefab_Load(prefabs[1], debug_node, i)
+			elseif #prefabs > 1 then
+				local multi_node = MissionDebug_CreateNode("MultipleActionResults", debug_node, i)
+				for j = 1, #prefabs do
+					MissionDebug_Prefab_Load(prefabs[j], multi_node)
+				end
+			end
+		elseif action.action == "CreateDynamicObjective" then
+			local dynamic = MissionDebug_CreateNode("DynamicObjective", debug_node, i)
+			dynamic.object = action
+			for j = 1, #action.objectiveVariants do
+				MissionDebug_Objective_Load(action.objectiveVariants[j], dynamic)
+			end
+		elseif action.action == "StartIntel" then
+			if action.intel_type == "NarrativeEvent" then
+				MissionDebug_CreateNode("NarrativeEvent", debug_node, i, action.narrative_event)
+			elseif action.intel_type == "NarrativeLine" then
+				MissionDebug_CreateNode("NarrativeLine", debug_node, i, action.narrative_line)
+			else
+				MissionDebug_CreateNode("DynamicNarrative", debug_node, i, action.start_node)
+			end
+		elseif action.action == "MissionWin" then
+			g_mission_debug_nodes["MissionWin"] = g_mission_debug_nodes["MissionWin"] or {}
+			table.insert(g_mission_debug_nodes["MissionWin"], debug_node)
+		end
+	end
+end
+
+function MissionDebug_ListOfOn_Load(list, parent, opt_child_list)
+	if list == nil then
+		return
+	end
+	--Optionally bundle list into child node with suffix
+	if opt_child_list ~= nil and #list > 0 then
+		parent[opt_child_list] = parent[opt_child_list] or MissionDebug_CreateNode(parent.node_type..opt_child_list, parent)
+		parent = parent[opt_child_list]
+	end
+	local keys = {}
+	for i = 1, #list do
+		local entry = list[i]
+		
+		local key = entry.scenref_playbill_key
+		if key ~= nil and key ~= "" then
+			table.insert(keys, key)
+		end
+		if entry.playbill ~= nil and entry.playbill ~= "" then
+			MissionDebug_Prefab_Load(entry.playbill, parent)
+		end
+	end
+	local prefabs = _FindFromScenrefKey(keys)
+	for i = 1, #prefabs do
+		MissionDebug_Prefab_Load(prefabs[i], parent)
+	end
+end
+
+function MissionDebug_NarrativeEvent_Load(narrative_event, parent, narrative_type)
+	if narrative_event == nil or narrative_event == "" then
+		return
+	end
+	if narrative_type ~= "TurnReminder" then
+		local child_node = parent[narrative_type]
+		if child_node == nil then
+			child_node = MissionDebug_CreateNode(parent.node_type..narrative_type, parent)
+			parent[narrative_type] = child_node
+			child_node.object = parent.object
+		end
+		parent = child_node
+	end
+	local narrative_node = MissionDebug_CreateNode("NarrativeEvent", parent, nil, narrative_event)
+	parent.NarrativeEvent = narrative_node
+	narrative_node.displayname = narrative_event
+	narrative_node.narrative_type = narrative_type
+end
+
+-------                                   -------
+--                                             --
+--    "DebugLoad" Prefab_DoAction functions    --
+--                                             --
+-------                                   -------
+
+function missionobjectives_DebugLoad(objectives, parent, opt_index)
+	if MissionDebug_CheckLoaded(objectives, parent, opt_index) then
+		return
+	end
+	local debug_node = MissionDebug_CreateNode("MissionObjectives", parent, opt_index, objectives)
+	objectives.debug_node_id = debug_node.id
+	debug_node.object = objectives
+	MissionDebug_ListOfOn_Load(objectives.initialize, debug_node)
+	local previous_objective = nil
+	for i = 1, #objectives.objectives do
+		local objective = objectives.objectives[i]
+		local parent = debug_node
+		if previous_objective ~= nil then
+			parent = previous_objective.Complete
+			if parent == nil then
+				previous_objective.Complete = MissionDebug_CreateNode("ObjectiveComplete", previous_objective)
+				parent = previous_objective.Complete
+			end
+		end
+		previous_objective = MissionDebug_Objective_Load(objective, parent)
+	end
+end
+
+function playbill_DebugLoad(playbill, parent, opt_index)
+	if MissionDebug_CheckLoaded(playbill, parent, opt_index) then
+		return
+	end
+	local debug_node = MissionDebug_CreateNode("PlaybillPrefab", parent, opt_index, playbill)
+	playbill.debug_node_id = debug_node.id
+	playbill.playbills.debug_node_id = debug_node.id
+	debug_node.object = playbill
+	local previous_playbill = nil
+	for i = 1, #playbill.playbills do
+		local playbill = playbill.playbills[i]
+		local parent = debug_node
+		if previous_playbill ~= nil then
+			parent = previous_playbill.Actions or previous_playbill
+		end
+		previous_playbill = MissionDebug_Playbill_Load(playbill, parent)
+	end
+end
+
+-------                                    -------
+--                                              --
+-- IsComplete Functions for specific Node types --
+--                                              --
+-------                                    -------
+
+function MissionDebug_IsComplete(debug_node, child_goal)
+	local fn = _G["MissionDebug_"..debug_node.node_type.."_IsComplete"]
+	if scartype(fn) == ST_FUNCTION then
+		return fn(debug_node, child_goal)
+	end
+	error("No MissionDebug_IsComplete function found for node type!!!")
+end
+
+function MissionDebug_MissionStart_IsComplete(debug_node, child_goal)
+	return true
+end
+
+function MissionDebug_Objective_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsStarted(debug_node.object.objectiveData)
+end
+
+function MissionDebug_ObjectiveStart_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsStarted(debug_node.object.objectiveData)
+end
+
+function MissionDebug_ObjectiveComplete_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsComplete(debug_node.object.objectiveData)
+end
+
+function MissionDebug_ObjectiveFail_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsFailed(debug_node.object.objectiveData)
+end
+
+function MissionDebug_ObjectiveExpire_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsExpired(debug_node.object.objectiveData)
+end
+
+function MissionDebug_ObjectiveIntroSequence_IsComplete(debug_node, child_goal)
+	return false -- fall through
+end
+
+function MissionDebug_ObjectiveMissionWin_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsComplete(debug_node.object.objectiveData)
+end
+
+function MissionDebug_ObjectiveMissionLoss_IsComplete(debug_node, child_goal)
+	return debug_node.object ~= nil and debug_node.object.objectiveData ~= nil and
+	Objective_IsComplete(debug_node.object.objectiveData)
+end
+
+function MissionDebug_NarrativeEvent_IsComplete(debug_node, child_goal)
+	return false
+end
+
+function MissionDebug_MissionObjectives_IsComplete(debug_node, child_goal)
+	for i = 1, #debug_node.object.objectives do
+		local objective = debug_node.object.objectives[i]
+		if objective.debug_node_id == child_goal.id then
+			return objective.objectiveData ~= nil and
+				(Objective_IsComplete(objective.objectiveData) or
+					Objective_IsFailed(objective.objectiveData) or
+					Objective_IsExpired(objective.objectiveData) or
+					Objective_IsStarted(objective.objectiveData))
+		end
+	end
+	return false
+end
+
+function MissionDebug_PlaybillPrefab_IsComplete(debug_node, child_goal)
+	return nil -- Don't think we can know, so just fall through
+end
+
+function MissionDebug_Playbill_IsComplete(debug_node, child_goal)
+	return nil -- Don't think we can know, so just fall through
+end
+
+function MissionDebug_PlaybillCondition_IsComplete(debug_node, child_goal)
+	local condition = debug_node.object
+	return scartype(condition.conditionFunction) == ST_FUNCTION and condition.conditionFunction(condition)
+end
+
+function MissionDebug_Actions_IsComplete(debug_node, child_goal)
+	return nil -- Don't think we can know, so just fall through
+end
+
+function MissionDebug_MultipleActionResults_IsComplete(debug_node, child_goal)
+	return nil -- Fall through, this is simply a node for branching
+end
+
+function MissionDebug_DynamicObjective_IsComplete(debug_node, child_goal)
+	return nil -- Don't think we can know, so just fall through
+end
+
+-------                                  -------
+--                                            --
+-- Complete Functions for specific Node types --
+--                                            --
+-------                                  -------
+
+function MissionDebug_Complete(debug_node, child_goal)
+	local fn = _G["MissionDebug_"..debug_node.node_type.."_Complete"]
+	if scartype(fn) == ST_FUNCTION then
+		return fn(debug_node, child_goal)
+	else
+		error("No MissionDebug_Complete function found for node type "..debug_node.node_type.."!!!")
+	end
+end
+
+function MissionDebug_Objective_Complete(debug_node, child_goal)
+	-- Handles start conditions for subobjectives
+	local complete = function(node)
+		local objective = node.object
+		if objective.startConditions ~= nil then
+			if objective.startConditions.condition ~= nil then
+				ConditionDebug_CheatComplete(objective.startConditions)
+			else
+				for i = 1, #objective.startConditions do
+					ConditionDebug_CheatComplete(objective.startConditions[i])
+				end
+			end
+		end
+	end
+	if debug_node.object ~= nil then
+		complete(debug_node)
+	else
+		debug_node.CallOnInit = complete
+	end
+	return DEBUG_WAIT
+end
+
+function MissionDebug_ObjectiveStart_Complete(debug_node, child_goal)
+	-- No work required, start is handled by parent
+end
+
+function MissionDebug_ObjectiveComplete_Complete(debug_node, child_goal)
+	local complete = function(node)
+		local objective = node.object
+		if objective.beat_type == "CompleteMission" or objective.beat_type == "CompletePopupMission" then
+			MissionDebug_ObjectiveMissionWin_Complete(node.parent.MissionWin, nil)
+		end
+		if objective.checkCompleteConditions == "After Timer" then
+			if objective.objectiveData.Counter.TimerID ~= nil then
+				Timer_End(objective.objectiveData.Counter.TimerID)
+			elseif objective.timerAction ~= nil then
+				objective.timerAction.initialTime = 0
+			else
+				objective.timer_start_time = 0
+			end
+		end
+		ConditionDebug_CheatComplete(objective.completeConditions)
+	end
+	if debug_node.object ~= nil then
+		complete(debug_node)
+	else
+		debug_node.CallOnInit = complete
+	end
+	return DEBUG_WAIT
+end
+
+function MissionDebug_ObjectiveFail_Complete(debug_node, child_goal)
+	local complete = function(node)
+		local objective = node.object
+		ConditionDebug_CheatComplete(objective.failConditions)
+	end
+	if debug_node.object ~= nil then
+		complete(debug_node)
+	else
+		debug_node.CallOnInit = complete
+	end
+	return DEBUG_WAIT
+end
+
+function MissionDebug_ObjectiveIntroSequence_Complete(debug_node, child_goal)
+	ConditionDebug_CheatComplete(debug_node.object.conditions)
+end
+
+function MissionDebug_ObjectiveExpire_Complete(debug_node, child_goal)
+	local complete = function(node)
+		local objective = node.object
+		local remaining_turns = objective.expiry_turns - (World_GetCurrentTurn() - objective.startTurn)
+		MissionDebug_SkipTurns(remaining_turns)
+	end
+	if debug_node.object ~= nil then
+		complete(debug_node)
+	else
+		debug_node.CallOnInit = complete
+	end
+	return DEBUG_WAIT
+end
+
+function MissionDebug_CompleteMission(objective, success)
+	local GetCompany =  function(player_index, position)
+		Player_GetAll(World_GetPlayerAt(player_index))
+		local sgroup = SGroup_CreateUnique("temp")
+		for i = 1, SGroup_Count(sg_allsquads) do
+			local squad = SGroup_GetSquadAt(sg_allsquads, i)
+			if Squad_IsOfType(squad, "company") then
+				SGroup_Add(sgroup, squad)
+			end
+		end
+		return SGroup_GetClosestSquad(sgroup, position)
+	end
+	local egroup = nil
+	local ResolveFunction = nil
+	if objective.beat_type == "CompleteMission" then
+		egroup = objective.mission_entity
+		ResolveFunction = MetaMap_MissionAutoResolve
+	elseif objective.beat_type == "CompletePopupMission" then
+		egroup = objective.popup_egroup
+		ResolveFunction = MetaMap_SkirmishAutoResolve
+	end
+	local position = Util_GetPosition(egroup)
+	local attacker = GetCompany(1, position)
+	local defender = GetCompany(2, position)
+	
+	Squad_SetPosition(attacker, position, position)
+	
+	-- If this isn't in the scope, we aren't in the campaign map
+	-- and we should crash
+	if ResolveFunction == nil then
+		error("Completing a campaign map objective when not on the campaign map!")
+	end
+	ResolveFunction(attacker,
+		defender,
+		EGroup_GetEntityAt(egroup, 1),
+		1,
+		success)
+end
+
+function MissionDebug_ObjectiveMissionWin_Complete(debug_node, child_goal) 
+	local complete = function(node)
+		MissionDebug_CompleteMission(node.object, true)
+	end
+	if debug_node.object ~= nil then
+		complete(debug_node)
+		return
+	else
+		debug_node.CallOnInit = complete
+		return DEBUG_WAIT
+	end
+end
+
+function MissionDebug_ObjectiveMissionLoss_Complete(debug_node, child_goal) 
+	local complete = function(node)
+		MissionDebug_CompleteMission(node.object, false)
+	end
+	if debug_node.object ~= nil then
+		complete(debug_node)
+		return
+	else
+		debug_node.CallOnInit = complete
+		return DEBUG_WAIT
+	end
+end
+
+function MissionDebug_NarrativeEvent_Complete(debug_node, child_goal)
+	if debug_node.narrative_type == "TurnReminder" then
+		local currentTurn = World_GetCurrentTurn()
+		if objectiveData.lastReminderTurn == nil then
+			objectiveData.lastReminderTurn = objectiveData.startTurn
+		end
+		
+		-- if the delay period is not over yet, then quit early
+		local turns_to_first = objectiveData.reminder_delay_turns - (currentTurn - objectiveData.startTurn)
+		if turns_to_first > 0 then
+			MissionDebug_SkipTurns(turns_to_first)
+			return DEBUG_WAIT
+		end
+
+		local turns_to_next = objectiveData.reminder_turn_frequency - (currentTurn - objectiveData.lastReminderTurn)
+		if turns_to_next == 0 then
+			turns_to_next = objectiveData.reminder_turn_frequency
+			MissionDebug_SkipTurns(turns_to_next)
+		end
+		
+		return DEBUG_WAIT
+	end
+end
+
+function MissionDebug_MissionObjectives_Complete(debug_node, child_goal)
+	MissionDebug_Actions_Complete(debug_node.object.initialize)
+	for i = 1, #debug_node.object.objectives do
+		local objective = debug_node.object.objectives[i]
+		if objective.debug_node_id == child_goal.id then
+			return
+		end
+		MissionDebug_ObjectiveComplete_Complete(objective)
+	end
+end
+
+function MissionDebug_PlaybillPrefab_Complete(debug_node, child_goal)
+	-- Should auto-start if parent completes
+end
+
+function MissionDebug_Playbill_Complete(debug_node, child_goal)
+	if child_goal.node_type == "Actions" or child_goal.node_type == "Playbill" then
+		local amount = debug_node.object.minRequired
+		if debug_node.object.boolean == "ALL" then
+			amount = #debug_node.object.conditions
+		end
+		for i = 1, amount do
+			ConditionDebug_CheatComplete(debug_node.object.conditions[i])
+		end
+	end
+end
+
+function MissionDebug_PlaybillCondition_Complete(debug_node, child_goal)
+	ConditionDebug_CheatComplete(debug_node.object)
+end
+
+function MissionDebug_Actions_Complete(debug_node, child_goal)
+	local end_index = 0
+	for index, child in pairs(debug_node) do
+		if child == child_goal then
+			end_index = index - 1
+			break
+		end
+	end
+	for i = 1, end_index do
+		local action = debug_node.object[i]
+		local action_name = action.action
+		if scartype(action_name) ~= ST_STRING then
+			action_name = action.action_name
+		end
+		if action_name == "Wait" then
+			if action.waiting_id ~= nil and Rule_ExistsWithID(action.waiting_id) then
+				Rule_RemoveWithID(action.waiting_id)
+				Action_Finish(action.waiting_context)
+			else
+				action.debug_skip = true
+			end
+			action.waiting_id = nil
+			action.waiting_context = nil
+		end
+	end
+end
+
+function MissionDebug_MultipleActionResults_Complete(debug_node, child_goal)
+	-- Nothing required here, this is simply a node to allow branching
+end
+
+function MissionDebug_DynamicObjective_Complete(debug_node, child_goal)
+	for i = 1, #debug_node do
+		if debug_node[i].id == child_goal.id then
+			debug_node.object.forced_index = i
+			return
+		end
+	end
+end
+
+-------                                  -------
+--                                            --
+-- Distance Functions for specific Node types --
+--                                            --
+-------                                  -------
+
+function MissionDebug_Distance(debug_node, child_goal)
+	local fn = _G["MissionDebug_"..debug_node.node_type.."_Distance"]
+	if scartype(fn) == ST_FUNCTION then
+		local result = fn(debug_node, child_goal)
+		if result == nil then
+			error("Nil Distance for node of type "..debug_node.node_type.."!!!")
+		end
+		return result
+	else
+		error("No MissionDebug_Distance function found for node type "..debug_node.node_type.."!!!")
+	end
+end
+
+function MissionDebug_MissionStart_Distance(debug_node, child_goal)
+	return 0
+end
+
+function MissionDebug_Objective_Distance(debug_node, child_goal)
+	-- Handled by child nodes for specific states
+	return 0
+end
+
+function MissionDebug_ObjectiveStart_Distance(debug_node, child_goal)
+	if debug_node.object ~= nil then
+		return MissionDebug_Condition_Distance(debug_node.object.startConditions)
+	else
+		return 0
+	end
+end
+
+function MissionDebug_ObjectiveComplete_Distance(debug_node, child_goal)
+	if debug_node.object ~= nil then
+		return MissionDebug_Condition_Distance(debug_node.object.completeConditions)
+	else
+		return 0
+	end
+end
+
+function MissionDebug_ObjectiveFail_Distance(debug_node, child_goal)
+	if debug_node.object ~= nil then
+		return MissionDebug_Condition_Distance(debug_node.object.failConditions)
+	else
+		return 0
+	end
+end
+
+function MissionDebug_ObjectiveExpire_Distance(debug_node, child_goal)
+	if debug_node.object ~= nil then
+	local remaining_turns = debug_node.object.expiry_turns - (World_GetCurrentTurn() - debug_node.object.startTurn)
+		return remaining_turns or 0
+	else
+		return 0
+	end
+end
+
+function MissionDebug_ObjectiveIntroSequence_Distance(debug_node, child_goal)
+	return DEBUG_SKIP_HEAVY_COST
+end
+
+function MissionDebug_ObjectiveMissionWin_Distance(debug_node, child_goal)
+	return 1
+end
+
+function MissionDebug_ObjectiveMissionLoss_Distance(debug_node, child_goal)
+	return 1
+end
+
+function MissionDebug_NarrativeEvent_Distance(debug_node, child_goal)
+	if debug_node.narrative_type == "TurnReminder" then
+		local currentTurn = World_GetCurrentTurn()
+		if objectiveData.lastReminderTurn == nil then
+			objectiveData.lastReminderTurn = objectiveData.startTurn
+		end
+		
+		-- if the delay period is not over yet, then quit early
+		local turns_to_first = objectiveData.reminder_delay_turns - (currentTurn - objectiveData.startTurn)
+		if turns_to_first > 0 then
+			return turns_to_first
+		end
+
+		local turns_to_next = objectiveData.reminder_turn_frequency - (currentTurn - objectiveData.lastReminderTurn)
+		if turns_to_next == 0 then
+			turns_to_next = objectiveData.reminder_turn_frequency
+		end
+		
+		return turns_to_next
+	end
+	return 0
+end
+
+function MissionDebug_MissionObjectives_Distance(debug_node, child_goal)
+	local distance = 0
+	for i = 1, #debug_node.object.objectives do
+		local objective = debug_node.object.objectives[i]
+		if objective.debug_node_id == child_goal.id then
+			return distance
+		end
+		for j = 1, #objective do
+			if objective[j].node_type == "ObjectiveStart" or objective[j].node_type == "ObjectiveComplete" then
+				distance = distance + MissionDebug_Distance(objective[j])
+			end
+		end
+	end
+	return distance
+end
+
+function MissionDebug_PlaybillPrefab_Distance(debug_node, child_goal)
+	return 0
+end
+
+function MissionDebug_Playbill_Distance(debug_node, child_goal)
+	if child_goal.node_type == "Actions" then
+		local distance = 0
+		for i = 1, #debug_node.object.conditions do
+			distance = distance + MissionDebug_Condition_Distance(debug_node.object.conditions[i])
+		end
+		return distance
+	end
+	return 0
+end
+
+function MissionDebug_PlaybillCondition_Distance(debug_node, child_goal)
+		return MissionDebug_Condition_Distance(debug_node.object)
+end
+
+function MissionDebug_Actions_Distance(debug_node, child_goal)
+	return 0
+end
+
+function MissionDebug_MultipleActionResults_Distance(debug_node, child_goal)
+	-- Nothing required here, this is simply a node to allow branching
+	return 0
+end
+
+function MissionDebug_DynamicObjective_Distance(debug_node, child_goal)
+	return 0
+end
+
+function MissionDebug_Condition_Distance(condition)
+	if condition == nil then
+		return 0
+	end
+	local distance = 0
+	local name = condition.conditionName or condition.condition or ""
+	if not ConditionList_CheckItem(condition, {isDebug = true}) then
+		if name == "CheckAffectorTable" or
+			name == "CheckRace" then
+			distance = distance + DEBUG_SKIP_HEAVY_COST
+		elseif name == "AskScarFunction" then
+			distance = distance + DEBUG_SKIP_MEDIUM_COST
+		elseif name == "Boolean" or name == "AggregatedCount" then
+			for i = 1, #condition.subconditions do
+				distance = distance + MissionDebug_Condition_Distance(condition.subconditions[i])
+			end
+		else
+			distance = distance + 1
+		end
+	end
+	
+	return distance
+end
+
+-------                -------
+--                          --
+--    Conditions Display    --
+--                          --
+-------                -------
+
+function MissionDebug_SetShowConditions(value)
+	local table = Game_RetrieveTableData("MissionDebug", true)
+	if (not table.show_conditions) and value then
+		Rule_AddInterval(MissionDebug_DrawObjectiveConditions, 1)
+	elseif table.show_conditions and (not value) then
+		Rule_Remove(MissionDebug_DrawObjectiveConditions)
+		dr_clear("ObjectiveConditions")
+	end
+	table.show_conditions = value
+	Game_StoreTableData("MissionDebug", table)
+end
+
+function MissionDebug_DrawObjectiveConditions()
+	dr_clear("ObjectiveConditions")
+	dr_setautoclear("ObjectiveConditions", 0)
+	local text = ""
+	if g_mission_debug_nodes["Objective"] == nil then
+		return
+	end
+	for i = 1, #g_mission_debug_nodes["Objective"] do
+		local node = g_mission_debug_nodes["Objective"][i]
+		if node.object ~= nil then
+			local objective = node.object
+			if objective.objectiveData ~= nil and 
+				Objective_IsStarted(objective.objectiveData) and
+				(not Objective_IsComplete(objective.objectiveData)) and 
+				(not Objective_IsFailed(objective.objectiveData)) and 
+				(not Objective_IsExpired(objective.objectiveData)) then
+				text = text..MissionDebug_MakeObjectiveConditionsText(objective, node)
+			end
+		end
+	end
+	dr_text2d("ObjectiveConditions", .3, .5, text, 200, 200, 255)
+end
+
+function MissionDebug_MakeObjectiveConditionsText(objective, node)
+	local text =node.displayname.."\n"
+	if objective.completeConditions ~= nil then
+		text = text.." Complete:\n"
+		text = text..MissionDebug_MakeConditionText(objective.completeConditions)
+	end
+	if objective.failConditions ~= nil and
+		(objective.failConditions.subconditions == nil or #objective.failConditions.subconditions > 0) then
+		text = text.." Fail:\n"
+		text = text..MissionDebug_MakeConditionText(objective.failConditions)
+	end
+	return text
+end
+
+function MissionDebug_MakeConditionText(condition, opt_inset)
+	local text = ""
+	opt_inset = opt_inset or 2
+	local condition_name = condition.conditionName or condition.condition or ""
+	text = text..string.rep(" ", opt_inset)..condition_name
+	local count_fn = _G["Condition_"..condition_name.."_GetCount"]
+	if scartype(count_fn) == ST_FUNCTION then
+		local count_table = count_fn(condition, context)
+		text = text.." - "..count_table.current.."/"..count_table.max
+	else
+		local met = ConditionList_CheckItem(condition, {isDebug = true})
+		if met then
+			text = text.." - True"
+		else
+			text = text.." - False"
+		end
+	end
+	text = text.."\n"
+	if condition_name == "Boolean" or condition_name == "AggregatedCount" then
+		for i = 1, #condition.subconditions do
+			text = text..MissionDebug_MakeConditionText(condition.subconditions[i], opt_inset + 1)
+		end
+	end
+	return text
+end
+
+-------               -------
+--                         --
+--    Playbills Display    --
+--                         --
+-------               -------
+
+function MissionDebug_SetShowPlaybills(value)
+	local table = Game_RetrieveTableData("MissionDebug", true)
+	if (not table.show_playbills) and value then
+		Rule_AddInterval(MissionDebug_DrawActivePlaybills, 1)
+	elseif table.show_playbills and (not value) then
+		Rule_Remove(MissionDebug_DrawActivePlaybills)
+		dr_clear("ActivePlaybills")
+	end
+	table.show_playbills = value
+	Game_StoreTableData("MissionDebug", table)
+end
+
+function MissionDebug_DrawActivePlaybills()
+	dr_clear("ActivePlaybills")
+	dr_setautoclear("ActivePlaybills", 0)
+	local text = ""
+	for i = 1, #t_allRunningPlaybills do
+		local playbill = t_allRunningPlaybills[i]
+		local node = MissionDebug_GetNode(playbill.playbill.debug_node_id)
+		if node ~= nil then
+			text = text..MissionDebug_MakePlaybillText(playbill, node)
+		end
+	end
+	dr_text2d("ActivePlaybills", .05, .5, text, 200, 200, 255)
+end
+
+function MissionDebug_MakePlaybillText(playbill, node)
+	if not playbill.active then
+		return ""
+	end
+	local text =node.displayname..": "
+	text = text.."  stage "..playbill.currentStage
+	
+	text = text..", runningActions: "..tostring(playbill.runningActions).."\n"
+	local selected_playbill = playbill.playbill[playbill.currentStage]
+	if selected_playbill == nil then
+		-- stage 0 means we are selecting a playbill context still
+		return ""
+	end
+	local conditions = playbill.playbill[playbill.currentStage].conditions
+	for i = 1, #conditions do
+		text = text..MissionDebug_MakeConditionText(conditions[i])
+	end
+	return text
+end
+
+-------               -------
+--                         --
+--   Player Info Display   --
+--                         --
+-------               -------
+
+function MissionDebug_SetShowPlayersInfo(value)
+	local table = Game_RetrieveTableData("MissionDebug", true)
+	if table.show_players_info ~= value then
+		if value then
+			MissionDebug_DrawPlayersInfo()
+			Rule_AddInterval(MissionDebug_DrawPlayersInfo, 3)
+		else
+			Rule_Remove(MissionDebug_DrawPlayersInfo)
+			dr_clear("DebugPlayerInfo")
+		end
+	end
+	table.show_players_info = value
+	Game_StoreTableData("MissionDebug", table)
+end
+
+function MissionDebug_DrawPlayersInfo()
+	local id = "DebugPlayerInfo"
+	dr_clear(id)
+	dr_setautoclear(id, 0)
+	local offset = .01
+	local DrawPlayer = function(player)
+		local result = Player_DrawInfoText(player, offset, .1)
+		offset = offset + .2 + result.x
+	end
+	local debug_player = Player_GetDebugPlayer()
+	if debug_player ~= nil then
+		DrawPlayer(debug_player)
+	else
+		for i = 1, World_GetPlayerCount() do
+			DrawPlayer(World_GetPlayerAt(i))
+		end
+	end
+end
+
+-------              -------
+--                        --
+--    Helper Functions    --
+--                        --
+-------              -------
+
+function MissionDebug_CreateNode(node_type, parent, opt_index, opt_object)
+	g_mission_debug_nodes = g_mission_debug_nodes or {}
+	g_mission_debug_nodes[node_type] = g_mission_debug_nodes[node_type] or {}
+	local node = {node_type = node_type}
+	table.insert(g_mission_debug_nodes, node)
+	table.insert(g_mission_debug_nodes[node_type], node)
+	node.id = #g_mission_debug_nodes
+	node.parent = parent
+	if opt_object ~= nil and scartype(opt_object) == ST_TABLE then
+		node.displayname = opt_object.displayname or opt_object.instanceName
+	end
+	if parent ~= nil then
+		if opt_index ~= nil then
+			parent[opt_index] = node
+		else
+			table.insert(parent, node)
+		end
+	end
+	if node_type  == "Objective" then
+		local title = "-TITLE NOT FOUND-"
+		if opt_object ~= nil then
+			if opt_object.debug_title ~= nil and opt_object.debug_title ~= "" then
+				title = opt_object.debug_title
+			elseif opt_object.title ~= nil and opt_object.title ~= "$0" then
+				title = Loc_ToAnsi(Loc_GetString(opt_object.title))
+			elseif opt_object.displayname ~= nil and opt_object.displayname ~= "" then
+				title = opt_object.displayname
+			elseif opt_object.instanceName ~= nil and opt_object.instanceName ~= "" then
+				title = opt_object.instanceName
+			end
+		end
+		node.displayname = title
+		Scar_DebugCheatMenuExecute(
+			"MissionDebug_RegisterObjective([[" ..
+			title .. "]], [[" ..
+			node.id .. "]], [["..
+			MissionDebug_ShortestPath(node).distance.."]])"
+			)
+	elseif node_type == "NarrativeEvent" then
+		local displayname = node.displayname
+		if displayname == nil then
+			if scartype(opt_object) == ST_STRING then
+				displayname = opt_object
+			else
+				displayname = "-TITLE NOT FOUND-"
+			end
+		end
+		local path = {}
+		for substring in string.gmatch(displayname, "[^\\]+") do
+			table.insert(path, substring)
+		end
+		local first, last = string.find(path[#path], "_")
+		local category
+		if first ~= nil then
+			category = path[#path]:sub(1, first - 1)
+			if category == "cm" then
+				local old_first = first
+				first, last = string.find(path[#path]:sub(first + 1, #path[#path]), "_")
+				category = path[#path]:sub(1, old_first + first - 1)
+			end
+		else
+			category = "NONE"
+		end
+		path[#path] = category
+		Scar_DebugCheatMenuExecute(
+			"MissionDebug_RegisterFolderNarrativeEvent([[" .. displayname ..
+			"]], [[" .. node.id .. "]], [["..table.concat(path, "]], [[").."]])"
+			)
+	end
+	return node
+end
+
+function MissionDebug_IsObjectiveChildNode(node)
+	return node.node_type:sub(1, #"Objective") == "Objective" and
+			#node.node_type > #"Objective"
+end
+
+function MissionDebug_GetNode(id)
+	if g_mission_debug_nodes == nil then
+		return nil
+	end
+	return g_mission_debug_nodes[id]
+end
+
+-- Once an objective has been initialized properly, stick a pointer to it in all
+-- of it's related nodes, and call any of their complete functions if they're waiting
+function MissionDebug_AttachToNode(object)
+	local update_node = function(node)
+		node.object = object
+		if scartype(node.CallOnInit) == ST_FUNCTION then
+			node.CallOnInit(node)
+			node.CallOnInit = nil
+		end
+		if node.NarrativeEvent ~= nil then
+			local narrative_type = node.NarrativeEvent.narrative_type
+			local data = object.objectiveData
+			if narrative_type == "Start" then
+				node.NarrativeEvent.object = data.Intel_Start
+			elseif narrative_type == "Complete" then
+				node.NarrativeEvent.object = data.Intel_Complete
+			elseif narrative_type == "Fail" then
+				node.NarrativeEvent.object = data.Intel_Fail
+			elseif narrative_type == "Expire" then
+				node.NarrativeEvent.object = data.Intel_Expire
+			elseif narrative_type == "TurnReminder" then
+				node.NarrativeEvent.object = data.Intel_TurnReminder
+			end
+		end
+	end
+	
+	local node = MissionDebug_GetNode(object.debug_node_id)
+	if scartype(node) == ST_TABLE then
+		update_node(node)
+		for i = 1, #node do
+			local child = node[i]
+			local s_start, s_end = string.find(child.node_type, node.node_type)
+			if s_start == 1 and child.object == nil then
+				update_node(child)
+			end
+		end
+	end
+end
+
+function MissionDebug_CheckLoaded(object, parent, opt_index)
+	if object.debug_node_id ~= nil then
+		-- Add parent to node
+		local debug_node = MissionDebug_GetNode(object.debug_node_id)
+		if debug_node.parent ~= nil then
+			debug_node.parents = {debug_node.parent}
+			debug_node.parent = nil
+		end
+		table.insert(debug_node.parents, parent)
+		if opt_index ~= nil then
+			parent[opt_index] = debug_node
+		else
+			table.insert(parent, debug_node)
+		end
+		return true
+	end
+	return false
+end
+-- Shows text for the path with an arrow at current_index
+-- which expires after opt_duration if it's set
+function MissionDebug_ShowProgressText(path, current_index, opt_duration)
+	dr_clear("MissionDebug")
+	dr_setautoclear("MissionDebug", 0)
+	dr_text2d("MissionDebug", .7, .5, MissionDebug_MakeProgressText(path, current_index), 200, 200, 255)
+	if opt_duration ~= nil and opt_duration > 0 then
+		Rule_AddOneShot(MissionDebug_ClearProgressText, opt_duration)
+	end
+end
+function MissionDebug_ClearProgressText()
+	dr_clear("MissionDebug")
+end
+
+function MissionDebug_MakeProgressText(path, current_index)
+	local text = ""
+	local append_text = function(node, show_arrow, is_list)
+		if show_arrow then
+			text = text.."> "
+		else
+			text = text.."  "
+		end
+		if is_list then -- Indent objective sub-nodes
+			text = text.."  "
+		end
+		text = text.."type="..node.node_type
+		if node.displayname ~= nil then
+			text = text..", name="..node.displayname
+		end
+		text = text.."\n"
+	end
+	for i = 1, #path do
+		-- If it's type starts with objective but isn't just objective, it's a sub-node
+		local is_list = MissionDebug_IsObjectiveChildNode(path[i])
+		if is_list and (path[i-1] == nil or path[i-1].node_type ~= "Objective") then
+			append_text(path[i].parent, false, false)
+		end
+		append_text(path[i], i == current_index, is_list)
+	end
+	return text
+end
+function _FindFromScenrefKey(keys)
+	local prefabs = {}
+	if(next(keys) == nil) then
+		return {}
+	end
+	for i = 1, #keys do
+		local found = false
+		for id, objective in pairs(g_PrimaryObjectives) do
+			if objective.scenref_playbill_key == keys[i] then
+				table.insert(prefabs, objective)
+				found = true
+				break
+			end
+		end
+		if not found then
+			for id, playbill in pairs(g_AllPlaybills) do
+				if playbill.scenref_playbill_key == keys[i] then
+					table.insert(prefabs, playbill)
+					break
+				end
+			end
+		end
+	end
+	return prefabs
+end
+function MissionDebug_IsParent(parent, child)
+	local visited = {}
+	local frontier = {child}
+	while #frontier > 0 do
+		local curr = table.remove(frontier)
+		if not visited[curr.id] then
+			visited[curr.id] = true
+			if curr == parent then
+				return true
+			end
+			if curr.parent ~= nil then
+				table.insert(frontier, curr.parent)
+			elseif curr.parents ~= nil then
+				for i = 1, #curr.parents do
+					table.insert(frontier, curr.parents[i])
+				end
+			end
+		end
+	end
+	return false
+end
+-- Dijkstra's algorithm for Shortest Path between two nodes used here with a min heap
+function MissionDebug_ShortestPath(goal_node)
+	local heap = CreateMinHeap()
+	local prev = {}
+	local AddNode = function(source, dest)
+		prev[dest] = source
+		heap.distance[dest] = heap.distance[source] + MissionDebug_Distance(dest, source)
+		MinHeap_Insert(heap, dest)
+	end
+	heap.distance[goal_node] = 0
+	local curr = goal_node
+	local curr_completed = true
+	while not MissionDebug_IsComplete(curr, prev[curr]) do
+		if curr.parent ~= nil then
+			AddNode(curr, curr.parent)
+		elseif curr.parents ~= nil then
+			for i = 1, #curr.parents do
+				AddNode(curr, curr.parents[i])
+			end
+		else
+			curr_completed = false
+			break
+		end
+		curr = MinHeap_RemoveMin(heap)
+	end
+	if curr_completed then
+		curr = prev[curr]
+	end
+	local path = {distance = heap.distance[curr]}
+	while curr ~= goal_node do
+		table.insert(path, curr)
+		curr = prev[curr]
+	end
+	table.insert(path, curr)
+	return path
+end
+function CreateMinHeap()
+	return {
+		distance = {}
+	}
+end
+function MinHeap_Insert(heap, node)
+	table.insert(heap, node)
+	local index = #heap
+	local parent = math.floor(index / 2)
+	while index > 1 do
+		if heap.distance[heap[index]] < heap.distance[heap[parent]] then
+			MinHeap_Swap(heap, index, parent)
+			index = parent
+			parent = math.floor(index / 2)
+		else
+			return
+		end
+	end
+end
+function MinHeap_RemoveMin(heap)
+	local being_removed = heap[1]
+	local index = 1
+	while 2 * index <= #heap do
+		local min_child = 2 * index
+		if 2 * index + 1 <= #heap and
+			heap.distance[heap[min_child]] > heap.distance[heap[min_child + 1]] then
+			min_child = min_child + 1
+		end
+		MinHeap_Swap(heap, index, min_child)
+		index = min_child
+	end
+	table.remove(heap)
+	return being_removed
+end
+function MinHeap_Swap(heap, i, j)
+	local temp = heap[i]
+	heap[i] = heap[j]
+	heap[j] = temp
+end
+
+function MissionDebug_SetSkirmishMapOverride(map_name)
+	if map_name ~= nil and scartype(map_name) == ST_STRING then
+		g_skirmish_map_override = map_name
+	end
+end

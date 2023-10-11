@@ -1,0 +1,2313 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- OBJECTIVE UTIL FUNCTIONS
+-- Supports loading from predefined objective schemas for use by prefabs
+--
+-- (c) 2019 Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+-- NOTE: saveInfo is a board state partial save table that can be passed in
+-- to override some parts of the initialization flow. This is not relevant
+-- to a 'full save' (RTS save)
+function objectiveutil_ObjectiveInit(data, context, saveInfo) -- expects data in the form of the objective schema template
+	
+	if player1 == nil then
+		player1 = World_GetPlayerAt(1)
+	end
+	g_enemy_team = g_enemy_team or Core_GetTeamsEntryFromIndex(2)
+	
+	--Initialize variant
+	local initFunc = _G["objectiveutil_"..data.beat_type.."_Init"]
+	if scartype(initFunc) == ST_FUNCTION then
+		
+		-- adds the appropriate completion condition to the objective table
+		local obj = initFunc(data, context, saveInfo)
+		obj.prefabData = data
+		-- creates ID (if applicable)
+		obj.objectiveID = data.objective_id
+		
+		--Objective data (Title, Dialogue, Callbacks)
+		obj.beatType = data.beat_type
+		
+		obj.veterancy_reward_type = data.veterancy_reward_type
+		
+		obj.objectiveData = {
+			Title = data.title,
+			Description = data.description,
+			turnBased = data.turn_based or false
+		}
+		
+		if not data.showTitle then
+			obj.objectiveData.showStartTitle = false
+			obj.objectiveData.showCompletionTitle = false
+			obj.objectiveData.showFailureTitle = false
+		else
+			obj.objectiveData.showStartTitle = data.showStartTitle
+			obj.objectiveData.showCompletionTitle = data.showCompletionTitle
+			obj.objectiveData.showFailureTitle = data.showFailureTitle
+		end
+		
+		if data.icon_name ~= '' then
+			obj.objectiveData.Icon = data.icon_name
+		end
+		
+		obj.objectiveData.Intel_Start = objectiveutil_CreateNarrativeEvent(data.start_narrative_event)
+		
+		obj.objectiveData.Intel_Complete = objectiveutil_CreateNarrativeEvent(
+			data.complete_narrative_event,
+			data.complete_extra_narrative_event)
+		
+		obj.objectiveData.Intel_Fail = objectiveutil_CreateNarrativeEvent(
+			data.fail_narrative_event,
+			data.fail_extra_narrative_event)
+		
+		obj.objectiveData.Intel_Expire = objectiveutil_CreateNarrativeEvent(data.expire_narrative_event)
+		
+		obj.objectiveData.Intel_TurnReminder = objectiveutil_CreateNarrativeEvent(data.reminder_narrative_event)
+		
+		if data.objective_type == "OT_PRIMARY" then
+			obj.objectiveData.type = OT_Primary
+		elseif data.objective_type == "OT_SECONDARY" then
+			obj.objectiveData.type = OT_Secondary
+		elseif data.objective_type == "OT_BONUS" then
+			obj.objectiveData.type = OT_Bonus
+		else
+			obj.objectiveData.type = OT_Information
+		end
+		
+		-- Objective DataTemplate setting
+		obj.objectiveData.DataTemplate = data.ui_datatemplate
+		
+		obj.onPreStart = data.on_prestart
+		obj.onStart = data.on_start
+		obj.onPreComplete = data.on_precomplete
+		obj.onComplete = data.on_complete
+		obj.onPreFail = data.on_prefail
+		obj.onFail = data.on_fail
+		obj.onPreExpire = data.on_preexpire
+		obj.onTurnExpire = data.on_turn_expire
+		obj.onDebugSkipStart = data.on_debug_skip_start
+		obj.onPlayerTurnStart = data.on_player_turn_start
+		obj.onPlayerTurnEnd = data.on_player_turn_end
+		obj.onObjectiveEnd = data.on_objective_end
+		
+		obj.startConditions = data.start_conditions or {}
+		
+		--Fail conditions
+		local failConditions = obj.failConditions or {}
+		
+		local data_fail_conditions = data.failure_conditions or {}
+		for i=1, #data_fail_conditions do
+			local t = data.failure_conditions[i]
+			table.insert(failConditions, t)
+		end
+		
+		obj.failConditions = {
+			condition = "Boolean",
+			boolean = data.failure_check,
+			minRequired = data.failure_num,
+			subconditions = failConditions,
+		}
+		
+		obj.canFail = data.can_fail
+		obj.failResult = data.fail_result
+		
+		if data.use_takeback_timer then
+			
+			if data.takeback_id == nil then
+				error("Takeback Requires ID!!!")
+			end
+			
+			local takebacktimeWarning = {
+				action = "CreateWarningObjective", 
+				title = data.takeback_title,
+				description = data.takeback_description,
+				start_intel = data.takeback_start_intel,
+				complete_intel = data.takeback_complete_intel,
+				fail_intel = data.takeback_fail_intel,
+				parent_id = data.objective_id,
+				objective_type = data.objective_type,
+				id = data.takeback_id,
+				
+				countCondition = "TIMER",
+				timer_start_time = data.takeback_time,
+				flashThreshold = data.takeback_flash_at,
+			}
+			obj.takebackObjectiveID = takebacktimeWarning.id
+			
+			obj.takebacktime_triggered = false
+			obj.takebacktimeCheck = {
+				condition = "ObjectiveTimer",
+				number = 0,
+				id = takebacktimeWarning.id,
+			}
+			obj.takebacktimeComplete = {
+				action = "StopObjective",
+				id = takebacktimeWarning.id,
+			}
+			
+			--create/initialize takeback objective
+			table.insert(obj.onStart, {playbill = {conditions = {}, actions = {takebacktimeWarning},},})
+			
+		end
+			
+		--Complete conditions
+		local completeConditions = obj.completeConditions or {}
+		
+		-- Work out existing condition max counter
+		obj.objectiveCounterMax = 0
+		if scartype(obj.completeConditions) == ST_TABLE then
+			for i=1, #obj.completeConditions do
+				local condition = obj.completeConditions[i]
+				local count_function = nil
+				if scartype(condition.condition) == ST_STRING then
+					count_function = _G["Condition_"..condition.condition.."_GetCount"]
+				end
+				if count_function ~= nil then
+					obj.objectiveCounterMax = obj.objectiveCounterMax +
+					count_function(condition, nil).max
+				else
+					obj.objectiveCounterMax = obj.objectiveCounterMax + 1
+				end
+			end
+		end
+		
+		for i=1, #data.completion_conditions do
+			local t = data.completion_conditions[i]
+			table.insert(completeConditions, t)
+		end
+		
+		obj.completeConditions = {
+			condition = "Boolean",
+			boolean = data.completion_check,
+			minRequired = data.completion_num,
+			subconditions = completeConditions,
+		}
+		
+		obj.canComplete = data.can_Complete
+		
+		--Counters and Timers
+		obj.countCondition = data.count_condition
+		
+				
+		-- Override timer start time based on difficulty if the overrides are
+		-- specified.
+		if data.count_condition == "TIMER" then
+			local difficulty = Game_GetSPDifficulty()
+			if difficulty == GD_EASY and data.timer_start_time_easy > 0 then
+				data.timer_start_time = data.timer_start_time_easy
+			elseif difficulty == GD_HARD and data.timer_start_time_hard > 0 then
+				data.timer_start_time = data.timer_start_time_hard
+			elseif difficulty == GD_EXPERT and data.timer_start_time_expert > 0 then
+				data.timer_start_time = data.timer_start_time_expert
+			end
+		end
+		
+			--counter
+		if obj.completeConditions.boolean == "ANY" then
+			obj.objectiveCounterMax =  data.completion_num
+		else
+			obj.objectiveCounterMax = obj.objectiveCounterMax + #data.completion_conditions
+		end
+		obj.checkCompleteConditions = data.check_complete_conditions
+		obj.checkFailConditions = data.check_fail_conditions
+		
+		--UI Callouts TODO-- Initialize data to make package of all locations and their conditions {{}}
+		if next(data.ui_callouts) ~= nil then
+			print("UI CALLOUTS -- Exist")
+			local callouts = data.ui_callouts
+			local uiCalloutPackages = {}
+			
+			for i=1, #callouts do
+
+				-- DEPRECATE ANVIL BEGIN- Once the strings in prefabs are set to use the locstring editor, this conversion to a number can be removed and the title could be directly used as a LocID
+				-- Temporarily support adding a number for the text field
+				-- which can be a LocID. This should be removed once loc strings
+				-- are supported in the prefabs.
+				
+				-- If it is not a LocString
+				if Loc_GetString(callouts[i].text) == Loc_Empty() then
+					
+					local text_as_number = tonumber(callouts[i].text)
+					
+					-- If it can be converted to a number
+					if text_as_number ~= nil then
+						
+						callouts[i].text = text_as_number
+						
+					end
+				end
+				-- DEPRECATE ANVIL END
+
+				--Create UI packages
+				if callouts[i].target == "Target Locations" then
+					
+					--TARGET GROUPS
+					for ii=1, #obj.targetGroups do
+						
+						--basic package contents
+						local package = {}
+						package.callout = callouts[i]
+						package.where = obj.targetGroups[ii]
+						
+						--start conditions
+						if callouts[i].start_callout == "Proximity" then
+							package.startCondition = {
+								condition = "UnitAtLocation",
+								player = player1,
+								location_target_type = "MARKER",
+								position = Util_GetPosition(obj.targetGroups[ii]),
+								range = callouts[i].proximity_trigger,
+								comparison = IS_GREATER_THAN_OR_EQUAL,
+								amount = 1,
+							}
+						elseif callouts[i].start_callout == "Condition" then
+							package.startCondition = callouts[i].start_conditions
+						end
+							
+						--end conditions
+						if callouts[i].end_callout == "Condition" then
+							package.endCondition = callouts[i].end_conditions
+						end
+						
+						table.insert(uiCalloutPackages, package)
+					end
+					
+				elseif callouts[i].target == "Group" then
+						
+					--GROUPS
+					local CreateUICalloutPackage = function(callout, group)
+						--basic package contents
+						local package = {}
+						package.callout = callout
+						package.where = group
+							
+						--start conditions
+						if callout.start_callout == "Proximity" then
+							package.startCondition = 
+							{
+								condition = "UnitAtLocation",
+								player = player1,
+								location_target_type = "MARKER",
+								position = Util_GetPosition(group),
+								range = callout.proximity_trigger,
+								comparison = IS_GREATER_THAN_OR_EQUAL,
+								amount = 1,
+							}
+						elseif callout.start_callout == "Condition" then
+							package.startCondition = callout.start_conditions
+						end
+							
+						--end conditions
+						if callout.end_callout == "Condition" then
+							package.endCondition = callout.end_conditions
+						end
+							
+						return package
+						
+					end
+					
+					local ProcessUICalloutPackage = function(callout, group, group_type)
+						local package = CreateUICalloutPackage(callout, group)
+						if callout.end_callout == "Death" then
+							local sgroup = nil
+							local egroup = nil
+							if group_type == "SGROUP" then
+								sgroup = group
+							elseif group_type == "EGROUP" then
+								egroup = group
+							end
+							package.endCondition = {
+								condition = "HealthPercentage",
+								percentage = 0.0,
+								comparison = IS_LESS_THAN_OR_EQUAL,
+								target = group_type,
+								sgroup = sgroup,
+								egroup = egroup
+							}
+						end
+						table.insert(uiCalloutPackages, package)
+					end
+					
+					if callouts[i].start_callout == "Condition" then
+						--We can't load the contents of the group until the condition is met
+						local package = CreateUICalloutPackage(callouts[i], nil)
+						table.insert(uiCalloutPackages, package)
+					else
+						objectiveutil_CreateGroupUICalloutPackages(callouts[i], ProcessUICalloutPackage)
+					end
+					
+				elseif callouts[i].target == "Marker" then
+					
+					--MARKERS
+					for ii=1, #callouts[i].markers do
+						
+						local marker = Prefab_ReplaceDataWithProperType(callouts[i].markers[ii].location, {type = ST_MARKER})
+						local range = Marker_GetProximityRadiusOrDefault(marker, 50)
+						
+						--basic package contents
+						local package = {}
+						package.callout = callouts[i]
+						package.where = marker
+						
+						--start conditions
+						if callouts[i].start_callout == "Proximity" then
+							package.startCondition = {
+								condition = "UnitAtLocation",
+								player = player1,
+								location_target_type = "MARKER",
+								position = marker,
+								range = range,
+								comparison = IS_GREATER_THAN_OR_EQUAL,
+								amount = 1,
+							}
+						elseif callouts[i].start_callout == "Conditions" then
+							package.startCondition = callouts[i].start_conditions
+						end
+						
+						--end conditions
+						if callouts[i].end_callout == "Condition" then
+							package.endCondition = callouts[i].end_conditions
+						end
+						
+						table.insert(uiCalloutPackages, package)
+						
+					end
+					
+				elseif callouts[i].target == "Context" then
+					local package = {}
+					package.callout = callouts[i]
+					package.where = Context_ExtractTargetFromContext(context)
+					
+					local context_pos, _, _ = Context_ExtractInfoFromContext(context)
+					
+					
+					if callouts[i].start_callout == "Proximity" then
+						package.startCondition = {
+							condition = "UnitAtLocation",
+							player = player1,
+							location_target_type = "MARKER",
+							position = context_pos,
+							range = package.callout.proximity_trigger,
+							comparison = IS_GREATER_THAN_OR_EQUAL,
+							amount = 1,
+						}
+					elseif callouts[i].start_callout == "Conditions" then
+						package.startCondition = callouts[i].start_conditions
+					end
+					
+					if callouts[i].end_callout == "Condition" then
+						package.endCondition = callouts[i].end_conditions
+					end
+					
+					table.insert(uiCalloutPackages, package)
+				end
+				
+			end
+			
+			obj.uiCalloutPackages = uiCalloutPackages
+		end
+		
+		return obj
+		
+	end
+end
+
+function objectiveutil_CreateGroupUICalloutPackages(group_callout, ProcessUICalloutPackage)
+	local egroup_count = 0
+	local sgroup_count = 0
+	
+	if group_callout.target_egroup ~= nil then
+		egroup_count = EGroup_CountSpawned(group_callout.target_egroup)
+	end
+	
+	if group_callout.target_sgroup ~= nil then
+		sgroup_count = SGroup_CountSpawned(group_callout.target_sgroup)
+	end
+	
+	--EGROUPS
+	for ii=1, egroup_count do
+		local group = EGroup_CreateUnique("")
+		local entity = EGroup_GetSpawnedEntityAt(group_callout.target_egroup, ii)
+		EGroup_Add(group, entity)
+		ProcessUICalloutPackage(group_callout, group, "EGROUP")
+	end
+	
+	--SGROUPS
+	for ii = 1, sgroup_count do
+		local group = SGroup_CreateUnique("")
+		local squad = SGroup_GetSpawnedSquadAt(group_callout.target_sgroup, ii)
+		SGroup_Add(group, squad)
+		ProcessUICalloutPackage(group_callout, group, "SGROUP")
+	end
+end
+
+
+function objectiveutil_SubObjective_Init(data, context, saveInfo)
+	
+	-- SETUP DESTRUCTIBLE TARGETS and DATA TABLE
+	local objective = data or {}
+	
+	--Registers sub objectives
+	local subObjectives = {}
+	for k, v in ipairs(data.sub_objectives) do
+		
+
+		local subObjectiveSaveInfo = nil
+		if saveInfo ~= nil then
+			subObjectiveSaveInfo = PartialSave_FindSubObjectiveSaveInfo(v, saveInfo.subObjectiveSaveData)
+		end
+		local subObj = objectiveutil_ObjectiveInit(v, context, subObjectiveSaveInfo)
+		subObj.objectiveData.parent = {
+			Title = data.title,
+			Description = data.title,
+		}
+		--Adds sub objective data to a list of sub objectives for this objective
+		table.insert(subObjectives, subObj)
+		
+	end
+	objective.subObjectives = subObjectives
+	
+	--Completion conditions
+	objective.completeConditions = {}
+	objective.failConditions = {}
+	if objective.allow_complete_or_fail then
+		for k, v in ipairs(subObjectives) do
+			local t = {
+				condition = "Boolean",
+				boolean = "ANY",
+				minRequired = 1,
+				subconditions = {
+					{
+						condition = "ObjectiveIsComplete",
+						id = v.objective_id,
+					},
+					{
+						condition = "ObjectiveIsFailed",
+						id = v.objective_id,
+					},
+				},
+			}
+			table.insert(objective.completeConditions, t)
+		end
+	else
+		for k, v in ipairs(subObjectives) do
+			local t = {
+				condition = "ObjectiveIsComplete",
+				id = v.objective_id,
+			}
+			table.insert(objective.completeConditions, t)
+		end
+		
+		for k, v in ipairs(subObjectives) do
+			local t = {
+				condition = "ObjectiveIsFailed",
+				id = v.objective_id,
+			}
+			table.insert(objective.failConditions, t)
+		end
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_SubObjective_Preset(data)
+	
+end
+
+function objectiveutil_SubObjective_Start(data)
+	
+end
+
+-----------
+--Empty--
+function objectiveutil_Blank_Init(data)
+	
+	return data
+end
+
+function objectiveutil_Blank_Preset(data)
+	
+end
+
+function objectiveutil_Blank_Start(data)
+	
+end
+----------
+
+function objectiveutil_Destroy_Init(data, context, saveInfo)
+	
+	-- SETUP DESTRUCTIBLE TARGETS and DATA TABLE
+	local objective = data or {}
+	objective = objectiveutil_SetupTargets(data, context, saveInfo)
+	
+	local max_remaining = 0
+	if objective.success_type == "Percentage" then
+		-- This is updated in start, in case things aren't spawned until then
+		if data.percentage_killed > 1 then
+			data.percentage_killed = 1
+		elseif data.percentage_killed < 0 then
+			data.percentage_killed = 0
+		end
+	elseif objective.success_type == "Amount Remaining" then
+		max_remaining = objective.max_remaining
+	end
+	--Completion conditions
+	objective.completeConditions = {}
+	local agg = {
+		condition = "AggregatedCount",
+		comparison = IS_LESS_THAN_OR_EQUAL,
+		accumulator = "SUM",
+		number = max_remaining,
+		subconditions = {},
+		use_subconditions_for_count = true,
+	}
+	table.insert(objective.completeConditions, agg)
+	
+	for i=1, #objective.targetGroups do
+		local t = {
+			condition = "GroupCount",
+			comparison = IS_GREATER_THAN_OR_EQUAL,
+			number = 0
+		}
+		if scartype(objective.targetGroups[i]) == ST_EGROUP then
+			t.target = "EGROUP"
+			t.egroup = objective.targetGroups[i]
+		elseif scartype(objective.targetGroups[i]) == ST_SGROUP then
+			t.target = "SGROUP"
+			t.sgroup = objective.targetGroups[i]
+		end
+		table.insert(agg.subconditions, t)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_Destroy_Preset(data)
+	
+end
+
+
+function objectiveutil_Destroy_Start(objective)
+	local data = objective.prefabData
+	local count = 0
+	for i = 1, #objective.targetGroups do
+		if scartype(objective.targetGroups[i]) == ST_EGROUP then
+			count = count + EGroup_Count(objective.targetGroups[i])
+		elseif scartype(objective.targetGroups[i]) == ST_SGROUP then
+			count = count + SGroup_Count(objective.targetGroups[i])
+		end
+	end
+	
+	if data.success_type == "Percentage" then
+		local condition = objective.completeConditions.subconditions[1]
+		condition.number = math.ceil((1-data.percentage_killed) * count)
+		condition.starting_amount = count
+	end
+	
+	-- If there is an path to follow for targets
+	
+	for i = 1, #data.target_locations do
+		
+		local targetLocation = data.target_locations[i]
+		
+		if #targetLocation.escort_path > 0 then
+			
+			if scartype(targetLocation.target_sgroup) ~= ST_SGROUP then
+				
+				error("Path can only be for an sgroup")
+				
+			end
+			
+			Rule_AddOneShot(objectiveutil_Destroy_Move, 1, {data = data, targetLocation = targetLocation})
+			
+		end
+		
+	end
+end
+
+function objectiveutil_Destroy_Move(context, data)
+	
+	local currentTargetLocation = data.targetLocation
+	
+	objectiveutil_FollowPath(currentTargetLocation.target_sgroup, currentTargetLocation.escort_path)
+	
+end
+
+
+function objectiveutil_Capture_Init(data, context, saveInfo)
+	
+	-- SETUP CAPTURE TARGETS and DATA TABLE
+	local objective = objectiveutil_SetupTargets(data, context, saveInfo)
+	
+	--Completion conditions
+	objective.completeConditions = {}
+	
+	for i=1, #objective.targetGroups do
+		local t = {
+			condition = "PlayerOwner",
+			player = player1,
+			opt_useTeam = objective.use_team,
+			item = objective.targetGroups[i],
+			debug_radius = objective.debug_radius
+		}
+		table.insert(objective.completeConditions, t)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_Capture_Preset(data)
+	
+end
+
+function objectiveutil_Capture_Start(data)
+	
+end
+
+
+
+function objectiveutil_Defend_Init(data, context, saveInfo)
+	
+	-- SETUP DEFEND TARGETS and DATA TABLE
+	local objective = objectiveutil_SetupTargets(data, context, saveInfo)
+	
+	--COMPLETE and FAIL conditions
+	objective.failConditions = {}
+	objective.completeConditions = {}
+	
+	
+	if data.defend_target == "Destroy Target" then
+		
+		for i=1, #objective.targetGroups do
+			--Fail
+			local tempFailCondition = {
+				condition = "GroupKilled",
+				player = player1,
+				group = objective.targetGroups[i],
+				desiredResult = true,
+			}
+			table.insert(objective.failConditions, tempFailCondition)
+			
+			--Complete
+			local tempCompleteCondition = {
+				condition = "GroupKilled",
+				player = player1,
+				group = objective.targetGroups[i],
+				desiredResult = false,
+			}
+			table.insert(objective.completeConditions, tempCompleteCondition)
+		end
+		
+	elseif data.defend_target == "Capture Target" then
+		
+		for i=1, #objective.targetGroups do
+			--Fail
+			local tempFailCondition = {
+				condition = "Boolean",
+				boolean = "NONE",
+				minRequired = 1,
+				subconditions =	{{
+					condition = "PlayerOwner",
+					player = player1,
+					item = objective.targetGroups[i],
+				}},
+			}
+			table.insert(objective.failConditions, tempFailCondition)
+			
+			--Complete
+			local tempCompleteCondition = {
+				condition = "PlayerOwner",
+				player = player1,
+				item = objective.targetGroups[i],
+			}
+			table.insert(objective.completeConditions, tempCompleteCondition)
+		end
+		
+	end
+	
+	
+	--TIMER and WAVE conditions
+	if data.defend_type == "Timer" then
+		
+		--TODO
+		
+	elseif data.defend_type == "Waves" then
+		--TODO
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_Defend_Preset(data)
+	
+end
+
+function objectiveutil_Defend_Start(data)
+	
+	if data.defend_type == "Timer" then
+		
+	elseif data.defend_type == "Waves" then
+		
+	end
+	
+end
+
+
+
+function objectiveutil_ClearArea_Init(data)
+	
+	-- SETUP TARGET AREA and DATA TABLE
+	local objective = data or {}
+	
+	--Completion conditions
+	objective.completeConditions = {}
+	
+	for i=1, #objective.area_locations do
+		local t = {
+			condition = "UnitAtLocation",
+			player = g_enemy_team.players[1].id,
+			use_team = true,
+			location_target_type = "MARKER",
+			position = objective.area_locations[i].location,
+			amount = 0,
+			comparison = IS_LESS_THAN_OR_EQUAL,
+		}
+		table.insert(objective.completeConditions, t)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_ClearArea_Preset()
+
+end
+
+function objectiveutil_ClearArea_Start()
+
+end
+
+-- CompleteMission / CompletePopupMission Helpers
+
+function objectiveutil_StartMissionObjective(objective, saveInfo, mission_entity)
+	
+	
+	g_missionResults = g_missionResults or {}
+	
+	if saveInfo == nil then
+		objective.currentMissionResultIndex = #g_missionResults + 1
+	else
+		objective.currentMissionResultIndex = saveInfo.currentMissionResultIndex
+	end
+	objective.missionEntryPointEntityID = Entity_GetID(mission_entity)
+end
+
+function objectiveutil_UpdateMissionStatus(objective)
+	
+	local missionResults = g_missionResults
+	local missionResultCount = #missionResults
+	local currentMissionResultIndex = objective.currentMissionResultIndex
+	if currentMissionResultIndex == nil then
+		return
+	end
+	for i=currentMissionResultIndex, missionResultCount do
+		-- Process each new mission entry. If the entry point entity
+		-- matches the entry then we play the corresponding intel. In the case of
+		-- a loss we set the is_mission_lost flag to true so that the fail condition
+		-- if it exists can fail the objective.
+		local resultEntry = missionResults[i]
+		if objective.missionEntryPointEntityID == resultEntry.entry_point_id then
+			if resultEntry.is_local_player_winner then
+				objective.is_mission_complete = true
+			else
+				objective.is_mission_lost = true
+			end
+		end
+	end
+end
+
+function objectiveutil_CheckMissionSuccess(condition, context)
+	
+	local objective = condition.objective
+	objectiveutil_UpdateMissionStatus(objective)
+	return objective.is_mission_complete
+	
+end
+
+function objectiveutil_CheckMissionFail(condition, context)
+	
+	local objective = condition.objective
+	objectiveutil_UpdateMissionStatus(objective)
+	
+	if condition.fail_on_entry_point_killed then
+		local entryPointID = objective.missionEntryPointEntityID
+		if entryPointID == nil or (not Entity_IsValid(entryPointID)) or (not Entity_IsAlive(Entity_FromID(entryPointID))) then
+			return true
+		end
+	end
+	return objective.is_mission_lost
+	
+end
+
+
+function objectiveutil_CompleteMission_Init(data)
+	
+	local objective = data or {}
+	
+	objective.is_mission_lost = false
+	
+	--Loss Dialogue
+	if scartype(data.mission_loss_narrative_event) == ST_STRING and data.mission_loss_narrative_event ~= "" then
+		objective.mission_loss_narrative_event = objectiveutil_StringToNarrativeEvent(data.mission_loss_narrative_event)
+	end
+	
+	if scartype(data.mission_win_narrative_event) == ST_STRING and data.mission_win_narrative_event ~= "" then
+		objective.mission_win_narrative_event = objectiveutil_StringToNarrativeEvent(data.mission_win_narrative_event)
+	end
+	
+	--Completion conditions
+	objective.completeConditions = {}
+	
+	local completeCondition = {
+		condition = objectiveutil_CheckMissionSuccess,
+		objective = objective,
+	}
+	table.insert(objective.completeConditions, completeCondition)
+	
+	if not data.is_defend_mission then
+		local t = {
+			condition = "PlayerOwner",
+			item = data.mission_entity,
+			player = World_GetPlayerAt(1),
+		}
+		table.insert(objective.completeConditions, t)
+	end
+	
+	-- Fail conditions
+	if data.can_fail == true and data.include_mission_fail == true then
+		
+		objective.failConditions = {}
+		
+		local failCondition = {
+			condition = objectiveutil_CheckMissionFail,
+			objective = objective,
+		}
+		
+		table.insert(objective.failConditions, failCondition)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_CompleteMission_Preset(data)
+
+end
+
+function objectiveutil_CompleteMission_Start(objective, saveInfo)
+	local data = objective.prefabData
+	local mission_entity = EGroup_GetSpawnedEntityAt(data.mission_entity, 1)
+	objectiveutil_StartMissionObjective(objective, saveInfo, mission_entity)
+end
+
+-------------------
+--Popup Mission
+
+function objectiveutil_CompletePopupMission_Init(data, context, saveInfo)
+
+	local objective = data or {}
+	
+	local mission_entry_entity = nil
+	if saveInfo ~= nil then
+		-- Mission entry entity is already setup if we're coming from a restore.
+		-- Just grab it from the saved objective data
+		mission_entry_entity = saveInfo.completePopupMissionEntryEntity
+	elseif data.popup_spawn_type == "Position" then
+		local pos = Marker_GetPosition(data.popup_position)
+		local mission_entry_point_bp = BP_GetEntityBlueprint("mission_entry_point_popup")
+		mission_entry_entity = Entity_CreateENV(mission_entry_point_bp, pos, true)
+		Entity_Spawn(mission_entry_entity)
+	elseif data.popup_spawn_type == "SGROUP" then
+		-- Extracting the mission_entry_point_ext from the sgroup's squad's entity
+		local popup_sgroup = data.popup_sgroup
+		if SGroup_Count(popup_sgroup) ~= 1 then
+			error("Expected exactly 1 squad in this sgroup: ("..SGroup_GetName(popup_sgroup)..")."
+				.." Actual Count: ("..tostring(SGroup_Count(popup_sgroup))..")."
+				.." The popup mission can only be attached to sgroup containing one squad.")
+		end
+		local popup_squad = SGroup_GetSquadAt(popup_sgroup, 1)
+		
+		-- This entity will have mission_entry_point_ext
+		mission_entry_entity = Squad_GetMissionEntryPointEntity(popup_squad)
+		if not Entity_ExtensionExist(mission_entry_entity, "mission_entry_point_ext") then
+			error("Squad of sgroup: ".. SGroup_GetName(popup_sgroup).." does not have mission_entry_point_ext."..
+				" Consider adding one to the ebp.")
+		end
+		if not Entity_ExtensionExist(mission_entry_entity, "statemodel_ext") then
+			error("Squad of sgroup: ".. SGroup_GetName(popup_sgroup).." does not have statemodel_ext."..
+				" Consider adding one to the ebp.")
+		end
+		if not Entity_IsPopupMissionEntryPoint(mission_entry_entity) then
+			error("SBP: "..BP_GetName(Squad_GetBlueprint(popup_squad)).." of sgroup: ".. SGroup_GetName(popup_sgroup)..
+				"is not a popup mission. Consider changing it in its mission_entry_point_ext.")
+		end
+	elseif data.popup_spawn_type == "EGROUP" then
+		-- Extracting the mission_entry_point_ext from the egroup's entity
+		local popup_egroup = data.popup_egroup
+		if EGroup_Count(popup_egroup) > 1 then
+			error("More than 1 entity found in egroup: "..EGroup_GetName(popup_egroup)..
+				". The popup mission can only be attached to egroup containing one entity.")
+		end
+		-- This entity will have mission_entry_point_ext
+		mission_entry_entity = EGroup_GetEntityAt(popup_egroup, 1)
+		if not Entity_ExtensionExist(mission_entry_entity, "mission_entry_point_ext") then
+			error("Entity of egroup ".. EGroup_GetName(popup_egroup).." does not have mission_entry_point_ext."..
+				" Consider adding one to the ebp.")
+		end
+		if not Entity_ExtensionExist(mission_entry_entity, "statemodel_ext") then
+			error("Entity of egroup: ".. SGroup_GetName(popup_egroup).." does not have statemodel_ext."..
+				" Consider adding one to the ebp.")
+		end
+		if not Entity_IsPopupMissionEntryPoint(mission_entry_entity) then
+			error("SBP: "..BP_GetName(Entity_GetBlueprint(mission_entry_entity)).." of egroup: ".. EGroup_GetName(popup_egroup)..
+				"is not a popup mission. Consider changing it in its mission_entry_point_ext.")
+		end
+		
+	-- find target from context - entity, squad or location
+	elseif data.popup_spawn_type == "CONTEXT" then
+		
+		local target = Context_ExtractTargetFromContext(context)
+		if target ~= nil then
+			
+			local context_type = scartype(target)
+			if context_type == ST_SQUAD then
+				
+				-- This entity will have mission_entry_point_ext
+				mission_entry_entity = Squad_GetMissionEntryPointEntity(target)
+				if not Entity_ExtensionExist(mission_entry_entity, "mission_entry_point_ext") then
+					error("Squad: "..BP_GetName(Squad_GetBlueprint(target)).." from selection context does not have mission_entry_point_ext."..
+						" Consider adding one to the ebp.")
+				end
+				if not Entity_ExtensionExist(mission_entry_entity, "statemodel_ext") then
+					error("Squad: "..BP_GetName(Squad_GetBlueprint(target)).."  from selection context does not have statemodel_ext."..
+						" Consider adding one to the ebp.")
+				end
+				if not Entity_IsPopupMissionEntryPoint(mission_entry_entity) then
+					error("Squad: "..BP_GetName(Squad_GetBlueprint(target)).."  from selection context"..
+						"is not a popup mission. Consider changing it in its mission_entry_point_ext.")
+				end
+				
+			elseif context_type == ST_ENTITY then
+				
+				-- This entity will have mission_entry_point_ext
+				mission_entry_entity = target
+				if not Entity_ExtensionExist(mission_entry_entity, "mission_entry_point_ext") then
+					error("Entity: "..BP_GetName(Entity_GetBlueprint(mission_entry_entity)).." from selection context does not have mission_entry_point_ext."..
+						" Consider adding one to the ebp.")
+				end
+				if not Entity_ExtensionExist(mission_entry_entity, "statemodel_ext") then
+					error("Entity: "..BP_GetName(Entity_GetBlueprint(mission_entry_entity)).." from selection context does not have statemodel_ext."..
+						" Consider adding one to the ebp.")
+				end
+				if not Entity_IsPopupMissionEntryPoint(mission_entry_entity) then
+					error("Entity: "..BP_GetName(Entity_GetBlueprint(mission_entry_entity)).." from selection context"..
+						"is not a popup mission. Consider changing it in its mission_entry_point_ext.")
+				end
+				
+			elseif context_type == ST_SCARPOS then
+
+				local pos = Marker_GetPosition(target)
+				local mission_entry_point_bp = BP_GetEntityBlueprint("mission_entry_point_popup")
+				mission_entry_entity = Entity_CreateENV(mission_entry_point_bp, pos, true)
+				Entity_Spawn(mission_entry_entity)
+
+			end
+
+		end
+		
+	end
+	
+	local localPlayer = World_GetPlayerAt(1)
+	local enemyPlayer = World_GetPlayerAt(2)
+	
+	if saveInfo == nil then
+		Entity_SetMissionNodeData(mission_entry_entity, enemyPlayer, data.map_data)
+	end
+	
+	--Completion conditions
+	objective.completeConditions = {}
+	
+	local t = {
+		condition = objectiveutil_CheckMissionSuccess,
+		objective = objective,
+	}
+	
+	table.insert(objective.completeConditions, t)
+	
+	-- Fail conditions
+	objective.failConditions = {}
+	
+	local failCondition = {
+		condition = objectiveutil_CheckMissionFail,
+		objective = objective,
+		fail_on_entry_point_killed = true,
+	}
+	
+	table.insert(objective.failConditions, failCondition)
+	
+	objective.mission_entry_entity = mission_entry_entity
+	
+	if saveInfo == nil then
+		Entity_SetPopupMissionEntityKillOnEndStatus(mission_entry_entity, data.kill_mission_entity_on_end)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_CompletePopupMission_Preset(data)
+
+end
+
+function objectiveutil_CompletePopupMission_Start(objective, saveInfo)
+	objectiveutil_StartMissionObjective(objective, saveInfo, objective.mission_entry_entity)
+end
+
+function objectiveutil_CompletePopupMission_Cleanup(objective)
+	if Entity_IsAlive(objective.mission_entry_entity) then
+		Entity_ClearMissionNodeData(objective.mission_entry_entity)
+	end
+end
+
+function objectiveutil_Rescue_Init(data)
+	
+	data = data or {}
+	data.modifier_ids = {}
+	local vehicle_hardpoints = 0
+	local CountHardpoints = function (sgroup)
+		local count = 0
+		local CountHardpointsForeach = function (entity)
+			count = math.max(count, Entity_GetWeaponHardpointCount(entity))
+		end
+		SGroup_CallEntityFunction(sgroup, CountHardpointsForeach)
+		return count
+	end
+	local AddDamageModifier = function(n, group, mod)
+		if mod ~= 1 then
+			for i = 1, n do
+				table.insert(data.modifier_ids, Modify_WeaponDamage(group,
+						"hardpoint_"..i,
+						mod))
+			end
+		end
+	end
+	------
+	-- This function is called on each troop table in the prefab, enemy or rescuee
+	-- each entry is spawned (potentially in a hold), and vehicles and buildings
+	-- get their armor, damage received, and damage adjusted here because it may differ between troops.
+	------
+	local SpawnTroop = function(troop, target_owner, sgroup)
+		local sgroups = {sgroup}
+		if troop.sgroup ~= nil then
+			table.insert(sgroups, troop.sgroup)
+		end
+		local temp_sgroup = nil
+		if troop.lock_squads then
+			temp_sgroup = SGroup_CreateUnique()
+			table.insert(sgroups, temp_sgroup)
+		end
+		-- Spawn in hold check
+		local spawnLocation = nil
+		if troop.spawn_type == "Vehicle" then -- Vehicle Case
+			spawnLocation = troop.vehicle_sgroup
+			-- Modify the armor & damage received & damage of the vehicle
+			if troop.entity_armor_multiplier ~= 1 then
+				table.insert(data.modifier_ids, Modify_Armor(troop.vehicle_sgroup, troop.entity_armor_multiplier))
+			end
+			if troop.entity_received_multiplier ~= 1 then
+				table.insert(data.modifier_ids, Modify_ReceivedDamage(troop.vehicle_sgroup, troop.entity_received_multiplier))
+			end
+			local count = CountHardpoints(troop.vehicle_sgroup)
+			vehicle_hardpoints = count
+			AddDamageModifier(vehicle_hardpoints, troop.vehicle_sgroup, troop.vehicle_damage_multiplier)
+			troop.vehicle_squad_sgroup = SGroup_CreateUnique("vehicle_squad")
+			table.insert(sgroups, troop.vehicle_squad_sgroup)
+		else -- Building or Regular (on the map) spawn
+			if troop.spawn_type == "Building" then -- Building Case
+				spawnLocation = troop.building_egroup
+				if troop.entity_armor_multiplier ~= 1 then
+					table.insert(data.modifier_ids, Modify_Armor(troop.building_egroup, troop.entity_armor_multiplier))
+				end
+				if troop.entity_received_multiplier ~= 1 then
+					table.insert(data.modifier_ids, Modify_ReceivedDamage(troop.building_egroup, troop.entity_received_multiplier))
+				end
+			else
+				spawnLocation = Util_GetPosition(troop.location)
+			end
+		end
+		Util_CreateSquads(target_owner, sgroups, troop.sbp, spawnLocation, 
+			nil,troop.squad_count, troop.loadout_count, nil, nil, 
+			troop.upgrade_pbg, troop.facing)
+		if troop.lock_squads and temp_sgroup ~= nil then
+			AI_LockSquads(target_owner, temp_sgroup)
+			SGroup_Destroy(temp_sgroup)
+		end
+	end
+	
+	-- Spawn Rescuees
+	local rescuees = data.rescuees
+	data.rescuee_sgroup = data.opt_rescuee_sgroup or SGroup_CreateUnique("rescuees")
+	if scartype(rescuees) ~= ST_TABLE or next(rescuees) == nil then
+		error("No Rescuees Provided!")
+	end
+	data.rescuee_owner = data.rescuee_owner or World_GetPlayerAt(3)
+	for i = 1, #rescuees do
+		local rescuee = rescuees[i]
+		SpawnTroop(rescuee, data.rescuee_owner, data.rescuee_sgroup)
+	end
+	
+	--Apply multipliers/time minimums to rescuees
+	if data.min_time > 0 then
+		local data_entry = {
+			iteration = 1,
+			data = data
+		}
+		if not Rule_Exists(RescueAdjustInvulnerability) then
+			_Rescue_Invulnerability_List = {data_entry}
+			Rule_AddInterval(RescueAdjustInvulnerability, 1)
+		else
+			table.insert(_Rescue_Invulnerability_List, data_entry)
+		end
+	end
+	
+	if data.rescuee_armor_multiplier ~= 1 then
+		table.insert(data.modifier_ids, Modify_Armor(data.rescuee_sgroup, data.rescuee_armor_multiplier))
+	end
+	if data.rescuee_received_multiplier ~= 1 then
+		table.insert(data.modifier_ids, Modify_ReceivedDamage(data.rescuee_sgroup, data.rescuee_received_multiplier))
+	end
+	local rescuee_hardpoints = CountHardpoints(data.rescuee_sgroup)
+	AddDamageModifier(rescuee_hardpoints, data.rescuee_sgroup, data.rescuee_damage_multiplier)
+	
+	-- Spawn Enemies
+	data.enemy_owner = data.enemy_owner or World_GetPlayerAt(2)
+	data.enemy_sgroup = data.opt_enemy_sgroup or SGroup_CreateUnique("rescue_enemies")
+	for i = 1, #data.enemies do
+		local enemy = data.enemies[i]
+		SpawnTroop(enemy, data.enemy_owner, data.enemy_sgroup)
+	end
+	
+	-- Setup UI for UICallouts TargetLocations option
+	data.targetGroups = {data.rescuee_sgroup}
+	
+	------
+	-- This function starts the combat stage of the beat, and adjusts all the mods for that
+	-- also adds the healthbar
+	------
+	local EnterArea = function(data_table)
+		local data = data_table.data
+		local rescuees = data_table.rescuees
+		-- Apply rescuee second multipliers
+		if data.in_range_armor_multiplier ~= 1 then
+			table.insert(data.modifier_ids,
+				Modify_Armor(data.rescuee_sgroup, data.in_range_armor_multiplier))
+		end
+		if data.in_range_received_multiplier ~= 1 then
+			table.insert(data.modifier_ids,
+				Modify_ReceivedDamage(data.rescuee_sgroup, data.in_range_received_multiplier))
+		end
+		AddDamageModifier(rescuee_hardpoints, data.rescuee_sgroup, data.in_range_damage_multiplier)
+		if data.end_inv_in_area then
+			data.end_invulnerability = true
+		end
+		-- Show rescuee healthbar
+		data.healthbar_group = SGroup_CreateUnique("rescue_healthbar")
+		SGroup_AddGroup(data.healthbar_group, data.rescuee_sgroup)
+		for i = 1, #rescuees do
+			local troop = rescuees[i]
+			if troop.spawn_type == "Vehicle" then
+				-- Apply vehicle second multipliers
+				if troop.in_range_armor_multiplier ~= 1 then
+					table.insert(data.modifier_ids, Modify_Armor(troop.vehicle_sgroup, troop.in_range_armor_multiplier))
+				end
+				if troop.in_range_received_multiplier ~= 1 then
+					table.insert(data.modifier_ids, Modify_ReceivedDamage(troop.vehicle_sgroup, troop.in_range_received_multiplier))
+				end
+				AddDamageModifier(vehicle_hardpoints, troop.vehicle_sgroup, troop.in_range_damage_multiplier)
+				--Add vehicle to healthbar, remove its troops from healthbar
+				SGroup_AddGroup(data.healthbar_group, troop.vehicle_sgroup)
+				SGroup_RemoveGroup(data.healthbar_group, troop.vehicle_squad_sgroup)
+			else
+				if troop.spawn_type == "Building" then
+					--apply building second armor/damage received multiplier
+					if troop.in_range_armor_multiplier ~= 1 then
+						table.insert(data.modifier_ids, Modify_Armor(troop.building_egroup, troop.in_range_armor_multiplier))
+					end
+					if troop.in_range_received_multiplier ~= 1 then
+						table.insert(data.modifier_ids, Modify_ReceivedDamage(troop.building_egroup, troop.in_range_received_multiplier))
+					end
+				end
+			end
+		end
+		data.health_bar_id = Objective_AddHealthBar(data.objectiveData, 1, data.healthbar_group, data.title, false)
+		Rule_RemoveMe()
+	end
+	local radius = Marker_GetProximityRadiusOrDefault(data.rescue_area, 40)
+	for index = 1, World_GetPlayerCount() do
+		local human = World_GetPlayerAt(index)
+		if Player_IsHuman(human) then
+			local data_table = {
+				data = data,
+				rescuees = rescuees
+			}
+			data.proximity_rule_id = Rule_EnterProximity(EnterArea, false, human,
+				data.rescue_area, radius, true, data_table)
+			break
+		end
+	end
+	
+	-- Setup Complete Conditions
+	data.completeConditions = data.completeConditions or {}
+	local killEnemies = {
+		condition = "UnitAtLocation",
+		comparison = IS_LESS_THAN_OR_EQUAL,
+		amount = data.max_remaining,
+		location_target_type = "MARKER",
+		position = data.rescue_area,
+		player = data.enemy_owner,
+		opt_useTeam = true
+	}
+	table.insert(data.completeConditions, killEnemies)
+	
+	-- Setup Failure Conditions
+	data.failConditions = data.failConditions or {}
+	data.can_fail = true
+	local saveAmount = data.min_rescued
+	if saveAmount == -1 then
+		saveAmount = SGroup_Count(data.rescuee_sgroup)
+	end
+	local rescueesDead = {
+		condition = "GroupCount",
+		target = "SGROUP",
+		sgroup = data.rescuee_sgroup,
+		comparison = IS_LESS_THAN,
+		number = saveAmount,
+		spawned_only = true,
+	}
+	table.insert(data.failConditions, rescueesDead)
+	
+	return data
+end
+
+-------
+-- This function gives the rescuees and their buildings/vehicles an
+-- invulnerabilitymincap, and decreases it once a second until its at 0
+-------
+function RescueAdjustInvulnerability()
+	local data_table = _Rescue_Invulnerability_List
+	local rule_still_needed = false
+	local i = 1
+	while i <= #data_table do
+		local entry = data_table[i]
+		local cap = 1 - (entry.iteration / math.ceil(entry.data.min_time))
+		if cap <= 0 or
+			Obj_GetState(entry.data.objectiveData.ID) == OS_Complete or
+			Obj_GetState(entry.data.objectiveData.ID) == OS_Failed or
+			(not SGroup_IsValid(entry.data.rescuee_sgroup.SGroupID)) or
+			entry.data.end_invulnerability then -- Invulnerability is done
+			
+			table.remove(data_table, i)
+		else
+			rule_still_needed = true
+			local setEntityInvulnerability = function(egroup, index, entity)
+				Entity_SetInvulnerableMinCap(entity, cap, 1)
+			end
+			local setSquadInvulnerability = function(sgroup, index, squad)
+				Squad_SetInvulnerableMinCap(squad, cap, 1)
+			end
+			
+			-- give the rescuees invulnerability
+			SGroup_ForEach(entry.data.rescuee_sgroup, setSquadInvulnerability)
+			
+			-- give the buildings and vehicles invulnerability
+			for i = 1, #entry.data.rescuees do
+				local troop = entry.data.rescuees[i]
+				if troop.spawn_type == "Building" then
+					EGroup_ForEach(troop.building_egroup, setEntityInvulnerability)
+				elseif troop.spawn_type == "Vehicle" then
+					SGroup_ForEach(troop.vehicle_sgroup, setSquadInvulnerability)
+				end
+			end
+			
+			-- advance the invulnerability progression
+			entry.iteration = entry.iteration + 1
+			i = i + 1
+		end
+	end
+	if not rule_still_needed then
+		Rule_RemoveMe()
+	end
+end
+
+function objectiveutil_Rescue_Preset(data)
+	
+end
+
+function objectiveutil_Rescue_Start(data)
+
+end
+
+function objectiveutil_Rescue_Cleanup(data)
+	Modifier_Remove(data.modifier_ids)
+	for i = 1, #data.rescuees do
+		local troop = data.rescuees[i]
+		if troop.vehicle_squad_sgroup ~= nil then
+			SGroup_Destroy(troop.vehicle_squad_sgroup)
+		end
+	end
+	if data.opt_rescuee_sgroup == nil then
+		SGroup_Destroy(data.rescuee_sgroup)
+	end
+	if data.opt_enemy_sgroup == nil then
+		SGroup_Destroy(data.enemy_sgroup)
+	end
+	if data.healthbar_group ~= nil then
+		Objective_RemoveHealthBar(data.objectiveData, data.health_bar_id)
+		SGroup_Destroy(data.healthbar_group)
+	end
+	if data.proximity_rule_id ~= nil then
+		Rule_RemoveWithID(data.proximity_rule_id)
+	end
+end
+
+function objectiveutil_UseAbility_Init(data)
+	
+	local objective = data or {}
+	
+	objective.completeConditions = {}
+	objective.targetGroups = {}
+	
+	local objectiveID = data.objective_id
+	if objectiveID == nil or objectiveID == "" then 
+		fatal("ERROR: Attempting to initialize UseAbility objective without ID. A unique ID is required")
+	end
+
+	if (not Rule_Exists(objectiveutil_AbilityCompleteCallback)) then
+		Rule_AddGlobalEvent(objectiveutil_AbilityCompleteCallback, GE_AbilityComplete)
+	end
+	for i=1, #objective.ability_targets do
+		local target = objective.ability_targets[i]
+		
+		target.abilityPBG = target.ability_pbg
+		if target.abilityPBG == nil then 
+			fatal("ERROR: Attempting to initialize UseAbility objective without an ability!")
+		end
+		target.abilityRadius = target.ability_radius or 0
+		
+		local groupName = nil
+		if target.target_type == "entities" then
+			local has_ebp = target.opt_target_ebp ~= nil
+			local has_egroup = target.opt_target_egroup ~= nil
+			if(has_ebp and has_egroup) then
+				groupName = BP_GetName(target.opt_target_ebp).."_"..EGroup_GetName(target.opt_target_egroup)
+				table.insert(objective.targetGroups, target.opt_target_egroup)
+			elseif has_ebp then
+				groupName = BP_GetName(target.opt_target_ebp)
+			elseif has_egroup then
+				table.insert(objective.targetGroups, target.opt_target_egroup)
+				groupName = EGroup_GetName(target.opt_target_egroup)
+			else
+				groupName = "AnyEntity"
+			end
+		elseif target.target_type == "squads" then
+			local has_sbp = target.opt_target_sbp ~= nil
+			local has_sgroup = target.opt_target_sgroup ~= nil
+			if(has_sbp and has_sgp) then
+				groupName = BP_GetName(target.opt_target_sbp).."_"..SGroup_GetName(target.opt_target_sgroup)
+				table.insert(objective.targetGroups, target.opt_target_sgroup)
+			elseif has_sbp then
+				groupName = BP_GetName(target.opt_target_sbp)
+			elseif has_sgroup then
+				groupName = SGroup_GetName(target.opt_target_sgroup)
+				table.insert(objective.targetGroups, target.opt_target_sgroup)
+			else
+				groupName = "AnySquad"
+			end
+		elseif target.target_type == "location" then
+			groupName = "Location_"..target.location.MarkerID
+			table.insert(objective.targetGroups, target.location)
+		else
+			groupName = "Anything"
+		end
+		
+		local t = {
+			condition = "CheckLedgerValue",
+			id = "UseAbility_"..objectiveID.."_On_"..groupName,
+			number = 1,
+		}
+		target.ledger_key = t.id
+		table.insert(objective.completeConditions, t)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_UseAbility_Preset(data)
+	
+end
+
+function objectiveutil_UseAbility_Start(data)
+
+end
+
+function objectiveutil_UseAbility_Cleanup(objective)
+	
+	local removeRule = true
+	
+	for i, obj in pairs(MissionOMatic_FindAllObjectiveOfType("UseAbility")) do
+		if objective.objectiveID ~= obj.objectiveID and
+			(not Objective_IsComplete(obj.objectiveData)) and
+			(not Objective_IsFailed(obj.objectiveData)) then
+			
+			-- an objective still needs this rule, don't remove it
+			removeRule = false
+			break
+			
+		end
+		
+	end
+	
+	if removeRule then
+		Rule_RemoveGlobalEvent(objectiveutil_AbilityCompleteCallback)
+	end
+	
+end
+
+function objectiveutil_AbilityCompleteCallback(contextDataTable)
+
+	-- iterate over UseAbility objectives to check if the ability matches any objectives
+	for i, objective in pairs(MissionOMatic_FindAllObjectiveOfType("UseAbility")) do
+		if Objective_IsStarted(objective.objectiveData) and
+			(not Objective_IsComplete(objective.objectiveData)) and
+			(not Objective_IsFailed(objective.objectiveData)) then
+			for k, target in pairs(objective.ability_targets) do
+				if target.abilityPBG == contextDataTable.ability then
+					local entityWithinDistance = function(gid, idx, eid)
+						if World_DistanceSquaredPointToPoint(Entity_GetPosition(eid), contextDataTable.target) 
+							<= target.abilityRadius * target.abilityRadius then
+							return true
+						end
+						return false
+					end
+					local targetType = scartype(contextDataTable.target)
+					local ledgerString = target.ledger_key
+					
+					if target.target_type == "entities" then
+						local target_group = target.opt_target_egroup
+						-- If no egroup specified, get all entities
+						if target_group == nil then
+							target_group = EGroup_CreateUnique("use_ability")
+							local all_player_entities = Player_GetAllEntities(target.player or World_GetPlayerAt(1))
+							EGroup_AddEGroup(target_group, all_player_entities)
+							EGroup_Clear(all_player_entities)
+						end
+						-- if a blueprint is specified, filter by it
+						if target.opt_target_ebp ~= nil then
+							if target.opt_target_egroup ~= nil then
+								-- We can't filter the given egroup directly
+								target_group = EGroup_CreateUnique("use_ability")
+								EGroup_AddEGroup(target_group, target.opt_target_egroup)
+							end
+							EGroup_Filter(target_group, target.opt_target_ebp, FILTER_KEEP)
+						end
+						
+						if targetType == ST_ENTITY then
+							if EGroup_ContainsEntity(target_group, contextDataTable.target) then
+								-- set the appropriate ledger value
+								MissionOMatic_SetLedger(ledgerString, 1)
+							end
+						elseif targetType == ST_SCARPOS then
+							if (EGroup_ForEachAllOrAny(target_group, false, entityWithinDistance)) then
+								MissionOMatic_SetLedger(ledgerString, 1)
+							end
+						end
+						if target_group ~= target.opt_target_egroup then
+							EGroup_Destroy(target_group)
+						end
+					elseif target.target_type == "squads" then
+						local target_group = target.opt_target_sgroup
+						-- If no sgroup specified, get all squads
+						if target_group == nil then
+							target_group = SGroup_CreateUnique("use_ability")
+							Player_GetAll(target.player or World.GetPlayerAt(1), target_group)
+						end
+						-- if a blueprint is specified, filter by it
+						if target.opt_target_sbp ~= nil then
+							if target.opt_target_sgroup ~= nil then
+								-- We can't filter the given sgroup directly
+								target_group = SGroup_CreateUnique("use_ability")
+								SGroup_AddSGroup(target_group, target.opt_target_sgroup)
+							end
+							SGroup_Filter(target_group, target.opt_target_sbp, FILTER_KEEP)
+						end
+						
+						if targetType == ST_ENTITY then
+							
+							-- check if entity's squad is in group
+							if SGroup_ContainsSquad(target_group, Squad_GetID(Entity_GetSquad(contextDataTable.target)), true) then
+								MissionOMatic_SetLedger(ledgerString, 1)
+							end
+							
+						elseif targetType == ST_SQUAD then
+							
+							-- check if squad is in group
+							if SGroup_ContainsSquad(target_group, Squad_GetID(contextDataTable.target), true) then
+								MissionOMatic_SetLedger(ledgerString, 1)
+							end
+							
+						elseif targetType == ST_SCARPOS then
+							if (Prox_AreSquadMembersNearMarker(target_group, contextDataTable.target, false, target.abilityRadius)) then
+								MissionOMatic_SetLedger(ledgerString, 1)
+							end
+							
+						end
+						if target_group ~= target.opt_target_sgroup then
+							SGroup_Destroy(target_group)
+						end
+					elseif target.target_type == "location" then
+						if Marker_InProximity(target.location, Util_GetPosition(contextDataTable.target)) then
+							MissionOMatic_SetLedger(ledgerString, 1)
+						end
+					else
+						MissionOMatic_SetLedger(ledgerString, 1)
+					end
+				end
+			end
+		end
+	end
+end
+
+function objectiveutil_PrepareCountdown_Init(data, context)
+	
+
+	local objective = data or {}
+	objective = objectiveutil_SetupTargets(data, context)
+	
+	--Completion conditions -- potentially to account for different variants, use table.insert
+	
+	local targetConditions = {}	
+
+	-- Variation component
+	if objective.prepareCountdown_variant == "Has at least X number of Y unit" then
+		MissionPrint("Has at least X number of Y unit")
+		
+		if objective.at_location_boolean == "NONE" then
+		
+		
+			table.insert(targetConditions, 
+				{
+					condition = "HasUnits",
+					player = player1,			
+					comparison = IS_GREATER_THAN_OR_EQUAL, --data.comparison,
+					number = data.number,
+					unitType = data.unitType
+				}
+			)
+		
+		elseif objective.at_location_boolean == "ALL" or objective.at_location_boolean == "ANY" then
+		
+			
+			local tempConditions = {}
+			
+			for i=1, #objective.area_locations do
+				local t = {
+					condition = "UnitAtLocation",
+					player = player1,
+					location_target_type = "MARKER",
+					position = objective.area_locations[i].location,
+					comparison = IS_GREATER_THAN_OR_EQUAL,
+				}
+				table.insert(tempConditions, t)
+			end
+			table.insert(targetConditions, 
+				{
+					condition = "Boolean",
+					boolean = data.at_location_boolean,
+					minRequired = data.number_of_locations, -- number of the conditions if any (i.e. any 1, or 2 if the conditions) uses generic "number" variable
+					subconditions = tempConditions -- where completion wanted at locations, all, any etc.
+				}
+			)
+		
+		 end
+		
+	elseif objective.prepareCountdown_variant == "Has forward position" then
+		MissionPrint("Has forward position")
+		-- as forward position is an upgrade... we will check for upgrade (like "HAS X ABILITY AND/OR Y UPGRADE") but keeping it here to be specific
+		
+		
+		if objective.at_location_boolean == "NONE" then
+		
+			table.insert(targetConditions, 
+				{
+					condition = "PlayerHasAbilityOrUpgrade",
+					player = player1,			
+					abilityOrUpgrade = data.abilityOrUpgrade,
+					ability_pbg = data.ability_pbg,				
+					upgrade_pbg = data.upgrade_pbg, -- forward base upgrade here
+				}
+			)
+		elseif objective.at_location_boolean == "ALL" or objective.at_location_boolean == "ANY" then
+		
+			
+			local tempConditions = {}
+			
+			for i=1, #objective.area_locations do
+				local t = {
+					condition = "UpgradedEntityAtLocation",
+					player = player1,
+					position = objective.area_locations[i].location,				
+					egroup = nil,
+					entityType = nil,					
+					upgrade_pbg = data.upgrade_pbg, -- forward base upgrade here			
+				}
+				table.insert(tempConditions, t)
+			end
+			
+			table.insert(targetConditions, 
+				{
+					condition = "Boolean",
+					boolean = data.at_location_boolean,
+					minRequired = data.number_of_locations, -- number of the conditions if any (i.e. any 1, or 2 if the conditions) uses generic "number" variable
+					subconditions = tempConditions -- where completion wanted at locations, all, any etc.
+				}
+			)
+		end	
+			
+		
+	elseif objective.prepareCountdown_variant == "Has X building constructed" then
+		MissionPrint("Has X building constructed")
+		
+		if objective.at_location_boolean == "NONE" then
+		
+			table.insert(targetConditions, 
+				{
+					condition = "HasBuildings",
+					player = player1,			
+					comparison = IS_GREATER_THAN_OR_EQUAL, --data.comparison,
+					countBuildingsUnderConstruction = true,
+					number = data.number,
+					buildingTypes = data.buildingTypes,
+				}
+			)
+			
+		elseif objective.at_location_boolean == "ALL" or objective.at_location_boolean == "ANY" then
+			
+			local tempConditions = {}
+			
+			for i=1, #objective.area_locations do
+				local t = {
+					condition = "EntityAtLocation",
+					player = player1,
+					position = objective.area_locations[i].location,				
+					egroup = nil,
+					entityType = data.buildingTypes,
+				}
+				table.insert(tempConditions, t)
+			end
+			table.insert(targetConditions, 
+				{
+					condition = "Boolean",
+					boolean = data.at_location_boolean,
+					minRequired = data.number_of_locations, -- number of the conditions if any (i.e. any 1, or 2 if the conditions) uses generic "number" variable
+					subconditions = tempConditions -- where completion wanted at locations, all, any etc.
+				}
+			)		
+			
+		end	
+	elseif objective.prepareCountdown_variant == "Has X ability and/or upgrade" then
+		MissionPrint("Has X ability and/or upgrade")
+		table.insert(targetConditions, 
+			{
+				condition = "PlayerHasAbilityOrUpgrade",
+				player = player1,			
+				abilityOrUpgrade = data.abilityOrUpgrade,
+				ability_pbg = data.ability_pbg,				
+				upgrade_pbg = data.upgrade_pbg,
+			}
+		)
+		
+	else
+		
+		
+	end
+			
+	objective.completeConditions = targetConditions
+
+	return objective
+	
+end
+
+function objectiveutil_PrepareCountdown_Preset(data)
+
+
+	
+end
+
+function objectiveutil_PrepareCountdown_Start(data)
+
+	
+end
+
+
+function objectiveutil_RepairHealth_Init(data, context, saveInfo)
+	
+	local objective = data or {}
+	objective = objectiveutil_SetupTargets(data, context, saveInfo)
+	
+	local target = objective.target
+	local sgroups = objective.sgroup
+	local egroups = objective.egroup
+	local targetCount = 0	
+	
+	--Completion conditions
+	objective.completeConditions = {}
+
+	if target == "SGROUP" and sgroups ~= nil then
+		
+		MissionPrint("repairhealth init - "..target.. ": "..SGroup_GetName(sgroups))
+		
+		targetCount = SGroup_CountSpawned(sgroups) -- assuming sgroup is not empty
+		
+		if targetCount >= 1 then		
+						
+			for i=1, targetCount do
+				tempsquad = SGroup_GetSpawnedSquadAt(sgroups, i)		
+				tempSGroup = SGroup_CreateUnique("tempSGroup")
+				SGroup_Add(tempSGroup, tempsquad)
+				local t = {
+					condition = "HealthPercentage",	
+					comparison = objective.comparison,
+					target = target, --"target" being What target type to use for this condition: EGroup or SGroup
+					sgroup = tempSGroup, 
+					egroup = nil,
+					percentage = objective.percentage_default100,
+				}
+				table.insert(objective.completeConditions, t)
+				MissionPrint("added conditions")
+			end
+		end
+	elseif target == "EGROUP" and egroups ~= nil then
+		
+		MissionPrint("repairhealth init - "..target.. ": "..EGroup_GetName(egroups))
+		
+		targetCount = EGroup_CountSpawned(egroups) -- assuming egroup is not empty
+		
+		if targetCount >= 1 then		
+		
+			for i=1, targetCount do
+		
+				tempentity = EGroup_GetEntityAt(egroups, i)		
+				tempEGroup = EGroup_CreateUnique("tempEGroup")
+				EGroup_Add(tempEGroup, tempentity)
+				
+				local t = {
+					condition = "HealthPercentage",	
+					comparison = objective.comparison,
+					target = target, --"target" being What target type to use for this condition: EGroup or SGroup
+					sgroup = nil,			
+					egroup = tempEGroup,
+					percentage = objective.percentage_default100,
+				}
+				table.insert(objective.completeConditions, t)
+				
+			end
+		end		
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_RepairHealth_Preset(data)
+	
+end
+
+function objectiveutil_RepairHealth_Start(data)
+	
+end
+
+-------------
+--CONSTRUCT--
+function objectiveutil_Construct_Init(data)
+	
+	--Completion conditions
+	data.completeConditions = {}
+	data.targetGroups = {}
+	
+	local t = {
+		player = data.constructing_player or World_GetPlayerAt(1),
+		include_existing = data.include_existing,
+		comparison = IS_GREATER_THAN_OR_EQUAL,
+		opt_source_sgroup = data.opt_source_sgroup,
+		opt_source_egroup = data.opt_source_egroup,
+		opt_dest_sgroup = data.opt_dest_sgroup,
+		opt_dest_egroup = data.opt_dest_egroup,
+		name = data.title
+	}
+	if data.construct_type == "sbp" then
+		t.condition = "CountConstructedSquads"
+		t.sbp = data.construct_sbp
+	elseif data.construct_type == "ebp" then
+		t.condition = "CountConstructedEntities"
+		t.ebp = data.construct_ebp
+	elseif data.construct_type == "upgrade bp" then
+		t.condition = "CountConstructedUpgrades"
+		t.upgrade_pbg = data.construct_upg
+		t.upgrade_type = data.upgrade_type
+		if t.opt_source_egroup ~= nil then
+			table.insert(data.targetGroups, t.opt_source_egroup)
+		end
+		if t.opt_source_sgroup ~= nil then
+			table.insert(data.targetGroups, t.opt_source_sgroup)
+		end
+	end
+	if data.require_locations then
+		for i = 1, #data.construct_locations do
+			local condition = Table_Copy(t)
+			local entry = data.construct_locations[i]
+			condition.count = entry.count
+			condition.require_location = entry.require_location
+			condition.require_facing = entry.require_facing
+			condition.facing = entry.facing
+			condition.facing_tolerance_deg = entry.facing_tolerance_deg
+			condition.position = entry.location
+			if condition.require_location then
+				table.insert(data.targetGroups, entry.location)
+			end
+			table.insert(data.completeConditions, condition)
+		end
+	else
+		t.count = data.count
+		table.insert(data.completeConditions, t)
+	end
+	
+	return data
+end
+
+function objectiveutil_Construct_Preset(data)
+	
+end
+
+function objectiveutil_Construct_Start(data)
+	
+end
+
+-------------
+--ESCORT--
+function objectiveutil_Escort_Init(data, context)
+	
+	-- SETUP DESTRUCTIBLE TARGETS and DATA TABLE
+	local objective = data or {}
+	objective = objectiveutil_SetupTargets(data, context)
+	
+	--Completion conditions
+	objective.completeConditions = {}
+	
+	local allSgroupTargets = SGroup_CreateUnique("")
+	for i=1, #objective.targetGroups do
+		if scartype(objective.targetGroups[i]) == ST_SGROUP then
+			SGroup_AddGroup(allSgroupTargets, objective.targetGroups[i])
+		end
+	end
+	
+	for i=1, #objective.area_locations do
+		local t = {
+			condition = "UnitAtLocation",
+			player = player1,
+			location_target_type = "MARKER",
+			position = objective.area_locations[i].location,			
+			opt_sgroup = objective.area_locations[i].sgroup_to_escort or allSgroupTargets,
+			amount = objective.area_locations[i].amount_to_escort,
+			comparison = IS_GREATER_THAN_OR_EQUAL,
+		}
+		table.insert(objective.completeConditions, t)
+	end
+	
+	return objective
+	
+end
+
+function objectiveutil_Escort_Preset(data)
+	
+end
+
+function objectiveutil_Escort_Start(data)
+	
+	for i=1, #data.targetGroups do
+		Rule_AddOneShot(objectiveutil_Escort_Move, 1, {data = data, index = i})
+	end
+	
+end
+
+function objectiveutil_Escort_Move(context, data)
+	
+	local index = data.index
+	
+	local objectiveData = data.data
+	
+	local path = objectiveData.target_locations[index].escort_path
+	
+	if #path > 0 then
+		objectiveutil_FollowPath(objectiveData.targetGroups[index], path)
+	end
+	
+end
+
+
+--str = str:gsub("^%l", string.upper)
+
+function objectiveutil_SetupTargets(objectivePrefabData, context, saveInfo)
+	
+	
+	local objective = objectivePrefabData or {}
+	
+	if saveInfo ~= nil then
+		-- If we're coming from a restore then the target groups have already been selected and initial
+		-- effects have already been applied so simply grab the groups from the saveInfo:
+		objective.targetGroups = saveInfo.targetGroups -- TODO save this out for each in progress objective if applicable
+		return objective
+	end
+	
+	--LOCATION
+	local priorityLocations = {}
+	
+	-- get all target locations on the map
+	local targetLocations = objectivePrefabData.target_locations or {}
+	
+	-- randomizes order to spawn at random locations
+	targetLocations = Table_GetShuffledItems(targetLocations)
+	
+	-- adjusts order to account for priority
+	
+	for i=1, #targetLocations do
+		
+		local loc = targetLocations[i]
+		
+		if i == 1 then
+			table.insert(priorityLocations, loc)
+		else
+			for n=1, #priorityLocations do
+				if loc.priority >= priorityLocations[n].priority then
+					table.insert(priorityLocations, n, loc)
+					break
+				elseif n == #priorityLocations then
+					table.insert(priorityLocations, loc)
+				end
+			end
+		end
+		
+	end
+	
+	-- determine the number of targets
+	local maxNum = objectivePrefabData.max_num
+	local minNum = objectivePrefabData.min_num
+	
+	if maxNum == nil or maxNum == -1 then 
+		maxNum = #priorityLocations 
+	end
+	if minNum == nil or minNum == -1 then 
+		minNum = #priorityLocations
+	end
+	
+	local numTargets = World_GetRand(minNum, maxNum)
+	
+	--PICKING TARGETS / SPAWNING
+	
+	objective.targetGroups = {}
+	
+	for i=1, numTargets do
+		
+		-- SPAWN ENTITY
+		if priorityLocations[i].target_type == "ebp" or (priorityLocations[i].target_type == "existing_group" and priorityLocations[i].target_egroup ~= nil) then
+			
+			local group = priorityLocations[i].target_egroup
+			
+			
+			if priorityLocations[i].target_type == "ebp" then
+				
+				local target_owner = priorityLocations[i].target_owner or World_GetPlayerAt(2)
+				if group == nil then
+					group = EGroup_CreateUnique("Target")
+				end
+				if target_owner == "World" then
+					target_owner = nil
+				end
+				
+				-- SPAWN
+				Util_CreateEntities(target_owner, group, priorityLocations[i].target_ebp, Util_GetPosition(priorityLocations[i].location), 1, Util_GetPosition(priorityLocations[i].spawn_facing))
+			end
+			
+			if priorityLocations[i].upgradePBG ~= nil and scartype(group) == ST_EGROUP then
+				Cmd_InstantUpgrade(group, priorityLocations[i].upgradePBG)
+			end
+			
+			-- Overwrites health
+			local targetHealth = priorityLocations[i].target_health_percent
+			if priorityLocations[i].target_type ~= "existing_group" then
+				if targetHealth ~= nil and targetHealth > 0 and targetHealth <= 1 then 
+					EGroup_SetAvgHealth(group, targetHealth)	
+				end
+			end
+			
+			-- Invulnerability
+			local invulnerable = priorityLocations[i].invulnerable
+			if invulnerable == true then
+				EGroup_SetInvulnerable(group, true)
+			end
+			
+			-- Damage received modifier settings
+			local damage_received_modifier = priorityLocations[i].damage_received_modifier
+			if damage_received_modifier ~= nil and damage_received_modifier ~= 0.0 and damage_received_modifier ~= 0  then
+				priorityLocations[i].appliedDmgModifier = Modify_ReceivedDamage(group, damage_received_modifier)
+			end
+			
+			--Add to objective table
+			if priorityLocations[i].split_group == true then
+				
+				for i=1, EGroup_Count(group) do
+					
+					local g =  EGroup_CreateUnique("SplitTargetGroup")
+					EGroup_Add(g, EGroup_GetEntityAt(group, i))
+					
+					table.insert(objective.targetGroups, g)
+					
+				end
+				
+			else
+				
+				table.insert(objective.targetGroups, group)
+				
+			end
+			
+		-- SPAWN SQUAD
+		elseif priorityLocations[i].target_type == "sbp" or (priorityLocations[i].target_type == "existing_group" and priorityLocations[i].target_sgroup ~= nil) then
+			
+			local group = priorityLocations[i].target_sgroup
+			
+			if priorityLocations[i].target_type == "sbp" then
+			
+				local target_owner = priorityLocations[i].target_owner or World_GetPlayerAt(2)
+				if group == nil then
+					group = SGroup_CreateUnique("Target")
+				end
+				
+				-- Spawn in hold check
+				local spawnLocation = Util_GetPosition(priorityLocations[i].location)
+				if priorityLocations[i].spawn_type == "BUILDING_HOLD" then
+					spawnLocation = priorityLocations[i].location_egroup
+				elseif priorityLocations[i].spawn_type == "VEHICLE_HOLD" then
+					spawnLocation = priorityLocations[i].location_sgroup
+				end
+				
+				-- SPAWN
+				Util_CreateSquads(target_owner, group, priorityLocations[i].target_sbp, spawnLocation, nil, 1, nil, nil, nil, priorityLocations[i].upgradePBG, priorityLocations[i].spawn_facing)
+			
+			end
+			
+			-- Overwrites health
+			local targetHealth = priorityLocations[i].target_health_percent
+			if priorityLocations[i].target_type ~= "existing_group" then
+				if targetHealth ~= nil and targetHealth > 0 and targetHealth <= 1 then 
+					SGroup_SetAvgHealth(group, targetHealth)	
+				end
+			end
+			
+			-- Invulnerability
+			local invulnerable = priorityLocations[i].invulnerable
+			if invulnerable == true then
+				SGroup_SetInvulnerable(group, true)
+			end
+			
+			-- Damage received modifier settings
+			local damage_received_modifier = priorityLocations[i].damage_received_modifier
+			if damage_received_modifier ~= nil and damage_received_modifier ~= 0.0 and damage_received_modifier ~= 0 then
+				priorityLocations[i].appliedDmgModifier = Modify_ReceivedDamage(group, damage_received_modifier)
+			end
+			
+			--Add to objective table
+			if priorityLocations[i].split_group == true then
+				
+				for i=1, SGroup_Count(group) do
+					
+					local g =  SGroup_CreateUnique("SplitTargetGroup")
+					SGroup_Add(g, SGroup_GetSquadAt(group, i))
+					
+					table.insert(objective.targetGroups, g)
+					
+				end
+				
+			else
+				
+				table.insert(objective.targetGroups, group)
+				
+			end
+			
+		-- CONTEXT
+		elseif priorityLocations[i].target_type == "CONTEXT" and context ~= nil then
+			
+			local target = Context_ExtractTargetFromContext(context)
+			if target ~= nil then
+				
+				local context_type = scartype(target)
+				if context_type == ST_SQUAD then
+					
+					local group = SGroup_CreateUnique("Target")
+					SGroup_Add(group, target)
+					table.insert(objective.targetGroups, group)
+					
+				elseif context_type == ST_ENTITY then
+					
+					local group = EGroup_CreateUnique("Target")
+					EGroup_Add(group, target)
+					table.insert(objective.targetGroups, group)
+
+				elseif context_type == ST_SCARPOS then
+					
+					error("LOCATION_MARKER as context type in selection context is not supported for beat type: "..data.beat_type)
+					
+				end
+				
+			end
+			
+		end
+	
+	end
+	
+	return objective
+	
+end
+
+--? @shortdesc Returns a randomly selected speech that corresponds to the objective beat, stage, dialogue tag.
+--? @args String beat, String dialogueTag, String stage, String OPTprefix
+function objectiveutil_GetDialogue(beat, dialogueTag, stage, OPTPrefix)
+	
+	local events = _G["EVENTS"]
+	
+	if dialogueTag == "" or dialogueTag == nil then
+		dialogueTag = "Generic"
+	end
+	
+	local prefix = ""
+	if OPTPrefix ~= nil and OPTPrefix ~= "" then
+		prefix = OPTPrefix.."_"
+	end
+
+	local intel = events[prefix..beat.."_"..dialogueTag.."_"..stage]
+
+	if scartype(intel) == ST_FUNCTION or scartype(intel) == ST_TABLE then
+		return intel
+	end
+	
+	return nil
+	
+end
+
+function _NarrativeEventCallable(event_name, extra_event_name)
+	CTRL.Subtitle_PlayNarrativeEvent(event_name)
+	CTRL.WAIT()
+	if extra_event_name ~= nil then
+		CTRL.Subtitle_PlayNarrativeEvent(extra_event_name)
+		CTRL.WAIT()
+	end
+end
+
+--? @shortdesc Creates and returns a table containing a function that will play the specified event
+-- (then extra event if specified) through CTRL when called, and the event(s) it needs to play
+--? @args Boolean use_names, String event_id_obj, [String opt_extra_event_id_obj]
+function objectiveutil_CreateNarrativeEvent(event_id_obj, opt_extra_event_id_obj)
+	local event_name = event_id_obj
+	local extra_name = opt_extra_event_id_obj
+	
+	if event_name ~= nil and event_name ~= "" then
+		local final_event_name = objectiveutil_StringToNarrativeEvent(event_name)
+		
+		local final_extra_name = nil
+		if extra_name ~= nil and extra_name ~= "" then
+			final_extra_name = objectiveutil_StringToNarrativeEvent(extra_name)
+		end
+		
+		local t =
+		{
+			event_name = final_event_name,
+			extra_event_name = final_extra_name,
+			NarrativeEventCallable = _NarrativeEventCallable
+		}
+		
+		return t
+	end
+	
+	return nil
+end
+
+function objectiveutil_StringToNarrativeEvent(event_name)
+	local final_event_name = nil
+	if scartype(event_name) ~= ST_STRING then
+		error("Failed to convert string to narrative event. Please provide a valid string.")
+	else
+		local slash_event_index = string.find(event_name, "\\", -string.len(event_name))
+		final_event_name = string.lower(string.sub(event_name, (slash_event_index + 1) or 0))
+	end
+	return final_event_name
+end
+
+--? @shortdesc Makes the squad in the sgroup follow the path
+--? @args SGroup sgroup, Table path
+function objectiveutil_FollowPath(sgroup, path)
+	
+	if sgroup == nil or path == nil then
+		
+		error("[objectiveutil_FollowPath] sgroup is nil")
+		
+	end
+	
+	if path == nil then
+		
+		error("[objectiveutil_FollowPath] path is nil")
+		
+	end
+	
+	Rule_AddOneShot(__FollowPath_Recursive, 1, {sgroup = sgroup, path = path})
+	
+end
+
+function __FollowPath_Recursive(context, data)
+	
+	local locationIndex = data.locationIndex or 1
+
+	local location = data.path[locationIndex].location
+	
+	Cmd_Move(data.sgroup, location)
+	
+	if Prox_AreSquadsNearMarker(data.sgroup, location, ANY, 10) then
+		
+		locationIndex = locationIndex + 1
+		
+	end
+	
+	if locationIndex <= #data.path then
+		
+		-- This is just so we can call a Rule and we pack the data in a table to send in to the function
+		Rule_AddOneShot(__FollowPath_Recursive, 1, {sgroup = data.sgroup, path = data.path, locationIndex = locationIndex})
+		
+	end
+	
+end

@@ -1,0 +1,210 @@
+--
+-- Mission-o-Matic - Defend Common Logic
+--
+-- Various functions for the defend archetype missions
+--
+
+-----------------------------------------------------------------------
+-- Callbacks (in order they are typically called)
+-----------------------------------------------------------------------
+
+-- Mission cheat function
+function Defend_SkipSetup()
+	local obj_setup = MissionOMatic_FindObjective("obj_setup")
+	if not Objective_IsComplete(obj_setup.objectiveData) then
+		Objective_Complete(obj_setup.objectiveData)
+	end
+end
+
+
+-- Mission cheat function
+function Defend_SkipFirstWave()
+	Defend_SkipSetup()
+	wave_1_finished = true
+end
+
+function Defend_IncrementKills()
+	local obj_destroy = MissionOMatic_FindObjective("obj_destroy")
+	if Objective_IsStarted(obj_destroy.objectiveData) and not Objective_IsComplete(obj_destroy.objectiveData) then
+		obj_destroy_count = obj_destroy_count + 1
+		Obj_SetCounterCount(obj_destroy.objectiveData.ID, obj_destroy_count)
+	end
+end
+
+
+-- Mission cheat function
+function Defend_SkipBonus1() 
+	EGroup_ForEach(EGroup_FromName("eg_bonus_1"), function(egroup, i, entity)
+			if World_OwnsEntity(entity) or Entity_GetPlayerOwner(entity) ~= player2 then 
+				Entity_SetPlayerOwner(entity, player2)
+			end
+		end)
+end
+
+
+-- Mission cheat function
+function Defend_SkipBonus2()
+	EGroup_ForEach(EGroup_FromName("eg_bonus_2"), function(egroup, i, entity)
+			if World_OwnsEntity(entity) or Entity_GetPlayerOwner(entity) ~= player2 then 
+				Entity_SetPlayerOwner(entity, player2)
+			end
+		end)
+end
+
+
+function Defend_OnSquadKilled(context)
+	if not World_OwnsSquad(context.victim) then
+		if Squad_GetPlayerOwner(context.victim) == player2 then
+			--print("Defend_OnSquadKilled() - " ..  BP_GetName(Squad_GetBlueprint(context.victim)))
+			if Squad_IsOfType(context.victim, "vehicle") and obj_destroy_count then				
+				obj_destroy_count = obj_destroy_count + 1
+				local obj_destroy = MissionOMatic_FindObjective("obj_destroy")
+				if not Objective_IsComplete(obj_destroy.objectiveData) then 
+					Obj_SetCounterCount(obj_destroy.objectiveData.ID, obj_destroy_count)
+				end
+			else				
+				if #waves > 0 then
+					waves[1].stop_threshold = waves[1].stop_threshold - 1
+					if waves[1].stop_threshold <= 0 then
+						if waves[1].on_finished then
+							--print("wave on_finished()")
+							waves[1].on_finished()
+						end
+						table.remove(waves, 1)
+					end
+				end
+			end
+		end
+	end
+end
+
+
+-- Global event callback for GE_StrategicPointChanged
+-- Make visible briefly so player can see they are captured
+function Defend_OnStrategicPointChanged(context)	
+	if context.changeType == 0 or context.changeType == 3 then 		
+		FOW_RevealArea(Entity_GetPosition(context.strategicPointEntity), 1.0, 0.25)
+	end
+end
+
+
+-- Callback used to trigger VO when first wave is defeated
+function Defend_IsFirstWaveDefeated()
+	return wave_1_finished
+end
+
+
+-- Callback used to determine whether the destroy objective has been completed.
+function Defend_IsDestroyThresholdReached()
+	obj_destroy_count = obj_destroy_count or 0
+	return obj_destroy_count >= obj_destroy_threshold	
+end
+
+-----------------------------------------------------------------------
+-- Helper functions
+-----------------------------------------------------------------------
+
+
+-- Workaround for functionality missing from prefab objective system  
+function Defend_SetObjectiveCounter()
+	obj_destroy_count = obj_destroy_count or 0
+	local obj_destroy = MissionOMatic_FindObjective("obj_destroy")
+	Obj_SetCounterType(obj_destroy.objectiveData.ID, COUNTER_CountUpTo)
+	Obj_SetCounterCount(obj_destroy.objectiveData.ID, obj_destroy_count)
+	Obj_SetCounterMax(obj_destroy.objectiveData.ID, obj_destroy_threshold)
+end
+
+
+-- Spawns world-owned weapons at marker locations 
+function Defend_InitEntities(data, race_name)
+	for _, entity_data in pairs(data) do		
+		local ebp
+		if race_name and entity_data[race_name] then
+			ebp = entity_data[race_name]
+		elseif entity_data.default then
+			ebp = entity_data.default
+		end
+		if ebp then
+			local marker_sequence = Marker_GetSequence(entity_data.marker_name)
+			for _, marker in pairs(marker_sequence) do  						 
+				Util_CreateEntities(entity_data.owner, nil, ebp, marker, 1, nil, true, false, false)
+			end
+		end
+	end
+end
+
+function Defend_OnObjectiveDestroyComplete()
+	for _, blip in pairs(blips) do 
+		UI_DeleteMinimapBlip(blip)
+	end
+end
+
+function Defend_RoutPlayer()
+	Defend_Rout(player1)
+end
+
+
+function Defend_RoutEnemy()
+	Defend_StopArtillery()
+	Defend_Rout(player2)
+end
+
+
+function Defend_Rout(loser)
+	
+	if scartype(Defend_SpawnInfantry) == ST_FUNCTION and Rule_Exists(Defend_SpawnInfantry) then
+		Rule_Remove(Defend_SpawnInfantry)
+	end
+	if scartype(Defend_SpawnVehicles) == ST_FUNCTION and Rule_Exists(Defend_SpawnVehicles) then
+		Rule_Remove(Defend_SpawnVehicles)
+	end
+	
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)		
+		local retreat_location = nil
+		if player == loser or Player_ObserveRelationship(player, loser) == R_ALLY then
+			-- Losing units flee			
+			local sg = Player_GetSquads(player)
+			SGroup_FilterSpawned(sg, FILTER_KEEP)
+			if Player_IsHuman(player) then
+				Misc_ClearSelection()
+				SGroup_SetSelectable(sg, false)
+			else
+				AI_Enable(player, false)										
+			end
+			if SGroup_CountSpawned(sg) > 0 then 
+				if Player_HasMapEntryPosition(player) then 
+					Cmd_MoveToAndDeSpawn(sg, Player_GetMapEntryPosition(player), false)
+				else
+					Cmd_MoveToAndDeSpawn(sg, Player_GetStartingPosition(player), false)
+				end
+			end
+		else
+			-- Grant winning units invulnerability
+--			SGroup_SetInvulnerable(Player_GetSquads(player), true)			
+		end
+	end
+end
+
+-- HACK: Prefabs are unsuited to conditional logic so do it here
+function Defend_StartClearAreaObjective()
+	local obj_clear = MissionOMatic_FindObjective("obj_clear")
+	if not Defend_IsAreaClear(50) then		
+		Objective_Start(obj_clear.objectiveData, true, false)
+	else
+		local obj_primary = MissionOMatic_FindObjective("obj_primary")
+		Objective_Complete(obj_primary.objectiveData, true, true)
+	end
+	
+end
+
+-- Returns true if no enemy squads are within 100m of the primary objective 
+function Defend_IsAreaClear(radius)
+	local r = g_defend_default_radius or 100
+	if scartype(radius) == ST_NUMBER then 
+		r = radius
+	end
+	local sg = SGroup_CreateIfNotFound("sg_survivors")
+	World_GetSquadsNearPoint(player2, sg,  Entity_GetPosition(EGroup_GetEntityAt(EGroup_FromName("eg_defend"), 1)), r, OT_Player )
+	return SGroup_CountSpawned(sg) == 0
+end

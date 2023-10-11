@@ -1,0 +1,62 @@
+--
+-- LOCATION GROUP / LOCATION MARKER INFO
+-- 
+
+-- This is used as the options for the tags that you can assign to
+-- location markers in the locationgroup prefab. Add to this list
+-- if there are more types of location markers you wish to use.
+g_tag_types = {
+	"open_plains",
+	"crossroads",
+	"fuel_depot",
+	"ammo_depot",
+	"church",
+	"airfield_tower",
+	"port",
+	"beach",
+	"forest",
+	"hills",
+	"mountain_pass",
+	"deep_sand",
+	"bridge",
+	"buoy",
+	"coastal_guns",
+	"town",
+}
+
+--? @args Table or nil, Table
+--? @shortdesc Adds location_tag_<LOCATION TAG NAME> entries to the parentSchema which are booleans that can be checked on or off.
+--? @extdesc Each tag_type will have its own boolean field added to the schema. Requirement can be nil, otherwise it will be added
+--? as the requirement for the checkbox.
+function locationgroup_AddLocationTagCheckbox(requirement, parentSchema)
+	local tag_type_count = #g_tag_types
+	for i=1, tag_type_count do
+		local tag_type = g_tag_types[i]
+		local schema = {}
+		
+		schema.type = ST_BOOLEAN
+		schema.name = "location_tag_"..tag_type
+		schema.displayName = "Include Tag \""..tag_type.."\""
+		schema.default = false
+		
+		if requirement ~= nil then
+			schema.requirement = requirement
+		end
+		
+		parentSchema[#parentSchema + 1] = schema
+	end
+end
+
+--? @args Table with the LocationTagCheckbox format (see locationgroup_AddLocationTagCheckbox), function(tag)
+--? @shortdesc Runs the function for each tag that is checked in checkbox_data, with the tag as the argument.
+function locationgroup_ForEachCheckedTag(checkbox_data, func)
+	local tag_type_count = #g_tag_types
+
+	for i=1, tag_type_count do
+		local tag_type = g_tag_types[i]
+		local tag_type_name = "location_tag_"..tag_type
+		if checkbox_data[tag_type_name] then
+			func(tag_type)
+		end
+	end
+end

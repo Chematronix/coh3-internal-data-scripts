@@ -1,0 +1,323 @@
+-- TODO add docstring
+
+-- TODO document what the save info object looks like for objectives, speifically since we're generating it
+-- recursively we could outline that in a comment and say we're generating a forest structure in total
+-- with only the top level objectives saved in the main table and the sub objectives save info objects
+-- are chilren of their parent objective's save info.
+
+-- Generates the save info for a given missionomatic objective table
+
+function ObjectiveStateToString(state)
+	if state == OS_Off then
+		return "off"
+	elseif state == OS_Incomplete then
+		return "incomplete"
+	elseif state == OS_Complete then
+		return "complete"
+	elseif state == OS_Failed then
+		return "failed"
+	end
+end
+
+function ObjectiveStringToState(str)
+	if str == "off" then
+		return OS_Off
+	elseif str == "incomplete" then
+		return OS_Incomplete
+	elseif str == "complete" then
+		return OS_Complete
+	elseif str == "failed" then
+		return OS_Failed
+	end
+end
+
+function SaveObjective(objective)
+	
+	-- TODO could use unique identifier if we enforce every objective on the campaign map
+	-- has a unique ID and assert during init parse if that is broken.
+	-- For now though we will use the guaranteed unique prefabdata path as the reference, which
+	-- also allows us to easily resolve on restore:
+	local objectivePrefabDataPath = objective.prefabData.prefabDataPath
+	
+	local objectiveState = Obj_GetState(objective.objectiveData.ID)
+	
+	-- Expiry is a scripted concept, OS_Failed is not enough to differentiate
+	-- between "failed because of expiry" and "failed because of failure conditions"
+	-- so we save this out as well.
+
+	local objectiveData = objective.objectiveData
+	local objectiveIsExpired = Objective_IsExpired(objective.objectiveData)
+	local objectiveIsStarted = Objective_IsStarted(objective.objectiveData)
+	
+	local objectiveSaveInfo = {
+		objectiveID = objective.prefabData.objective_id,
+		objectiveState = ObjectiveStateToString(objectiveState),
+		objectiveIsExpired = objectiveIsExpired,
+		objectiveIsStarted = objectiveIsStarted,
+		objectivePrefabDataPath = objectivePrefabDataPath,
+		subObjectiveSaveData = {},
+		-- Dynamic objective info that cannot be reconstructed from
+		-- prefabdata:
+		context = PartialSave_SavePlaybillContext(objective.context),
+		startTurn = objective.startTurn,
+		lastReminderTurn = objective.lastReminderTurn,
+		targetGroups = objective.targetGroups,
+		currentMissionResultIndex = objective.currentMissionResultIndex,
+		completePopupMissionEntryEntity = objective.mission_entry_entity,
+		addedHintpoints = objective.objectiveData.addedHintpoints,
+		addedHealthbar = objective.objectiveData.addedHealthbar,
+	}
+	
+	-- Generate save information for each of this objective's sub objectives.
+	local subObjectiveSaveData = objectiveSaveInfo.subObjectiveSaveData
+	local subObjectives = objective.subObjectives or {}
+	local subObjectivesCount = #subObjectives
+	for i=1, subObjectivesCount do
+		local subObjective = subObjectives[i]
+		local subObjectiveSaveInfo = SaveObjective(subObjective)
+		subObjectiveSaveData[#subObjectiveSaveData + 1] = subObjectiveSaveInfo
+	end
+	
+	return objectiveSaveInfo
+end
+
+function PartialSave_SaveObjectives(saveTable)
+	
+	local objectiveSave = {
+		version = 1,
+		objectiveSaveData = {},
+		missionResults = g_missionResults,
+		missionomaticLedger = g_MissionOMaticLedger,
+		_TimerTable = _TimerTable, -- NOTE: This is used by training.scar but we could refactor instead of S/L
+	}
+	
+	local objectiveSaveData = objectiveSave.objectiveSaveData
+	
+	local allObjectives = g_AllMissionObjectives
+	local objectiveCount = #allObjectives
+	for i=1, objectiveCount do
+		local objective = allObjectives[i]
+		
+		local isRootObjective = objective.objectiveData.Parent == nil
+		
+		if isRootObjective then
+			local objectiveSaveInfo = SaveObjective(objective)
+			objectiveSaveData[#objectiveSaveData + 1] = objectiveSaveInfo
+		end
+	end
+	
+	-- For adding arbitrary UI that is typically associated with an objective, there
+	-- is a concept of the "null objective" to add hintpoints to without needing
+	-- to create an actual objective that can be completed or is visible to the
+	-- mission system. We must save and restore that dynamically added UI explicitly:
+	local objectiveData = __GetOrCreateNullObjData()
+	objectiveSave.nullObjectiveAddedHintpoints = objectiveData.addedHintpoints
+	
+	saveTable.objectiveSave = objectiveSave
+end
+
+function RestoreObjective(prefabData, saveInfo)
+	
+	local variant_copy = Clone(prefabData)
+	local objective = objectiveutil_ObjectiveInit(
+		variant_copy,
+		PartialSave_RestorePlaybillContextSave(saveInfo.context),
+		saveInfo)
+	
+	MissionOMatic_InitializeObjective(objective, nil, saveInfo.context, saveInfo)
+	
+	-- Check if this objective has a pre_restart_function that should be run before restarting the objective
+	-- This function can be used to provide an alternative restart flow. You can skip the normal restart
+	-- flow by returning true from the function so that PartialSave_RestartObjective won't be called.
+	local should_skip_restart = false
+	local pre_restart_func_str = prefabData.pre_restart_function
+	local pre_restart_function = pre_restart_func_str ~= "" and _G[pre_restart_func_str] or nil
+	if (scartype(pre_restart_function) == ST_FUNCTION) then
+		-- A pre restart function exists, so skip the normal restart flow for this objective if the function
+		-- indicates to do so:
+		should_skip_restart = pre_restart_function(objective, prefabData, saveInfo)
+	end
+	
+	if (not should_skip_restart) then
+		PartialSave_RestartObjective(objective, saveInfo)
+	end
+end
+
+-- Add back any dynamically added hintpoints or healthbars
+-- that might be tracking targets on the objective
+function PartialSave_RestoreDynamicUI(objectiveData, saveInfo)
+	
+	local addedHintpoints = saveInfo.addedHintpoints
+	if addedHintpoints ~= nil then
+		for k,v in pairs(addedHintpoints) do
+			local hintpointArgs = v
+			-- Create the UI in the game UI core subsystems:
+			Objective_AddUIElements(objectiveData, table.unpack(hintpointArgs))
+		end
+		-- Track the UI args again for save/load purposes
+		objectiveData.addedHintpoints = addedHintpoints
+	end
+	
+	
+	local addedHealthbar = saveInfo.addedHealthbar
+	if addedHealthbar ~= nil then
+		-- Create the UI in the game UI core subsystems:
+		Objective_AddHealthBar(objectiveData, table.unpack(addedHealthbar))
+		
+		-- Track the UI args again for save/load purposes
+		objectiveData.addedHealthbar = addedHealthbar
+	end
+end
+
+-- Analagous to MissionOmatic_OnStart but is called to handle restarting objectives
+-- that have already been started.
+function PartialSave_RestartObjective(objective, saveInfo, forceVisible)
+	
+	local objID = objective.objectiveData.ID
+	local objectiveState = ObjectiveStringToState(saveInfo.objectiveState)
+	
+	Obj_SetState(objID, objectiveState)
+	if forceVisible then
+		Obj_SetVisible(objID, true)
+	end
+	
+	if objectiveState ~= OS_Incomplete then
+		-- If the objective was already completed or failed, then
+		-- don't reboot it as if it is in progress.
+		return
+	end
+	
+	-- NOTE: We could instead just avoid generating saveInfo for any objectives
+	-- that are not 'started' and not 'complete' or 'failed'. We always
+	-- want to invoke the fresh objective startup flow for these.
+	if not saveInfo.objectiveIsStarted then
+		-- This objective was registered but not started yet. We don't
+		-- need to go through the restart flow as we should be starting
+		-- a fresh objective.
+		return
+	end
+	
+	if objective.prefabData.visibility ~= "None" then
+		Obj_SetVisible(objID, true)
+	end
+	
+	objective.objectiveData.started = true
+	
+
+	objective.lastReminderTurn = saveInfo.lastReminderTurn
+	MissionOMatic_SetupTurnReminder(objective, saveInfo.startTurn)
+	MissionOMatic_StartTimers(objective)
+	MissionOMatic_StartUICallouts(objective)
+	MissionOMatic_CallStartFunc(objective, saveInfo)
+	
+	PartialSave_RestoreDynamicUI(objective.objectiveData, saveInfo)
+	
+	local subObjectives = objective.subObjectives or {}
+	local subObjectiveCount = #subObjectives
+	for i=1, subObjectiveCount do
+		local subObjective = subObjectives[i]
+		local subObjectiveSaveInfo = PartialSave_FindSubObjectiveSaveInfo(subObjective, saveInfo.subObjectiveSaveData)
+		
+		if subObjectiveSaveInfo == nil then
+			-- If subObjectiveSaveInfo is nil, then there must have been an objectiveData change and we don't have
+			-- a saveInfo for this objective, so we're settling for fresh start.
+			MissionOMatic_StartOrQueueSubObjective(subObjective)
+			return
+		end
+		
+		local subObjectiveState = ObjectiveStringToState(subObjectiveSaveInfo.objectiveState)
+		local subObjectiveHasBeenStarted = 
+			subObjectiveSaveInfo.objectiveIsStarted or
+			subObjectiveState == OS_Complete or
+			subObjectiveState == OS_Failed
+		
+		if subObjectiveHasBeenStarted then
+			PartialSave_RestartObjective(subObjective, subObjectiveSaveInfo, true)
+		else
+			-- If subObjectiveHasBeenStarted was not true, then we have a sub objective that was registered but has not been
+			-- started yet, so we should be invoking the fresh objective start flow as well.
+			
+			-- 'Fresh' start of the objective, perhaps delayed conditionally based on the objective's start conditions.
+			MissionOMatic_StartOrQueueSubObjective(subObjective)
+		end
+	end
+end
+
+function PartialSave_ObjectivePrefabDataMatchesSaveInfo(objectivePrefabData, saveInfo)
+	local prefabDataPath = objectivePrefabData.prefabDataPath
+	local savedPrefabDataPath = saveInfo.objectivePrefabDataPath
+	-- TODO if objective path changes are expected to be supported, we should have a mapping
+	-- from saveInfo path to new path and apply that mapping to understand if the saveInfo
+	-- is actually the right one for this objective.
+	-- However, I'm expecting we have bespoke script setup if we are attempting to restore
+	-- from before a content update where we don't go through the normal restore flow
+	-- and understand how to restart each objective from minimal board state.
+
+	local pathLength = #prefabDataPath
+	local savedPathLength = #savedPrefabDataPath
+	if pathLength ~= savedPathLength then
+		return false
+	else
+		-- Check that the saveInfo points towards the same prefabdata by checking
+		-- for prefabDataPath equality.
+		for i=1, pathLength do
+			local key = prefabDataPath[i]
+			local savedKey = savedPrefabDataPath[i]
+			if key ~= savedKey then
+				-- Path mismatch
+				return false
+			end
+		end
+	end
+	return true	
+end
+
+function PartialSave_FindSubObjectiveSaveInfo(objectivePrefabData, saveInfoList)
+
+	local subObjectiveCount = #saveInfoList
+	for i=1, subObjectiveCount do
+		local info = saveInfoList[i]
+		if PartialSave_ObjectivePrefabDataMatchesSaveInfo(objectivePrefabData, info) then
+			return info
+		end
+	end
+	return nil
+end
+
+function PartialSave_RestoreObjectives(saveTable)
+	
+	local objectiveSave = saveTable.objectiveSave
+	local objectiveSaveData = objectiveSave.objectiveSaveData
+	
+	-- Setup MissionOMatic.scar variables:
+	g_AllPlaybills = Prefab_GetAllOfType("playbill")
+	g_MissionOMaticLedger = objectiveSave.missionomaticLedger
+	g_AllMissionObjectives = {} -- This will be reconstructed by the restore process
+	g_MissionObjectives = {}
+	
+	-- Restore the mission results table (managed by metamap_library.scar)
+	g_missionResults = objectiveSave.missionResults
+	
+	-- TODO move to a better place or remove users of timer
+	_TimerTable = objectiveSave._TimerTable
+	
+	local objectiveCount = #objectiveSaveData
+	for i=1, objectiveCount do
+		local objectiveSaveInfo = objectiveSaveData[i]
+		
+		-- TODO for future proofing, if the prefabdata changes then this objective prefabdata path could fail.
+		-- (likewise for actionlists). It could also happen to point to a different objective. For robustness
+		-- we should compare the objectiveID and enforce every objective has a unique objectiveID.
+		local objectivePrefabData = ResolvePrefabDataPath(objectiveSaveInfo.objectivePrefabDataPath)
+		if objectivePrefabData ~= nil then
+			RestoreObjective(objectivePrefabData, objectiveSaveInfo)
+		end
+	end
+	
+	-- Restore dynamically added 'null objective' UI explicitly:
+	local objectiveData = __GetOrCreateNullObjData()
+	local nullObjectiveSaveInfo = {
+		addedHintpoints = objectiveSave.nullObjectiveAddedHintpoints
+	}
+	PartialSave_RestoreDynamicUI(objectiveData, nullObjectiveSaveInfo)
+end

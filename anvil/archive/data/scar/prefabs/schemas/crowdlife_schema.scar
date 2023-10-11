@@ -1,0 +1,97 @@
+crowdlife_schema =
+{
+    type = "Prefab",
+    name = "crowdlife",
+    description = "Crowd life prefab",
+    script = "crowdlife.scar",
+    compatibility = {
+        "triggerable",
+    },
+    proxy = "art/environment/objects/statues/statue_mary",
+     
+    itemSchema = {
+		{
+			type = ST_EGROUP,
+			name = "supply_consumer",
+			displayName = "Supply Consumer",
+			description = "Supply consumer to check if its in supply",
+		},
+		{
+			type = ST_PBG,
+			name = "squad_to_spawn",
+			displayName = "Squad To Spawn",
+			blueprintType = "squad",
+		},
+		{
+			type = ST_STRING,
+			name = "spawn_pos_type",
+			description = "Which type of spawn point to have.",
+			options = {"Position", "EGroup"},
+			default = "EGroup",
+		},
+		{
+			type = ST_MARKER,
+			name = "spawn_pos",
+			displayName = "Unit Spawn Pos",
+			description = "Unit will spawn from here",
+			colour = "white",
+			hasRange = false,
+			requirement = {"spawn_pos_type", "Position"},
+		},
+		{
+			type = ST_EGROUP,
+			name = "spawn_pos_entity",
+			displayName = "Unit Spawn Pos",
+			description = "Unit will spawn from here",
+			requirement = {"spawn_pos_type", "EGroup"},
+		},
+		{
+			type = ST_STRING,
+			name = "destination_pos_type",
+			description = "Which type of spawn point to have.",
+			options = {"Position", "EGroup"},
+			default = "EGroup",
+		},
+		{
+			type = ST_MARKER,
+			name = "destination_pos",
+			displayName = "Destination Pos",
+			description = "Unit will go here",
+			colour = "white",
+			hasRange = false,
+			requirement = {"destination_pos_type", "Position"},
+		},
+		{
+			type = ST_EGROUP,
+			name = "destination_pos_entity",
+			displayName = "Destination Pos entity",
+			description = "Unit will go here",
+			requirement = {"destination_pos_type", "EGroup"},
+		},
+		{
+			type = ST_STRING,
+			name = "frequency_type",
+			description = "How often should this entity spawn.",
+			options = {"Turns", "Seconds"},
+			default = "Turns",
+		},
+		{
+			type = ST_NUMBER,
+			name = "frequency_turns",
+			displayName = "Spawn Timer Turn",
+			description = "Turns it takes for unit to spawn",
+			min = 0,
+			max = 1000000,
+			requirement = {"frequency_type", "Turns"},
+		},
+		{
+			type = ST_NUMBER,
+			name = "frequency_seconds",
+			displayName = "Spawn Timer Seconds",
+			description = "Seconds it takes for unit to spawn",
+			min = 0,
+			max = 1000000,
+			requirement = {"frequency_type", "Seconds"},
+		},
+    }
+}

@@ -1,0 +1,74 @@
+--
+-- "Secondary Objective"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("anvil.scar")
+import("conditionlist.scar")
+import("actionlist.scar")
+import("playbills.scar")
+
+
+--? @group scardoc;Prefabs
+
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function secondaryobjective_Init(data)
+
+	local instance = Prefab_GetInstance(data)
+	
+	if player1 == nil then
+		player1 = World_GetPlayerAt(1)
+	end
+	g_enemy_team = g_enemy_team or Core_GetTeamsEntryFromIndex(2)
+	
+	MissionPrint("Secondary Objective Prefab is Initializing")
+	
+	
+	
+end
+
+
+
+function secondaryobjective_PostInit(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end
+
+
+
+--? @args Table/String instance
+--? @shortdesc Spawn the encounter in this instance (i.e. if it was set to trigger manually) or, if it's already spawned and is waiting for it's goal to trigger, triggers that instead.
+function secondaryobjective_Trigger(data)
+
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end
+
+
+
+-- Stop the secondaryobjective associated with this instance and destroys any spawned squads the player can't see
+function secondaryobjective_Stop(data)
+	
+	local instance = Prefab_GetInstance(data)
+	
+	
+	
+end 

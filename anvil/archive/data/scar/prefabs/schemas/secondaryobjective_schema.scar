@@ -1,0 +1,93 @@
+--
+-- WorldBuilder prefab
+-- "secondaryobjective"
+--
+
+
+-- Schema
+
+secondaryobjective_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "secondaryobjective",																						-- name the prefab uses to identify itself
+	description = "secondaryobjective",																				-- name to display for this prefab
+	script = "secondaryobjective.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+	
+		------------------------
+		------------------------ SECONDARY BEATS
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "secondary_beats",
+			description = "All secondary beats possible on this map",
+			multiplicity = "multiple",
+			itemSchema = {
+				{											
+					type = ST_STRING,
+					name = "secondary_type",
+					description = "Context and dialogue used for this objective",
+					options = {"Land", "Beach", "Airdrop", "Secret"},
+					default = "Land",
+				},
+				{							
+					type = ST_NUMBER,
+					name = "time_limit",
+					description = "Limit until objective fail, -1 means none",
+					default = -1,
+				},
+				{							
+					type = ST_NUMBER,
+					name = "interactive_stage",
+					description = "Set to the interactive stage area the player should be restricted to",
+					default = 1,
+				},
+				{											
+					type = ST_STRING,
+					name = "objective_type",
+					description = "Context and dialogue used for this objective",
+					options = {"CapturePoint", "DestroyBuilding", "ClearArea", "KillUnit"},
+					default = "ClearArea",
+				},
+				{
+					type = ST_SGROUP,
+					name = "egroup",                 
+					description = "Point to capture OR building to destroy",
+					requirement = {"objective_type", "CapturePoint", "DestroyBuilding"},
+				},
+				{
+					type = ST_PBG,
+					name = "unit_target",
+					blueprintType  = "squad",
+					description = "Unit the player has to take out to complete the intro objective",
+					show = true,
+					showAlways = true,
+					lockedTo = "location",
+					requirement = {"objective_type", "KillUnit"},
+				},
+				{
+					type = ST_MARKER,
+					name = "location",
+					description = "Location of area to clear OR of unit to kill",
+					colour = "red",
+					hasDirection = true,
+					requirement = {"objective_type", "KillUnit", "ClearArea"},
+				},
+				{
+					type = ST_MARKER,
+					name = "player_spawn_area",
+					description = "Area the player's starting units will spawn",
+					colour = "aqua",
+					hasDirection = true,
+				},
+			
+			},
+		},
+		
+		
+	},
+}

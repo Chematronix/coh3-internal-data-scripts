@@ -1,0 +1,207 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- SYNC WEAPON FUNCTIONS
+-- Provides an interface for dealing with sync weapons
+--
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+
+--? @shortdesc Registers the sync weapon in the egroup and returns a SyncWeaponID you can use to keep track of it
+--? @result SyncWeaponID
+--? @args EGroupID egroup
+function SyncWeapon_GetFromEGroup(egroup)
+
+	local syncweapon
+	
+	-- takes the first sync weapon in an egroup... 
+	local _CheckEntity = function(gid, idx, eid)
+		if (Entity_IsSyncWeapon(eid) == true) then
+			syncweapon = eid
+			return true
+		elseif (Entity_IsHoldingAny(eid) == true) then
+			
+			_sg_syncweaponstemp = SGroup_CreateIfNotFound("_sg_syncweaponstemp")
+			SGroup_Clear(_sg_syncweaponstemp)
+			Entity_GetSquadsHeld(eid, _sg_syncweaponstemp)
+			
+			local _CheckSquad = function(gid, idx, sid)
+				for n = 1, Squad_Count(sid) do
+					local eid = Squad_EntityAt(sid, n-1)
+					if (Entity_IsSyncWeapon(eid) == true) then
+						syncweapon = eid
+						break
+					end
+				end
+				if (syncweapon ~= nil) then
+					return true
+				end
+			end
+			SGroup_ForEachEx(_sg_syncweaponstemp, _CheckSquad, true, true)
+			
+			if syncweapon ~= nil then
+				return true
+			end
+			
+		end
+	end
+	EGroup_ForEachEx(egroup, _CheckEntity, true, true)
+	
+	if syncweapon ~= nil then
+		return Entity_GetID(syncweapon)
+	end
+	
+end
+
+
+--? @shortdesc Registers the sync weapon in the sgroup and returns a SyncWeaponID you can use to keep track of it
+--? @result SyncWeaponID
+--? @args SGroupID sgroup
+function SyncWeapon_GetFromSGroup(sgroup)
+
+	local syncweapon
+	
+	-- takes the first sync weapon in an sgroup... 
+	local _CheckSquad = function(gid, idx, sid)
+		
+		if Squad_IsHoldingAny(sid) then
+			_sg_syncweaponstemp = SGroup_CreateIfNotFound("_sg_syncweaponstemp")
+			SGroup_Clear(_sg_syncweaponstemp)
+			Squad_GetSquadsHeld(sid, _sg_syncweaponstemp)
+			SGroup_ForEachEx(_sg_syncweaponstemp, _CheckSquad, true, true)
+		else
+			for n = 1, Squad_Count(sid) do
+				local eid = Squad_EntityAt(sid, n-1)
+				if (Entity_IsSyncWeapon(eid) == true) then
+					syncweapon = eid
+					break
+				end
+			end
+		end
+		
+		if (syncweapon ~= nil) then
+			return true
+		end
+		
+	end
+	SGroup_ForEachEx(sgroup, _CheckSquad, true, true)
+	
+	if syncweapon ~= nil then
+		return Entity_GetID(syncweapon)
+	end
+	
+end
+
+
+--? @shortdesc Returns true if the specified player owns the sync weapon. Use a playerid of nil to see if it's unonwed.
+--? @result Boolean
+--? @extdesc If player is not specified, then the code will check to see if the SyncWeapon is owned by the world.
+--? @args SyncWeaponID weapon, [PlayerID player]
+function SyncWeapon_IsOwnedByPlayer(swid, player)
+
+	-- not valid anymore?
+	if not SyncWeapon_Exists(swid) then
+		return false
+	end
+	
+	local eid = Entity_FromID(swid)
+	local swp = nil
+	
+	if (eid ~= nil) then
+		if (World_OwnsEntity(eid) == false) then
+			swp = Entity_GetPlayerOwner(eid)
+		end
+	end
+	
+	if player == nil then
+		return swp == nil
+	else
+		if swp == nil then
+			return false
+		else
+			return World_GetPlayerIndex(swp) == World_GetPlayerIndex(player)
+		end
+	end
+	
+end
+
+
+--? @shortdesc Returns the EntityID of a sync weapon, or nil if it's been destroyed
+--? @result EntityID
+--? @args SyncWeaponID weapon
+function SyncWeapon_GetEntity(swid)
+	if SyncWeapon_Exists(swid) then
+		return Entity_FromID(swid)
+	end
+end
+
+
+--? @shortdesc Returns the position of a sync weapon, or nil if it's been destroyed
+--? @result Position
+--? @args SyncWeaponID weapon
+function SyncWeapon_GetPosition(swid)
+	if SyncWeapon_Exists(swid) then
+		return Entity_GetPosition(Entity_FromID(swid))
+	end
+end
+
+
+--? @shortdesc Returns true if a sync weapon still exists in the game world
+--? @result Boolean
+--? @args SyncWeaponID weapon
+function SyncWeapon_Exists(swid)
+	return swid ~= nil and Entity_IsValid(swid) and Entity_IsSyncWeapon(Entity_FromID(swid))
+end
+
+
+--? @shortdesc Sets whether a weapon to auto-target things or not
+--? @args SyncWeaponID weapon, String hardpoint, Bool enable
+--? @result Void
+function SyncWeapon_SetAutoTargetting(swid, hardpoint, enable)
+
+	if SyncWeapon_Exists(swid) then
+		
+		-- create the appropriate modifier
+		local modifier = 1
+		if (enable == true) then
+			modifier = Modifier_Create(MAT_Weapon, "auto_target_enable_weapon_modifier", MUT_Enable, true, 1, hardpoint)
+		else
+			modifier = Modifier_Create(MAT_Weapon, "auto_target_enable_weapon_modifier", MUT_Enable, true, -1, hardpoint)
+		end
+		
+		local eid = Entity_FromID(swid)
+		Modifier_ApplyToEntity(modifier, eid, 0)
+		
+	end
+	
+end
+
+--? @shortdesc Checks whether or not the actual sync weapon in a squad attacking.
+--? @args SyncWeaponID weapon, Real time
+--? @result Boolean
+function SyncWeapon_IsAttacking(swid, amount)
+
+	if SyncWeapon_Exists(swid) then
+		return Entity_IsAttacking(Entity_FromID(swid), amount)
+	end
+	
+	return false
+
+end
+
+--? @shortdesc Checks whether a sync weapon can attack a target without moving or turning.
+--? @args SyncWeaponID weapon, egroup/sgroup/pos/marker target
+--? @result Boolean
+function SyncWeapon_CanAttackNow(swid, target)
+
+	if SyncWeapon_Exists(swid) then
+		target = Util_GetPosition(target)
+		return Entity_CanAttackNow(SyncWeapon_GetEntity(swid), target)
+	end
+	
+	return false
+
+end

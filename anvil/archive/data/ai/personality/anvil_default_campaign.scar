@@ -1,0 +1,16 @@
+import("campaign.scar")
+import( 'tactics.scar' )
+import( 'utility/debug.scar' )
+import( 'ai-view.scar' )
+import( 'anvil_objects.scar' )
+import( 'anvil_ai_player_debug.scar' )
+import( 'anvil_campaign_objects.scar' )
+import( 'anvil_campaign_scoring_functions.scar')
+
+
+function InitializeAIPersonality()
+	
+end
+
+InitializeCampaignAI()
+InitializeAIPersonality()

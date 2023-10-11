@@ -1,0 +1,3935 @@
+----------------------------------------------------------------------------------------------------------------
+-- SGroup and EGroup helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+import("Squad.scar")
+import("Entity.scar")
+import("GroupCallers.scar")
+
+-- Types
+FILTER_KEEP = 0
+FILTER_REMOVE = 1
+
+----------------------------------------------------------------------------------------------------------------
+-- Priv
+
+_Groups_Private = {
+
+	__skipsave = true,
+	
+	-- Create a group and return it if not found.
+	CreateGroupIfNotFound = function( groupname, groupcaller )
+		if( groupcaller.Exists( groupname ) ) then
+			-- found, return existing
+			return groupcaller.FromName( groupname )
+		end
+		
+		-- not found, create new
+		return groupcaller.Create( groupname )
+	end,
+	
+	-- Returns true if group is empty
+	IsGroupEmpty = function( group, groupcaller )
+		return ( groupcaller.GetSpawnedCount( group ) == 0 )
+	end,
+	
+	-- Can ALL or ANY items in a group see ALL or ANY items in an egroup
+	CanGroupSeeEGroup = function( group1, groupcaller1, egroup, all )
+	
+		local CheckCanSeeEGroup = function( groupid, groupindex, itemid )
+			
+			local CheckCanItemSeeEntity = function( egroupid, egroupindex, entityid )
+				return groupcaller1.CanItemSeeEntity( itemid, entityid )
+			end
+			
+			-- can this item see all or any items of an egroup?
+			return EGroupCaller.ForEachAllOrAny( egroup, all, CheckCanItemSeeEntity )
+			
+		end
+		
+		return groupcaller1.ForEachAllOrAny( group1, all, CheckCanSeeEGroup )
+	end,
+	
+	-- Can ALL or ANY items in a group see ALL or ANY items in an sgroup
+	CanGroupSeeSGroup = function( group1, groupcaller1, sgroup, all )
+	
+		local CheckCanSeeSGroup = function( groupid, groupindex, itemid )
+			
+			local CheckCanItemSeeSquad = function( sgroupid, sgroupindex, squadid )
+				return groupcaller1.CanItemSeeSquad( itemid, squadid )
+			end
+			
+			-- can this item see all or any items of an egroup?
+			return SGroupCaller.ForEachAllOrAny( sgroup, all, CheckCanItemSeeSquad )
+			
+		end
+		
+		return groupcaller1.ForEachAllOrAny( group1, all, CheckCanSeeSGroup )
+	end,
+	
+	-- Are ALL or ANY items of a group in cover?
+	IsGroupInCover = function( groupid, groupcaller, all )
+		
+		local CheckIsInCover = function( groupid, itemindex, itemid )
+			return groupcaller.IsItemInCover( itemid, all )
+		end
+		
+		return  groupcaller.ForEachAllOrAny( groupid, all, CheckIsInCover )
+		
+	end,
+	
+	-- Are ALL or ANY items of a group under attack?
+	IsGroupUnderAttack = function( groupid, groupcaller, all, duration )
+		
+		local CheckIsItemUnderAttack = function ( groupid, itemindex, itemid )
+			return groupcaller.IsItemUnderAttack( itemid, duration )
+		end
+		
+		return  groupcaller.ForEachAllOrAny( groupid, all, CheckIsItemUnderAttack )
+		
+	end,
+	
+	IsGroupUnderAttackFromDirection = function( groupid, groupcaller, all, offset, duration )
+		
+		if type(offset) ~= "table" then
+			offset = {offset}
+		end
+		
+		local CheckIsItemUnderAttack = function ( groupid, itemindex, itemid )	
+			for i = 1, (#offset) do
+				if groupcaller.IsItemUnderAttackFromDirection( itemid, offset[i], duration ) then
+					return true
+				end
+			end
+			return false
+		end
+		
+		return groupcaller.ForEachAllOrAny( groupid, all, CheckIsItemUnderAttack )
+		
+	end,
+	
+	-- Are ALL or ANY items of a group under attack?
+	IsGroupAttacking = function( groupid, groupcaller, all, duration )
+		
+		local CheckIsItemAttacking = function ( groupid, itemindex, itemid )
+			return groupcaller.IsItemAttacking( itemid, duration )
+		end
+		
+		return  groupcaller.ForEachAllOrAny( groupid, all, CheckIsItemAttacking )
+		
+	end,
+	
+	GetAvgGroupHealth = function( groupid, groupcaller )
+		
+		local currentHealth = 0
+		local maxHealth = 0
+		
+		local GetItemHealth = function( groupid, itemindex, itemid )
+			currentHealth = currentHealth + groupcaller.GetItemHealth( itemid )
+			maxHealth = maxHealth + groupcaller.GetItemHealthMax( itemid )
+		end
+		
+		-- check health
+		groupcaller.ForEach( groupid, GetItemHealth )
+		
+		
+		local result = 0.0
+		
+		-- make sure max health is not 0
+		if ( maxHealth > 0.0 ) then 
+			result = currentHealth / maxHealth
+		end
+		
+		if( (result < 0.0) or (result > 1.0) ) then
+			print("this should never happen: " .. result .. " (" .. currentHealth .. " / " .. maxHealth .. ")")
+		end
+		
+		return result
+		
+	end,
+	
+	SetAvgGroupHealth = function( groupid, groupcaller, healthPercent )
+		
+		-- clip health [0.0, 1.0]
+		if( healthPercent < 0 ) then healthPercent = 0 end
+		if( healthPercent > 1 ) then healthPercent = 1 end
+	
+		local GetItemHealth = function( groupid, itemindex, itemid )
+			groupcaller.SetItemHealth( itemid, healthPercent )
+		end
+		
+		-- set health
+		groupcaller.ForEach( groupid, GetItemHealth )
+		
+	end,
+	
+	SetPlayerOwner = function( groupid, groupcaller, playerOwner )
+	
+		local SetOwner = function( groupid, itemindex, itemid )
+			groupcaller.SetPlayerOwner( itemid, playerOwner )
+		end
+		
+		groupcaller.ForEachEx( groupid, SetOwner, true, true )
+	end,
+	
+	-- destroys all items in a group
+	DestroyAllItems = function( groupid, groupcaller )
+	
+		local DestroyItem = function( groupid, itemindex, itemid )
+			groupcaller.DestroyItem( itemid )
+		end
+		
+		groupcaller.ForEachEx( groupid, DestroyItem, true, true )
+		
+	end,
+	
+	-- check if a group contains all or any of the blueprints in a blueprint list
+	GroupContainsBlueprints = function( groupid, groupcaller, bpList, all )
+		
+		for i=1, (# bpList ) do
+			
+			local bp = bpList[i]
+			
+			local hasBlueprints = false
+			for j = 1, groupcaller.GetSpawnedCount( groupid ) do
+				if groupcaller.GetItemBlueprint( groupcaller.GetSpawnedItemAt( groupid, j) ) == bp then
+					hasBlueprints = true
+					break
+				end
+			end
+			
+			-- check all condition
+			if( all == true and hasBlueprints == false ) then return false end
+			
+			-- check any condition
+			if( all == false and hasBlueprints == true ) then return true end
+			
+		end
+		
+		-- conditions not met; return true for all found or false for any not found
+		return all
+		
+	end,
+	
+	-- check the invulnerability state of ALL or ANY items in a group
+	GroupGetInvulnerable = function( groupid, groupcaller, all )
+		
+		local IsInvulnerable = function( groupid, itemindex, itemid )
+			return groupcaller.GetInvulnerable( itemid )
+		end
+		
+		local result = groupcaller.ForEachAllOrAny( groupid, all, IsInvulnerable )
+		return result
+		
+	end,
+	
+	-- set the invulnerability state of ALL items in a group
+	GroupSetInvulnerable = function( groupid, groupcaller, enabled, reset_time )
+		
+		local SetInvulnerable = function( groupid, itemindex, itemid )
+			groupcaller.SetInvulnerable( itemid, enabled, reset_time )
+		end
+		
+		groupcaller.ForEach( groupid, SetInvulnerable )
+		
+	end,
+	
+	-- 
+	DoGroupSpawn = function ( groupid, groupcaller, spawn )
+		local items = {}
+		
+		local DoItemSpawn = function( groupid, itemindex, itemid )
+			table.insert( items, itemid )
+		end
+		
+		-- when spawn is true, we want to iterate over all despawned items
+		groupcaller.ForEachEx( groupid, DoItemSpawn, not spawn, spawn )
+		
+		for i = 1, (# items ) do
+			if( spawn ) then
+				groupcaller.ReSpawnItem( items[i] )
+			else
+				groupcaller.DeSpawnItem( items[i] )
+			end
+		end
+		
+	end,
+	
+	-- set selectable state of all items in a group
+	GroupSetSelectable = function( groupid, groupcaller, selectable )
+		
+		local SetSelectable = function( groupid, itemindex, itemid )
+			return groupcaller.SetSelectable( itemid, selectable )
+		end
+		
+		groupcaller.ForEach( groupid, SetSelectable )
+		
+	end,
+	
+	auto_targetting_modids = {}
+}
+
+local _IsCommandActive = function(sgroup, commandid, all)
+
+	local _CheckSquad = function(gid, idx, sid)
+		if Squad_HasActiveCommand(sid) and Squad_GetActiveCommand(sid) == commandid then
+			return true
+		end
+	end
+   
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+-- calls function with as many arguments as provided. we have to pass in correct # of arguments in case we're calling a C++ function
+local function _CallFunction(func, arg)
+
+	local argsize = (#arg)
+	if argsize == 0 then
+		return func()
+	elseif argsize == 1 then
+		return func(arg[1])
+	elseif argsize == 2 then
+		return func(arg[1], arg[2])
+	elseif argsize == 3 then
+		return func(arg[1], arg[2], arg[3])
+	elseif argsize == 4 then
+		return func(arg[1], arg[2], arg[3], arg[4])
+	elseif argsize == 5 then
+		return func(arg[1], arg[2], arg[3], arg[4], arg[5])
+	elseif argsize == 6 then
+		return func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6])
+	elseif argsize == 7 then
+		return func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7])
+	elseif argsize == 8 then
+		return func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8])
+	elseif argsize == 9 then
+		return func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8], arg[9])
+	elseif argsize == 10 then
+		return func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8], arg[9], arg[10])
+	else
+		fatal("too many arguments! (" .. argsize .. ")")
+	end
+
+end
+
+local Group_CallItemFunction = function(group, func, arg)
+	
+	-- make room for first argument which will be squad/entity
+	table.insert(arg, 1, 0)
+	
+	local _OneItem = function(gid, idx, iid)
+		arg[1] = iid -- keep replacing the first argument with the squad/entity
+		_CallFunction(func, arg)
+	end
+	
+	local groupcaller = __GetGroupCaller(group)
+	groupcaller.ForEach(group, _OneItem)
+	
+end
+
+local Group_CallItemFunctionAllOrAny = function(group, all, func, arg)
+	
+	-- make room for first argument which will be squad/entity
+	table.insert(arg, 1, 0)
+	
+	local _OneItem = function(gid, idx, iid)
+		arg[1] = iid -- keep replacing the first argument with the squad/entity
+		return _CallFunction(func, arg)
+	end
+	
+	local groupcaller = __GetGroupCaller(group)
+	return groupcaller.ForEachAllOrAny(group, all, _OneItem)
+	
+end
+
+--? @shortdesc Calls an Entity_ function on every entity in an egroup
+--? @extdesc Example: EGroup_CallEntityFunction( eg_emplacements, Entity_SetAnimatorAction, actionName )
+--? @extdesc will call Entity_SetAnimatorAction( entity, actionName ) for every entity in eg_emplacements
+--? @extdesc The first parameter of the supplied function must be EntityID
+--? @args EGroupID egroup, Function entityFunction, variable argument list
+function EGroup_CallEntityFunction(egroup, func, ...)
+	local arg = {...}
+
+	Group_CallItemFunction(egroup, func, arg)
+end
+
+--? @shortdesc Returns whether ALL or ANY entities in an egroup satisfy a condition, using an Entity_ function to perform the query on each entity
+--? @extdesc Example: EGroup_CallEntityFunctionAllOrAny( eg_emplacements, ANY, Misc_IsEntityOnScreen, pct )
+--? @extdesc will call Misc_IsEntityOnScreen( entity, pct ) to determine whether ANY entity in eg_emplacements is on screen
+--? @extdesc The first parameter of the supplied function must be EntityID
+--? @args EGroupID egroup, Boolean all, Function entityFunction, variable argument list
+function EGroup_CallEntityFunctionAllOrAny(egroup, all, func, ...)
+	local arg = {...}
+
+	return Group_CallItemFunctionAllOrAny(egroup, all, func, arg)
+end
+
+--? @shortdesc Calls a Squad_ function on every squad in an sgroup
+--? @extdesc Example: SGroup_CallSquadFunction( sg_riflemen, Squad_IncreaseVeterancyRank, 2, true )
+--? @extdesc will call Squad_IncreaseVeterancyRank( squad, 2, true ) for every squad in sg_riflemen.
+--? @extdesc The first parameter of the supplied function must be SquadID
+--? @args SGroupID sgroup, Function squadFunction, variable argument list
+function SGroup_CallSquadFunction(sgroup, func, ...)
+	local arg = {...}
+
+	Group_CallItemFunction(sgroup, func, arg)
+end
+
+--? @shortdesc Returns whether ALL or ANY squads in an sgroup satisfy a condition, using a Squad_ function to perform the query on each squad
+--? @extdesc Example: SGroup_CallSquadFunctionAllOrAny( sg_commandos, ANY, Misc_IsSquadOnScreen, pct )
+--? @extdesc will call Misc_IsSquadOnScreen( squad, pct ) to determine whether ANY squad in sg_commandos is on screen
+--? @extdesc The first parameter of the supplied function must be SquadID
+--? @args SGroupID sgroup, Boolean all, Function squadFunction, variable argument list
+function SGroup_CallSquadFunctionAllOrAny(sgroup, all, func, ...)
+	local arg = {...}
+	
+	return Group_CallItemFunctionAllOrAny(sgroup, all, func, arg)
+end
+
+--? @shortdesc Calls an Entity_ function on every entity in an sgroup
+--? @extdesc Example: SGroup_CallEntityFunction( sg_riflemen, Entity_SetCrushable, false )
+--? @extdesc will call Entity_SetCrushable( entity, false ) for every entity in sg_riflemen.
+--? @extdesc The first parameter of the supplied function must be EntityID
+--? @args SGroupID sgroup, Function entityFunction, variable-argument-list
+function SGroup_CallEntityFunction(sgroup, func, ...)
+	local arg = {...}
+
+	-- make room for first argument which will be an entity
+	table.insert(arg, 1, 0)
+	
+	local function _OneSquad(gid, idx, sid)
+		for i = 1, Squad_Count(sid) do
+			local entity = Squad_EntityAt(sid, i - 1)
+			arg[1] = entity
+			_CallFunction(func, arg)
+		end
+	end
+	
+	SGroup_ForEach(sgroup, _OneSquad)
+	
+end
+
+----------------------------------------------------------------------------------------------------------------
+-- EGroup
+
+--? @group scardoc;EGroup
+
+--? @shortdesc Returns an EGroup with a unique name, prefixed by the 'prefix' parameter.
+--? @args [String prefix]
+--? @result EGroup
+function EGroup_CreateUnique(prefix)
+	
+	if scartype(prefix) == ST_STRING then
+		return EGroup_CreateUniqueWithPrefix(prefix)
+	else
+		return EGroup_CreateUniqueWithPrefix("")
+	end
+	
+end
+
+--? @shortdesc Returns true if ALL or ANY entities are in cover.
+--? @args EGroupID egroup, Boolean all
+--? @result Boolean
+function EGroup_IsInCover( egroupid, all )
+	return _Groups_Private.IsGroupInCover(
+				egroupid,
+				EGroupCaller,
+				all
+			)	
+end
+
+--? @shortdesc Returns true if ALL or ANY entities are under attack within the time
+--? @args EGroupID egroup, Boolean all, Float time
+--? @result Boolean
+function EGroup_IsUnderAttack( egroupid, all, duration )
+	return _Groups_Private.IsGroupUnderAttack(
+				egroupid,
+				EGroupCaller,
+				all,
+				duration
+			)	
+end
+
+--? @shortdesc Returns true if ALL or ANY entities are under attack from a direction within the time. see ScarUtil.scar for types of directions. you can pass in a table of offsets
+--? @args EGroupID egroup, Boolean all, Integer/Table offset, Float time
+--? @result Boolean
+function EGroup_IsUnderAttackFromDirection( egroupid, all, offset, duration )
+	return _Groups_Private.IsGroupUnderAttackFromDirection(
+				egroupid,
+				EGroupCaller,
+				all,
+				offset,
+				duration
+			)
+end
+
+--? @shortdesc Returns true if ALL or ANY entities are attacking within the time
+--? @args EGroupID egroup, Boolean all, Float time
+--? @result Boolean
+function EGroup_IsDoingAttack( egroupid, all, duration )
+	return _Groups_Private.IsGroupAttacking(
+				egroupid,
+				EGroupCaller,
+				all,
+				duration
+			)	
+end
+
+--? @shortdesc Returns true if ALL or ANY entities in a group can see ALL or ANY entities in a given egroup.
+--? @args EGroupID egroup, EGroupID targetegroup, Boolean all
+--? @result Boolean
+function EGroup_CanSeeEGroup( egroupid, targetegroupid, all )
+	return _Groups_Private.CanGroupSeeEGroup(
+				egroupid,
+				EGroupCaller,
+				targetegroupid,
+				all
+			)
+end
+
+--? @shortdesc Returns true if ALL or ANY entities in a group can see ALL or ANY squads in a given sgroup.
+--? @args EGroupID egroup, SGroupID targetsgroup, Boolean all
+--? @result Boolean
+function EGroup_CanSeeSGroup( egroupid, targetsgroupid, all )
+	return _Groups_Private.CanGroupSeeSGroup(
+				egroupid,
+				EGroupCaller,
+				targetsgroupid,
+				all
+			)
+end
+
+--? @shortdesc Find a entity group from name.  Creates a new one with given name if it doesnt exist.
+--? @args String egroupname
+--? @result EGroupID
+function EGroup_CreateIfNotFound( egroupname )
+	return _Groups_Private.CreateGroupIfNotFound( egroupname, EGroupCaller )
+end
+
+--? @shortdesc Returns true if a named entity group contains no spawned or despawned entities
+--? @args EGroupID egroup
+--? @result Boolean
+function EGroup_IsEmpty( egroupid )
+	return _Groups_Private.IsGroupEmpty( egroupid, EGroupCaller )
+end
+
+--? @shortdesc Returns true if all or any strategic points in a group have been captured. Use ANY or ALL.
+--? @extdesc This function will ignore all entities that cannot be captured and will return false if no entities in the group can be captured.
+--? @args EGroupID egroup, PlayerID playerId, Boolean all
+--? @result Boolean
+function EGroup_IsCapturedByPlayer( egroup, playerid, all )
+	local n = EGroup_Count( egroup )
+	
+	local CheckCapturedByPlayer = function ( groupid, itemindex, itemid )
+		if( World_OwnsEntity( itemid ) == false ) then
+		
+			if( Entity_IsStrategicPoint( itemid ) ) then
+				return Player_GetID( Entity_GetPlayerOwner( itemid ) ) == Player_GetID( playerid )
+			end
+			
+		end
+		
+		return false
+	end
+	
+	local result = EGroup_ForEachAllOrAny( egroup, all, CheckCapturedByPlayer )
+	
+	return result
+end
+
+--? @shortdesc Returns true if all or any strategic points in a group have been captured. Use ANY or ALL.
+--? @extdesc This function will ignore all entities that cannot be captured and will return false if no entities in the group can be captured.
+--? @args EGroupID egroup, TeamID teamId, Boolean all
+--? @result Boolean
+function EGroup_IsCapturedByTeam( egroup, teamid, all )
+	local n = EGroup_Count( egroup )
+	
+	local CheckCapturedByTeam = function ( groupid, itemindex, itemid )
+		if( World_OwnsEntity( itemid ) == false ) then
+		
+			if( Entity_IsStrategicPoint( itemid ) ) then
+				for i = 1, (#teamid) do
+					return Player_GetID( Entity_GetPlayerOwner( itemid ) ) == Player_GetID( teamid[i] )
+				end
+			end
+			
+		end
+		
+		return false
+	end
+	
+	local result = EGroup_ForEachAllOrAny( egroup, all, CheckCapturedByTeam )
+	
+	return result
+end
+
+--? @shortdesc Returns the average health ratio of all units in a entity group.
+--? @extdesc This uses the "proper" measure of health for panel buildings, so should accurately reflect what the user sees.
+--? @args EGroupID egroup
+--? @result Real
+function EGroup_GetAvgHealth( egroupid )
+
+	local tally = 0.0
+	local count = 0
+	
+	local GetItemHealth = function( groupid, itemindex, itemid )
+		tally = tally + Entity_GetHealthPercentage( itemid )
+		count = count + 1
+	end
+	EGroup_ForEach( egroupid, GetItemHealth )
+	
+	local result = 0.0
+	
+	-- make sure count is not 0
+	if ( count >= 1 ) then 
+		result = tally / count
+	end
+	
+	if( (result < 0.0) or (result > 1.0) ) then
+--~ 		print("EGroup_GetAvgHealth: Result is out of expected bounds: " .. result .. " (" .. tally .. " / " .. count .. ")")
+	end
+	
+	return result
+	
+end
+
+--? @shortdesc Returns the total health of all units in a entity group.
+--? @extdesc This uses the "proper" measure of health for panel buildings, so should accurately reflect what the user sees.
+--? @args EGroupID egroup
+--? @result Real
+function EGroup_GetTotalHealth( egroupid )
+
+	local tally = 0.0
+	
+	local GetItemHealth = function( groupid, itemindex, itemid )
+		tally = tally + Entity_GetHealth(itemid)
+	end
+	EGroup_ForEach( egroupid, GetItemHealth )
+	
+	return tally
+	
+end
+
+
+--? @shortdesc Returns the total health of all units combined in a squad group.
+--? @args SGroupID sgroup
+--? @result Real
+function SGroup_GetTotalHealth( sgroupid )
+
+	local tally = 0.0
+	
+	local GetItemHealth = function( groupid, itemindex, itemid )
+		tally = tally + Squad_GetHealth(itemid)
+
+	end
+	SGroup_ForEach( sgroupid, GetItemHealth )
+	
+	return tally
+	
+end
+
+--? @shortdesc Sets the health of each unit in an entity group to a given percent [0.0, 1.0].
+--? @args EGroupID egroup, Real healthPercent
+--? @result Real
+function EGroup_SetAvgHealth( egroupid, healthPercent )
+	
+	return _Groups_Private.SetAvgGroupHealth(
+					egroupid,
+					EGroupCaller,
+					healthPercent
+				)
+	
+end
+
+--? @shortdesc Changes the player owner for all spawned and despawned entities of an EGroup.
+--? @extdesc Strategic/capturable point does not support setting player owner directly
+--? @args EGroup egroup, PlayerID owner
+--? @result Void
+function EGroup_SetPlayerOwner( egroupid, owner )
+	
+	_Groups_Private.SetPlayerOwner(
+			egroupid,
+			EGroupCaller,
+			owner
+	)
+	
+end
+
+--? @shortdesc Destroys all spawned and despawned entities in a group.
+--? @extdesc 
+--? Be careful not to confuse this with EGroup_Destroy which destroys the group and NOT the items it contains.  This function will destroy
+--? spawned and despawned items in a group
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_DestroyAllEntities( egroupid )
+	
+	return _Groups_Private.DestroyAllItems(
+					egroupid,
+					EGroupCaller
+				)
+	
+end
+
+--? @shortdesc Check if a group contains ALL or ANY of the blueprints.
+--? @args EGroupID egroup, EBP/EntityType/Table blueprint, Boolean all
+--? @result Boolean
+function EGroup_ContainsBlueprints( egroupid, bp, all )
+
+	if scartype(bp) ~= ST_TABLE then
+		bp = {bp}
+	end
+	
+	return _Groups_Private.GroupContainsBlueprints(
+					egroupid,
+					EGroupCaller,
+					bp,
+					all
+				)
+	
+end
+
+
+--? @shortdesc Check if ANY or ALL of the entities in a group match the blueprint specified.
+--? @extdesc The blueprint can be a table of blueprints or types (see Entity_HasBlueprint() for details)
+--? @args EGroupID egroup, EBP/EntityType/Table blueprint, Boolean all
+--? @result Boolean
+function EGroup_HasBlueprint(egroup, bp, all)
+
+	local _CheckEntity = function(gid, idx, eid)
+		return Entity_HasBlueprint(eid, bp)
+	end
+	
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckEntity)
+
+end
+
+
+--? @shortdesc Enable/Disable invulnerablity for an entire entity group. Use true and false for simple on/off, or use a number between 0.0 and 1.0 for more precise control on how much damage an entity can take before it takes no more.
+--? @result Void
+--? @args EGroupID egroup, Boolean enabled[, Float reset_time]
+--? @extdesc The optional reset_time is used to automatically remove invulnerability after a set time. If invulnerable, health damage is disabled.
+function EGroup_SetInvulnerable(egroupid, enabled, reset_time)
+	
+	if reset_time == nil then
+		reset_time = 0
+	end
+	
+	if (scartype(egroupid) ~= ST_EGROUP) then fatal("EGroup_SetInvulnerable: egroupid is invalid") end
+	if (scartype(enabled) ~= ST_BOOLEAN) and (scartype(enabled) ~= ST_NUMBER) then fatal("EGroup_SetInvulnerable: enabled is invalid") end
+	if (scartype(reset_time) ~= ST_NUMBER) then fatal("EGroup_SetInvulnerable: reset_time is invalid") end
+	
+	_Groups_Private.GroupSetInvulnerable(
+		egroupid,
+		EGroupCaller,
+		enabled,
+		reset_time
+	)
+	
+end
+
+--? @shortdesc Set the minimum health for this entity
+--? @result Void
+--? @args EGroupID egroup, float minhealth
+--? @extdesc This is usually set to zero, any higher value prevents the entity from having its health reduced below this given value
+function EGroup_SetHealthMinCap( egroupid, minhealth )
+	
+	local EGSetHealthMinCap = function( a, b, itemid )
+			Entity_SetInvulnerableMinCap( itemid, minhealth, 0 )
+	end
+		
+	EGroup_ForEach( egroupid, EGSetHealthMinCap )
+	
+end
+
+--? @shortdesc Returns the total count of all entities in a given EGroup with the provided blueprint
+--? @result Integer
+--? @args EGroupID sgroup,  EntityBlueprint/Table ebp
+function EGroup_CountBlueprints(egroupid, ebp)
+	local membercount = 0									-- initialise the tally counter
+	
+	local _count = function(gid, idx, eid)
+		if scartype(ebp) == ST_PBG then
+			if Entity_GetBlueprint(eid) == ebp then
+				membercount = membercount + 1
+			end
+		elseif scartype(ebp) == ST_TABLE then
+			for i = 1, (#ebp) do
+				if Entity_GetBlueprint(eid) == ebp[i] then
+					membercount = membercount + 1
+				end
+			end
+		end
+	end
+	
+	EGroup_ForEachEx(egroupid, _count, true, true)
+	
+	return membercount									-- return the final tally	
+end
+
+--? @shortdesc Set the rally point for this entity
+--? @result Void
+--? @args EGroupID egroup, Position target
+--? @extdesc This is usually set to zero, any higher value prevents the entity from having its health reduced below this given value
+function EGroup_SetRallyPoint(egroupid, target)
+	
+	if scartype(target) ~= ST_SCARPOS then
+		target = Util_GetPosition(target)
+	end
+	
+	local EGSetRallyPoint = function(gid, idx, eid)
+		LocalCommand_EntityPos(Game_GetLocalPlayer(), gid, CMD_RallyPoint, target)
+	end
+	
+	EGroup_ForEach(egroupid, EGSetRallyPoint)
+
+end
+
+--? @shortdesc Check invulnerablity state for ALL or ANY entity in an entity group.
+--? @result Boolean
+--? @args EGroupID egroup, Boolean all
+--? @extdesc
+--? Set all param to true to check for ALL or set to false to check for ANY.
+function EGroup_GetInvulnerable( egroupid, all )
+
+	local result = _Groups_Private.GroupGetInvulnerable(
+		egroupid,
+		EGroupCaller,
+		all
+	)
+	
+	return result
+
+end
+
+--? @shortdesc Respawn all despawned entities in a group.
+--? @result Void
+--? @args EGroupID egroup
+function EGroup_ReSpawn( egroupid )
+	_Groups_Private.DoGroupSpawn(
+		egroupid, 
+		EGroupCaller,
+		true
+	)
+end
+
+--? @shortdesc Despawn all spawned entities in a group.
+--? @result Void
+--? @args EGroupID egroup
+function EGroup_DeSpawn( egroupid )
+	_Groups_Private.DoGroupSpawn(
+		egroupid, 
+		EGroupCaller,
+		false
+	)
+end
+
+
+--? @shortdesc Get the number of alive entities (both spawned and despawned)
+--? @result int
+--? @args EGroupID egroup
+function EGroup_CountAlive( egroupid )
+	local aliveCount = 0
+	
+	local function FindAliveEntityCount(egroupid, itemindex, entityID)
+		if Entity_IsAlive(entityID) then
+			aliveCount = aliveCount + 1
+		end
+	end
+	
+	EGroup_ForEachEx(egroupid, FindAliveEntityCount, true, true)
+	return aliveCount
+end
+
+--? @shortdesc Get a random spawned entity from egroup
+--? @args EGroup egroupid
+--? @result EntityID
+function EGroup_GetRandomSpawnedEntity( egroupid )
+
+	local num = EGroup_CountSpawned(egroupid)
+	
+	if ( num == 0 ) then
+		return 0
+	end
+	
+	-- index is one based
+	local index = World_GetRand( 1, num )
+	
+	-- get the random entity
+	return EGroup_GetSpawnedEntityAt( egroupid, index )
+
+end
+
+
+--? @shortdesc Get the closest entity in an egroup to a given position
+--? @args EGroup egroupid, Marker/Pos position
+--? @result EntityID
+function	EGroup_GetClosestEntity(egroup, position)
+	
+	position = Util_GetPosition(position)
+	
+	local closest_distance = nil
+	local closest_entity = nil
+	
+	local _CheckEntity = function(gid, idx, eid)
+		
+		local distance = Util_GetDistanceSquared(eid, position)
+		
+		if closest_distance == nil or distance < closest_distance then
+			closest_distance = distance
+			closest_entity = eid
+		end
+		
+	end
+	EGroup_ForEach(egroup, _CheckEntity)
+	
+	return closest_entity
+	
+end
+
+
+--? @shortdesc Get the first spawned entity from egroup that meets the condition (a function that takes an entity)
+--? @args EGroup egroupid, function condition(entity)
+--? @result EntityID or NIL if none met condition
+function EGroup_GetSpawnedEntityFilter( egroupid, condition )
+
+	local num = EGroup_CountSpawned(egroupid)
+	
+	if ( num == 0 ) then
+		return nil
+	end
+	
+	for i = 0, num do
+		local entity = EGroup_GetSpawnedEntityAt(egroupid, i)
+		if (condition(entity)) then
+			return entity
+		end
+	end
+	
+	return nil
+end
+
+--? @shortdesc Set player selectable state of entities in the egroup
+--? @args EGroupID egroup, Bool selectable
+--? @result Void
+function EGroup_SetSelectable( egroupid, selectable )
+
+	_Groups_Private.GroupSetSelectable( egroupid, EGroupCaller, selectable )
+	
+end
+
+
+--? @shortdesc Change the ownership of a Strategic Point
+--? @args EGroupID egroup, PlayerID player
+--? @result Void
+function EGroup_InstantCaptureStrategicPoint(egroupid, playerid)
+
+	local _Capture = function (gid, idx, eid)
+		Entity_InstantCaptureStrategicPoint(eid, playerid)
+	end
+	
+	EGroup_ForEach(egroupid, _Capture)
+	
+end
+
+
+--? @shortdesc Hide or show all entities in an EGroup
+--? @extdesc Bool should be true to hide, false to show
+--? @args EGroupID egroup, Bool hide
+--? @result Void
+function EGroup_Hide(group, bool)
+
+	-- thanks, NIS!
+	if group == nil then return end
+	
+	EGroup_CallEntityFunction(group, Entity_SimHide, bool)
+	EGroup_CallEntityFunction(group, Entity_VisHide, bool)
+	
+end
+
+
+
+--? @shortdesc Kill all entities in an EGroup
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_Kill(group)
+
+	if ( group == nil or scartype( group ) ~= ST_EGROUP ) then
+		return
+	end
+	
+	local _KillEntity = function (gid, idx, eid)
+		Entity_Kill(eid)
+	end
+	
+	EGroup_ForEachEx(group, _KillEntity, true, true)
+
+end
+
+
+--? @shortdesc Check if the entities are attacked by the player
+--? @args EGroupID group, PlayerID attackerplayer, Float duration
+--? @result Bool
+function EGroup_IsUnderAttackByPlayer(groupid, attackerplayer, duration)
+
+	local result = false;
+	
+	local _OneEntity = function (gid, idx, eid)
+		if ( Entity_IsUnderAttackByPlayer(eid, attackerplayer, duration) ) then
+			result = true
+		end
+	end
+	
+	EGroup_ForEach(groupid, _OneEntity)
+	
+	return result
+	
+end
+
+
+
+--? @shortdesc Returns true if EGroup contains a particular EntityID
+--? @args EGroupID egroup, EntityID entity
+--? @result Boolean
+function EGroup_ContainsEntity(group, entity)
+
+	local myid = Entity_GetID(entity)
+	
+	local _CheckEntity = function (gid, idx, eid)
+		if (Entity_GetID(eid) == myid) then
+			return true
+		end
+	end
+
+	return EGroup_ForEach(group, _CheckEntity)
+	
+end
+
+
+--? @shortdesc Returns true if EGroup1 contains ANY or ALL of EGroup2
+--? @args EGroupID egroup1, EGroupID egroup2, Boolean all
+--? @result Boolean
+function EGroup_ContainsEGroup(group1, group2, all)
+
+	local _CheckEntity = function(gid, idx, eid)
+		return EGroup_ContainsEntity(group1, eid)
+	end
+
+	return EGroup_ForEachAllOrAny(group2, all, _CheckEntity)
+	
+end
+
+--? @shortdesc Create and display kicker message on the each entity in the egroup to the player
+--? @args EGroupID group, PlayerID, player, LocString textid
+--? @result Void
+function EGroup_CreateKickerMessage(group, player, textid)
+
+	local _CreateEntityKickerMessage = function (gid, idx, eid)
+		return UI_CreateEntityKickerMessage(player, eid, textid)
+	end
+	
+	return EGroup_ForEachAllOrAny(group, ALL, _CreateEntityKickerMessage)
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL entities in an EGroup are moving.
+--? @result Boolean
+--? @args EGroupID egroupid, Boolean all
+function EGroup_IsMoving(egroupid, all)
+
+	local _IsEntityMoving = function (gid, idx, eid)
+		
+		return Entity_IsMoving(eid)
+		
+	end
+
+	return EGroup_ForEachAllOrAnyEx(egroupid, all, _IsEntityMoving, true, false)
+
+end
+
+
+--? @shortdesc Creates an entity group containing a single entity
+--? @extdesc
+--? Creates an EGroup containing just one entity, creating the group if it doesn't exist and clearing it if it does. It returns the name of the EGroup.
+--? @result EGroupID
+--? @args EGroupID egroup, entityID entity
+function EGroup_Single(groupID, entityID)
+
+--	local groupID = EGroup_CreateIfNotFound(name)
+	EGroup_Clear(groupID)
+	
+	EGroup_Add(groupID, entityID)
+
+	return groupID
+	
+end
+
+--? @shortdesc Warps all members of an EGroup immediately to a new position
+--? @args EGroupID entity, Position pos
+--? @result Void
+function EGroup_WarpToPos(egroup, pos)
+
+	local function _WarpMe(gid, idx, eid)
+		Entity_WarpToPos(eid, pos)
+	end
+	
+	EGroup_ForEach(egroup, _WarpMe)
+	
+end
+
+--? @shortdesc Warps all members of an EGroup immediately to a marker
+--? @args EGroupID entity, MarkerID marker
+--? @result Void
+function EGroup_WarpToMarker(egroup, marker)
+
+	EGroup_WarpToPos(egroup, Marker_GetPosition(marker))
+	
+end
+
+--? @shortdesc Filters an EGroup by blueprint or type.
+--? @extdesc
+--? Blueprints can be provided by name or by ID, and in a table if you want to filter on more than one type.
+--? Setting filtertype to FILTER_KEEP results in the group only containing entities of the types listed in the blueprint table.
+--? Setting filtertype to FILTER_REMOVE will strip those same entities out and leave those that aren't of the types listed.
+--? @result Void
+--? @args EGroupID egroup, ID/Table/String blueprint/type, Integer filtertype[, EGroupID splitGroup]
+function EGroup_Filter(groupid, blueprinttable, filtertype, splitGroupId)
+
+	-- stuff blueprint into a table if it isn't already
+	if (scartype(blueprinttable) ~= ST_TABLE) then
+		blueprinttable = {blueprinttable}
+	end
+	
+	local _FilterMe = function (gID, idx, eID)
+		
+		local hasBlueprint = Entity_HasBlueprint(eID, blueprinttable)
+		
+		if filtertype == FILTER_KEEP then
+			-- KEEP, so remove if it wasn't found in the table
+			if hasBlueprint == false then
+				if splitGroupId ~= nil then
+					EGroup_Add(splitGroupId, eID)
+				end
+				EGroup_Remove(gID, eID)
+			end
+		elseif filtertype == FILTER_REMOVE then
+			-- REMOVE, so remove if it was found in the table
+			if hasBlueprint == true then
+				if splitGroupId ~= nil then
+					EGroup_Add(splitGroupId, eID)
+				end
+				EGroup_Remove(gID, eID)
+			end
+		end
+		
+	end
+	
+	EGroup_ForEachEx(groupid, _FilterMe, true, true)
+	
+end
+
+
+--? @shortdesc Filters an EGroup by construction status. Set the filtertype to FILTER_REMOVE to remove buildings under construction.
+--? @extdesc Setting filtertype to FILTER_KEEP results in the group only containing those entities that are in the process of being built.
+--? @result Void
+--? @args EGroupID egroup, Integer filtertype
+function EGroup_FilterUnderConstruction(groupid, filtertype)
+
+	local _FilterMe = function (gID, idx, eID)
+		
+		-- find this entities status
+		local complete = false
+		if (Entity_GetBuildingProgress(eID) == 1) then
+			complete = true
+		end
+		
+		if filtertype == FILTER_KEEP then
+			-- KEEP, so remove if it is complete
+			if complete == true then
+				EGroup_Remove(gID, eID)
+			end
+		elseif filtertype == FILTER_REMOVE then
+			-- REMOVE, so remove if it is under construction
+			if complete == false then
+				EGroup_Remove(gID, eID)
+			end
+		end
+		
+	end
+	
+	EGroup_ForEach(groupid, _FilterMe)
+	
+end
+
+
+--? @shortdesc Filters an EGroup by whether units are on screen or not. Percent refers to the screen area you are considering (0.8 is a good value to use - it won't include things that are right at the screen edge).
+--? @extdesc Setting filtertype to FILTER_KEEP results in the group only containing those entities that are on screen.
+--? @result Void
+--? @args EGroupID egroup, Real percent, Integer filtertype
+function EGroup_FilterOnScreen(groupid, percent, filtertype)
+	
+	local _FilterMe = function (gID, idx, eID)
+		
+		local onScreen = Misc_IsEntityOnScreen(eID, percent)
+		
+		if filtertype == FILTER_KEEP then
+			-- KEEP, so remove if it is off-screen
+			if onScreen == false then
+				EGroup_Remove(gID, eID)
+			end
+		elseif filtertype == FILTER_REMOVE then
+			-- REMOVE, so remove if it is on-screen
+			if onScreen == true then
+				EGroup_Remove(gID, eID)
+			end
+		end
+		
+	end
+	
+	EGroup_ForEach(groupid, _FilterMe)
+	
+end
+
+
+--? @shortdesc Duplicates an EGroup. Creates a copy of egroup1 in egroup2. The function will clear egroup2 beforehand if necessary.
+--? @result Void
+--? @args EGroupID egroupid1, EGroupID egroupid2
+function EGroup_Duplicate(groupid1, groupid2)
+
+	-- clear group2
+	EGroup_Clear(groupid2)
+	
+	-- add group 1 to the empty group 2
+	EGroup_AddEGroup(groupid2, groupid1)
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL (use those keywords) of the entities in the group are present onscreen. You can pass in a percentage of the screen to check, so 0.8 would be a centered rectangle occupying 80% of the screen.
+--? @result Bool
+--? @args EGroupID group, Bool all[, Float percent]
+function EGroup_IsOnScreen(groupid, all, pct)
+
+	if pct == nil then pct = 1.0 end
+	
+	local _CheckEntity = function(gid, idx, eid)
+		return Misc_IsEntityOnScreen(eid, pct)
+	end
+	
+	return EGroup_ForEachAllOrAny(groupid, all, _CheckEntity)
+	
+end
+
+
+--? @shortdesc Sets whether a weapon to auto-target things or not
+--? @args EGroupID group, String hardpoint, Bool enable
+--? @result Void
+function EGroup_SetAutoTargetting(group, hardpoint, enable)
+
+	-- create the appropriate modifier
+	local modifier = 1
+	if (enable == true) then
+		modifier = Modifier_Create(MAT_Weapon, "auto_target_enable_weapon_modifier", MUT_Enable, true, 1, hardpoint)
+	else
+		modifier = Modifier_Create(MAT_Weapon, "auto_target_enable_weapon_modifier", MUT_Enable, true, -1, hardpoint)
+	end
+	
+	-- apply this to each squad in the group
+	local _ApplyModifier = function (gid, idx, eid)
+		Modifier_ApplyToEntity(modifier, eid, 0)
+	end
+	EGroup_ForEachEx(group, _ApplyModifier, true, true)
+	
+end
+
+--? @shortdesc Returns whether ANY or ALL entities in an EGroup have the specified upgrade
+--? @result Boolean
+--? @args EGroupID egroup, UpgradeID upgrade, Boolean all
+function EGroup_HasUpgrade(egroup, upgrade, all)
+
+	local _CheckEntity = function (gid, idx, eid)
+		return Entity_HasUpgrade(eid, upgrade)
+	end
+	
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckEntity)
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL of the squad's entities have the specified upgrade
+--? @result Boolean
+--? @args EGroupID egroup, UpgradeID upgrade, Boolean all
+function SGroup_HasEntityUpgrade(sgroup, upgrade, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		
+		local count = Squad_Count(sid)
+		
+		for n = 1, count do
+			return Entity_HasUpgrade(Squad_EntityAt(sid, n-1), upgrade)
+		end
+		
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+--? @shortdesc Returns the distance from the centre of the group of the entity that furthest out. 
+--? @result Real
+--? @args EGroupID egroup
+function EGroup_GetSpread(egroup)
+
+	local centerpos = EGroup_GetPosition(egroup)
+	local maxdist = 0
+	
+	local _CheckEntity = function (gid, idx, eid)
+		
+		local newpos = Entity_GetPosition(eid)
+		local dist = World_DistancePointToPoint(centerpos, newpos)
+		if dist > maxdist then
+			maxdist = dist
+		end
+		
+	end
+	
+	EGroup_ForEach(egroup, _CheckEntity)
+	
+	return maxdist
+	
+end
+
+
+--? @shortdesc Builds a table of EGroupIDs that are named in a sequence. i.e. a name of "eg_building" will find groups "eg_building1", "eg_building2" and so on, up until it looks for a group that isn't there.
+--? @args String name
+--? @result Table
+function EGroup_GetSequence(name)
+
+	local num = 1
+	local result = {}
+	
+	while EGroup_Exists(name..num) do
+		table.insert(result, EGroup_FromName(name..num))
+		num = num + 1
+	end
+	
+	if num >= 2 then
+		print("Retrieved sequence of EGroups: "..name.."1 to "..name..(num-1))
+	end
+	
+	return result
+	
+end
+
+
+--? @shortdesc Trigger animation action for an EGroup. Please only use this for simple animations
+--? @args EGroupID egroup, String actionName
+--? @result Void
+function EGroup_SetAnimatorAction(egroup, actionName)
+
+	local _SetEntity = function (gid, idx, eid)
+		Entity_SetAnimatorAction(eid, actionName)
+	end
+	EGroup_ForEach(egroup, _SetEntity)
+	
+end
+
+
+--? @shortdesc Set animation event for an EGroup. Please only use this for simple animations
+--? @args EGroupID egroup, String eventName
+--? @result Void
+function EGroup_SetAnimatorEvent(egroup, eventName)
+
+	local _SetEntity = function (gid, idx, eid)
+		Entity_SetAnimatorEvent(eid, eventName)
+	end
+	EGroup_ForEach(egroup, _SetEntity)
+	
+end
+
+
+--? @shortdesc Set animation state of a state machine for an EGroup. Please only use this for simple animations
+--? @args EGroupID egroup, String stateMachineName, String stateName
+--? @result Void
+function EGroup_SetAnimatorState(egroup, stateMachineName, stateName)
+
+	local _SetEntity = function (gid, idx, eid)
+		Entity_SetAnimatorState(eid, stateMachineName, stateName)
+	end
+	EGroup_ForEach(egroup, _SetEntity)
+	
+end
+
+
+--? @shortdesc Set animation variable value for an EGroup. Please only use this for simple animations
+--? @args EGroupID egroup, String variableName, Real value
+--? @result Void
+function EGroup_SetAnimatorVariable(egroup, variableName, value)
+
+	local _SetEntity = function (gid, idx, eid)
+		Entity_SetAnimatorVariable(eid, variableName, value)
+	end
+	EGroup_ForEach(egroup, _SetEntity)
+	
+end
+
+--? @shortdesc Returns whether any entity in an EGroup has a hold on anything
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_IsHoldingAny(egroup)
+
+	local _EntityHoldingAny = function(gid, idx, eid)
+		if Entity_IsHoldingAny(eid) then
+			return true
+		end
+	end
+	
+	return EGroup_ForEach(egroup, _EntityHoldingAny)
+
+end
+
+
+--? @shortdesc Adds an ability to all entities in an egroup.
+--? @args EGroupID egroup, AbilityBlueprint ability
+--? @result Void
+function EGroup_AddAbility(egroup, ability)
+	EGroup_CallEntityFunction(egroup, Entity_AddAbility, ability)
+end
+
+--? @shortdesc Test whether ANY or ALL buildings in a group have a specified ability
+--? @args EGroupID egroup, AbilityBlueprint ability, Boolean all
+--? @result Boolean
+function EGroup_HasAbility(egroup, ability, all)
+	local _CheckEntity = function(gid, idx, eid)
+		return Entity_HasAbility(eid, ability)
+	end
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckEntity)
+end
+
+--? @shortdesc Returns an sgroup containing all squads held by any entities in an egroup
+--? @args EGroupID egroup, SGroupID sgroupRecipient
+--? @result Void
+function EGroup_GetSquadsHeld(egroup, sgroup)
+
+	SGroup_Clear(sgroup)
+	
+	local _GetSquadsHeld = function(gid, idx, eid)
+		Entity_GetSquadsHeld(eid, sgroup)
+	end
+	
+	EGroup_ForEach(egroup, _GetSquadsHeld)
+	
+end
+
+--? @shortdesc Returns a position (a certain distance away) relative to an entity's current position/orientation. see ScarUtil.scar for explanation of 'offset' parameter
+--? @args EGroupID egroup, Integer offset, Real value
+--? @result Position
+function EGroup_GetOffsetPosition(egroup, offset, distance)
+
+	if EGroup_CountSpawned(egroup) == 0 then
+		fatal("EGroup_GetOffsetPosition: don't call this function with an empty EGroup, since it has no way to return an error (it returns a position)")
+	end
+	
+	return Util_GetOffsetPosition(EGroup_GetSpawnedEntityAt(egroup, 1), offset, distance)
+
+end
+
+
+--? @shortdesc Remove from the first SGroup all squads contained in the second SGroup. SGroup2 remains untouched.
+--? @args SGroupID group, SGroupID grouptoremove
+--? @result Void
+function EGroup_RemoveGroup(group, grouptoremove)
+
+	local _RemoveEntity = function (gid, idx, eid)
+		
+		EGroup_Remove(group, eid)
+	end
+	
+	EGroup_ForEach(grouptoremove, _RemoveEntity)
+	
+end
+
+--? @shortdesc Returns true if ALL or ANY entities in a group are currently producing squads
+--? @extdesc Set all to true to check for ALL or set to false to check for ANY
+--? @args EGroupID egroup, Boolean all
+--? @result Boolean
+function EGroup_IsProducingSquads( egroupid, all )
+
+	local IsProducingSquads = function( groupid, itemindex, itemid )
+		return Entity_HasProductionQueue(itemid) and (Entity_GetProductionQueueSize(itemid) > 0) 
+	end
+	
+	return EGroup_ForEachAllOrAnyEx( egroupid, all, IsProducingSquads, true, true )
+end
+
+--? @shortdesc Checks if ANY or ALL squads within an EGroup are using an ability
+--? @extdesc also used for emplacements/entities that are built but function through the use of squads.  Does not check WHAT ability a squad is using. 
+--? @result Boolean
+--? @args EGroupID egroup, Boolean ALL
+function EGroup_IsUsingAbility(egroup, all)
+
+	local _sg_ability_use = SGroup_CreateIfNotFound("_sg_ability_use")
+	local result = false
+	
+	if EGroup_IsHoldingAny(egroup) then
+		EGroup_GetSquadsHeld(egroup, _sg_ability_use)
+		if SGroup_IsEmpty(_sg_ability_use) == false then
+			result = SGroup_IsUsingAbility(_sg_ability_use, all)
+		end
+	end
+			
+	SGroup_Destroy(_sg_ability_use)
+	return result
+
+end
+
+--? @shortdesc Gets the last attacker(s) for all the entities in an EGroup
+--? Gets the last attacker for all the squads in an SGroup and stores that in SGroupAttacker
+--? @result Void
+--? @args EGroup EGroupVictim, SGroup SGroupAttacker
+function EGroup_GetLastAttacker(EGroupVictim, SGroupAttacker)
+	
+	local _CheckEntity = function(gid, idx, eid)
+		Entity_GetLastAttacker(eid, SGroupAttacker)
+	end
+	
+	EGroup_ForEach(EGroupVictim, _CheckEntity)
+
+end
+
+--? @shortdesc Reverts an occupied building
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_InstantRevertOccupiedBuilding(egroup)
+	
+	local function _RevertBuilding(gid, idx, eid)
+		if Entity_IsCapturableBuilding(eid) then
+			Entity_InstantRevertOccupiedBuilding(eid)
+		end
+	end
+	
+	EGroup_ForEach(egroup, _RevertBuilding)
+	
+end
+
+--? @shortdesc Enables or disables the minimap indicator for all entities in a group
+--? @args EGroupID egroup, Boolean enable
+--? @result Void
+function EGroup_EnableMinimapIndicator(egroup, enable)
+	EGroup_CallEntityFunction(egroup, UI_EnableEntityMinimapIndicator, enable)
+end
+
+--? @shortdesc Overrides crushable behavior for an egroup
+--? @args EGroupID egroup, Boolean crushable
+--? @result Void
+function EGroup_SetCrushable(egroup, crushable)
+	EGroup_CallEntityFunction(egroup, Entity_SetCrushable, crushable)
+end
+
+--? @shortdesc Sets a strategic point to neutral (not owned by any team) 
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_SetStrategicPointNeutral(egroup)
+	EGroup_CallEntityFunction(egroup, Entity_SetStrategicPointNeutral)
+end
+
+--? @shortdesc Removes all demolition charges on an egroup
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_RemoveDemolitions(egroup)
+	EGroup_CallEntityFunction(egroup, Entity_RemoveDemolitions)
+	EGroup_CallEntityFunction(egroup, Entity_RemoveBoobyTraps)
+end
+
+--? @shortdesc Makes an egroup neutral
+--? @args EGroupID egroup
+--? @result Void
+function EGroup_SetWorldOwned(egroup)
+	EGroup_CallEntityFunction(egroup, Entity_SetWorldOwned)
+end
+
+--? @shortdesc Enables shared team production on a building (teammates can build using THEIR resources)
+--? @args EGroupID egroup, Boolean enable
+--? @result Void
+function EGroup_SetSharedProductionQueue(egroup, enable)
+	EGroup_CallEntityFunction(egroup, Entity_SetSharedProductionQueue, enable)
+end
+
+--? @shortdesc Removes upgrade(s) from an egroup
+--? @args EGroupID egroup, UpgradeBlueprint/Table upgrade
+--? @result Void
+function EGroup_RemoveUpgrade(egroup, upgrade)
+	if scartype(upgrade) ~= ST_TABLE then
+		upgrade = {upgrade}
+	end
+	
+	for i = 1, (#upgrade) do
+		EGroup_CallEntityFunction(egroup, Entity_RemoveUpgrade, upgrade[i])
+	end
+end
+
+--? @shortdesc Calls a function when any entity in an EGroup gets destroyed by the player clicking the "Detonate me" button
+--? @args EGroupID id, LuaFunction function
+--? @result Void
+function EGroup_NotifyOnPlayerDemolition(egroupid, f)
+
+	local _AddEntity = function(gid, idx, eid)
+		Entity_NotifyOnPlayerDemolition(eid, f)
+	end
+	
+	EGroup_ForEach(egroupid, _AddEntity)
+	
+end
+
+--? @shortdesc Instantly wires a building for demolitions
+--? @args PlayerID player, EGroupID egroupid[, Integer numcharges]
+function EGroup_SetDemolitions(player, egroupid, numcharges)
+
+	if numcharges == nil then numcharges = 9999 end
+	
+	local _InstantPlaceCharges = function(gid, idx, eid)
+		Entity_SetDemolitions(player, eid, numcharges)
+	end
+		
+	EGroup_ForEach(egroupid, _InstantPlaceCharges)
+
+end
+
+--? @shortdesc Checks if ANY or ALL entities in an egroup are on fire (ignition threshold exceeded)
+--? @args EGroupID egroup, Boolean ALL
+--? @result Boolean
+function EGroup_IsBurning(egroup, all)
+	
+	local _CheckBurning = function(groupid, itemindex, itemid)
+		return Entity_IsBurning(itemid)
+	end
+	
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckBurning)
+end
+
+
+--? @shortdesc Enable or disable decorators on all entities in the egroup. Sets selection visuals as well unless enableSelection is specified.
+--? @args SGroupID group, Boolean enable, Boolean enableSelection
+--? @result Void
+function EGroup_EnableUIDecorator(group, enable, enableSelection)
+	if enableSelection == nil then enableSelection = enable end
+
+	local _SetEntityDecorator = function (gid, idx, itemid)
+		UI_EnableEntityDecorator(itemid, enable)
+		UI_EnableEntitySelectionVisuals(itemid, enableSelection)
+	end
+	
+	EGroup_ForEach(group, _SetEntityDecorator)
+end
+
+--? @shortdesc Sets all entities in an egroup to be recrewable or not when abandoned
+--? @args EGroupID sgroup, Boolean recrewable
+--? @result Void
+function EGroup_SetRecrewable(egroup, recrewable)
+	for i=1, EGroup_CountSpawned(egroup) do
+		Entity_SetRecrewable(EGroup_GetSpawnedEntityAt(egroup, i), recrewable)
+	end
+end
+
+--? @shortdesc Checks if ANY or ALL entities in an group are currently spawned or not.
+--? @args EGroupID egroup, Boolean ALL
+--? @result Boolean
+function EGroup_IsSpawned(egroup, all)
+	
+	local _CheckSpawned = function(groupid, itemindex, itemid)
+		return Entity_IsSpawned(itemid)
+	end
+	
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckSpawned)
+end
+
+
+
+
+----------------------------------------------------------------------------------------------------------------
+-- SGroup
+
+--? @group scardoc;SGroup
+
+--? @shortdesc Returns an SGroup with a unique name, prefixed by the 'prefix' parameter.
+--? @args [String prefix]
+--? @result SGroup
+function SGroup_CreateUnique(prefix)
+	
+	if scartype(prefix) == ST_STRING then
+		return SGroup_CreateUniqueWithPrefix(prefix)
+	else
+		return SGroup_CreateUniqueWithPrefix("")
+	end
+	
+end
+
+
+--? @shortdesc Add a list of multiple sgroups into an existing group.
+--? @args SGroupID sgroup, Table groupList
+--? @result Void
+function SGroup_AddGroups(sgroup, groupList)
+	for k,item in pairs(groupList) do
+		SGroup_AddGroup(sgroup, item)
+	end
+end
+
+--? @shortdesc Warps all members of an SGroup immediately to a new position
+--? @args SGroupID sgroup, Position pos
+--? @result Void
+function SGroup_WarpToPos(sgroup, pos)
+
+	local function _WarpMe(gid, idx, sid)
+		Squad_WarpToPos(sid, pos)
+	end
+	
+	Cmd_Stop(sgroup)
+	SGroup_ForEach(sgroup, _WarpMe)
+	
+end
+
+--? @shortdesc Warps all members of an SGroup immediately to a marker
+--? @args SGroupID sgroup, MarkerID marker
+--? @result Void
+function SGroup_WarpToMarker(sgroup, marker)
+
+	SGroup_WarpToPos(sgroup, Marker_GetPosition(marker))
+	
+end
+
+
+--? @shortdesc Returns true if ANY or ALL of the squads in an SGroup are currently retreating
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsRetreating(sgroup, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsRetreating(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+--? @shortdesc Removes the squads from the sgroup which are withdrawing towards the edge
+--? @args SGroupID sgroup
+--? @result Void
+function SGroup_RemoveWithdrawTowardsEdgeSquads(sgroup)
+	local _RemoveWithdrawEdgeSquads = function(group_id, item_index, item_id)
+		if Squad_IsWithdrawTowardsEdge(item_id) then
+			SGroup_Remove(group_id, item_id)
+		end
+	end
+	SGroup_ForEach(sgroup, _RemoveWithdrawEdgeSquads)
+end
+
+--? @shortdesc Returns true if ANY or ALL squads are setting demolitions
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsSettingDemolitions(sgroup, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_HasActiveCommand(sid) and Squad_IsSettingDemolitions(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+
+end
+
+--? @shortdesc Returns true if ANY or ALL squads are female
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsFemale(sgroup, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsFemale(sid) 
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+
+end
+
+--? @shortdesc Returns true if ANY or ALL of the squads in an SGroup are camouflaged
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsCamouflaged(sgroup, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsCamouflaged(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+
+end
+
+--? @shortdesc Counts the total population cost of an SGroup by iterating over each individual Squad
+--? @args SGroupID sgroup
+--? @result Number
+function SGroup_CountPopulation(sgroup)
+	
+    local popSum = 0
+    local _CountPop = function(gid, index, sid)
+        popSum = popSum + Squad_Population(sid, CT_Personnel)
+    end
+   
+    SGroup_ForEach(sgroup, _CountPop)
+	return popSum
+	
+end
+
+--? @shortdesc Returns the percentage of the SGroup members that are in cover. Alternatively, specify ANY or ALL as a second parameter to return true/false.
+--? @args SGroupID sgroup[, Boolean all]
+--? @result Real/Boolean
+function SGroup_IsInCover( sgroupid, all )
+	
+	local total = 0
+	local totalincover = 0
+	
+	local _CheckSquad = function (gid, idx, sid)
+		
+		local count = Squad_Count(sid)
+		
+		for n = 1, count do
+			if (Entity_GetCoverValue(Squad_EntityAt(sid, n-1)) > 0) then
+				totalincover = totalincover + 1
+			end
+		end
+		total = total + count
+		
+	end
+	
+	SGroup_ForEach(sgroupid, _CheckSquad)
+	
+	if (all == ANY) then					-- return true if ANY are in cover
+		if (totalincover >= 1) then
+			return true
+		else
+			return false
+		end
+	elseif (all == ALL) then				-- return true if ALL are in cover
+		if (total == totalincover) then
+			return true
+		else
+			return false
+		end
+	else									-- return the raw percentage
+		return (totalincover/total)
+	end
+	
+end
+
+
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns true if ALL or ANY squads are under attack within the time.
+--? @args SGroupID sgroup, Boolean all, Float time
+--? @result Boolean
+function SGroup_IsUnderAttack( sgroupid, all, duration )
+	return _Groups_Private.IsGroupUnderAttack(
+				sgroupid,
+				SGroupCaller,
+				all,
+				duration
+			)	
+end
+
+--? @shortdesc Returns true if ALL or ANY squads are under attack from a direction within the time. see ScarUtil.scar for types of directions. you can pass in a table of directions
+--? @args SGroupID sgroup, Boolean all, Integer offset, Float time
+--? @result Boolean
+function SGroup_IsUnderAttackFromDirection( sgroupid, all, offset, duration )
+	return _Groups_Private.IsGroupUnderAttackFromDirection(
+				sgroupid,
+				SGroupCaller,
+				all,
+				offset,
+				duration
+			)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns true if ALL or ANY squads are attacking within the time.
+--? @args SGroupID sgroup, Boolean all, Float time
+--? @result Boolean
+function SGroup_IsDoingAttack( sgroupid, all, duration )
+	return _Groups_Private.IsGroupAttacking(
+				sgroupid,
+				SGroupCaller,
+				all,
+				duration
+			)	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns true if ALL or ANY squads in a group can see ALL or ANY squads in a target sgroup.
+--? @args SGroupID sgroup, SGroupID targetsgroup, Boolean all
+--? @result Boolean
+function SGroup_CanSeeSGroup( sgroupid, targetsgroupid, all )
+	return _Groups_Private.CanGroupSeeSGroup(
+				sgroupid,
+				SGroupCaller,
+				targetsgroupid,
+				all
+			)
+end
+
+--? @shortdesc Returns true if ALL or ANY entities in a group can see ALL or ANY entities in a given egroup.
+--? @args SGroupID sgroup, EGroupID targetegroup, Boolean all
+--? @result Boolean
+function SGroup_CanSeeEGroup( sgroupid, targetegroupid, all )
+	return _Groups_Private.CanGroupSeeEGroup(
+				sgroupid,
+				SGroupCaller,
+				targetegroupid,
+				all
+			)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns true if ALL or ANY squads in a group are infiltrated
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsInfiltrated( sgroupid, all )
+	
+	local IsInfil = function( groupid, idx, id )
+		return Squad_IsInfiltrated( id )
+	end
+	
+	return SGroup_ForEachAllOrAny( sgroupid, all, IsInfil )
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Find a squad group from name.  Creates a new one with given name if it doesnt exist.
+--? @args String name
+--? @result SGroupID
+function SGroup_CreateIfNotFound( name )
+	return _Groups_Private.CreateGroupIfNotFound( name, SGroupCaller )
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns true if a named squad group is empty
+--? @args SGroupID sgroup
+--? @result Boolean
+function SGroup_IsEmpty( sgroupid )
+	return _Groups_Private.IsGroupEmpty( sgroupid, SGroupCaller )
+end
+
+
+--? @shortdesc Returns true if a named squad group is not empty and its average health is > 0.0
+--? @args SGroupID sgroup
+--? @result Boolean
+function SGroup_IsAlive( sgroupid )
+	if(sgroupid == nil) then
+		return false
+	else
+		return SGroup_GetAvgHealth(sgroupid) > 0.0
+	end
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns the average health ratio of all units in a squad group.
+--? @extdesc It now uses the same health measure that's used by the UI, so it does take into account fallen members of a squad
+--? @args SGroupID sgroup
+--? @result Real
+function SGroup_GetAvgHealth( sgroupid )
+
+	local tally = 0.0
+	local count = 0
+	
+	local GetItemHealth = function( groupid, itemindex, itemid )
+		tally = tally + Squad_GetHealthPercentage( itemid, true )
+		count = count + 1
+	end
+	SGroup_ForEach( sgroupid, GetItemHealth )
+	
+	local result = 0.0
+	
+	-- make sure count is not 0
+	if ( count >= 1 ) then 
+		result = tally / count
+	end
+	
+	if( (result < 0.0) or (result > 1.0) ) then
+--~ 		print("SGroup_GetAvgHealth: Result is out of expected bounds: " .. result .. " (" .. tally .. " / " .. count .. ")")
+	end
+	
+	return result
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Sets the health of each squad in a squad group to a given percent [0.0, 1.0].
+--? @args SGroupID sgroup, Real healthpercent
+--? @result Real
+function SGroup_SetAvgHealth( sgroupid, healthPercent )
+	
+	return _Groups_Private.SetAvgGroupHealth(
+					sgroupid,
+					SGroupCaller,
+					healthPercent
+				)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Returns the average loadout of all squads in a group as a percent [0.0, 1.0].
+--? @extdesc Example: A group of squads with loadouts of 4/8 and 1/1 would return 0.75
+--? @args SGroup sgroup
+--? @result Real
+function SGroup_GetAvgLoadout( sgroupid )
+
+	local currentLoadout = 0
+	local maxLoadout = 0
+	
+	local GetSquadLoadout = function( groupid, itemindex, itemid )
+		currentLoadout = currentLoadout + Squad_Count( itemid )
+		maxLoadout = maxLoadout + Squad_GetMax( itemid )
+	end
+	
+	-- check health
+	SGroup_ForEach( sgroupid, GetSquadLoadout )
+	
+	if(maxLoadout == 0) then
+		return 0
+	else
+		local result = currentLoadout / maxLoadout
+	
+		if( (result < 0.0) or (result > 1.0) ) then
+			fatal("this should never happen")
+		end
+		
+		return result
+	end
+
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Sets the moral of each squad in a squad group to a given percent [0.0, 1.0].
+--? @args SGroup sgroup, Real moralepercent
+--? @result Real
+function SGroup_SetAvgMorale( sgroupid, moralePercent )
+	
+	local SetMorale = function( groupid, itemindex, itemid )
+		Squad_SetMorale( itemid, moralePercent )
+	end
+	
+	SGroup_ForEach( sgroupid, SetMorale )
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Changes the player owner of spawned and despawned squads in an SGroup.
+--? @args SGroupID sgroup, PlayerID owner
+--? @result Void
+function SGroup_SetPlayerOwner( sgroupid, owner )
+	
+	return _Groups_Private.SetPlayerOwner(
+			sgroupid,
+			SGroupCaller,
+			owner
+	)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Destroys all spawned and despawned squads in a group.
+--? @extdesc 
+--? Be careful not to confuse this with SGroup_Destroy which destroys the group and NOT the squads it contains.  This function will destroy
+--? spawned and despawned items in a group
+--? @args SGroupID sgroup
+--? @result Void
+function SGroup_DestroyAllSquads( sgroupid )
+	
+	return _Groups_Private.DestroyAllItems(
+					sgroupid,
+					SGroupCaller
+				)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Check if a group contains ALL or ANY of the blueprints.
+--? @args SGroupID sgroup, BP/Table blueprints, Boolean all
+--? @result Boolean
+function SGroup_ContainsBlueprints( sgroupid, bp, all )
+	if bp == nil then 
+		return false
+	end
+
+	if scartype(bp) ~= ST_TABLE then
+		bp = {bp}
+	end
+	
+	return _Groups_Private.GroupContainsBlueprints(
+					sgroupid,
+					SGroupCaller,
+					bp,
+					all
+				)
+end
+
+--? @shortdesc Check if ALL or ANY of the squads in a group have a specific blueprint.
+--? @extdesc The blueprint can be a table of blueprints or types (see Squad_HasBlueprint() for details)
+--? @args SGroupID sgroup, SBP/SquadType/Table blueprint, Boolean all
+--? @result Boolean
+function SGroup_HasSquadBlueprint( sgroupid, bp, all )
+
+	--local hasBP = false
+	--for k=1, SGroup_CountSpawned(sgroupid) do
+		--if(Squad_GetBlueprint(SGroup_GetSpawnedSquadAt(sgroupid, k)) == bp) then
+			--hasBP = true
+			--if(not all) then return true end
+		--else
+			--if(all) then return false end
+		--end
+	--end
+	
+	--return hasBP
+	
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_HasBlueprint(sid, bp)	
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroupid, all, _CheckSquad)
+	
+end
+
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Enable/Disable invulnerablity for an entire SGroup. Use true and false for simple on/off, or use a number between 0.0 and 1.0 for more precise control on how much damage a squad can take before it takes no more.
+--? @result Void
+--? @args SGroupID sgroup, Boolean/Real enabled[, Float reset_time]
+--? @extdesc The optional reset_time is used to automatically remove invulnerability after a set time. If invulnerable, both health damage is disabled.
+function SGroup_SetInvulnerable(sgroupid, enabled, reset_time)
+	
+	if reset_time == nil then
+		reset_time = 0
+	end
+	
+	if (scartype(sgroupid) ~= ST_SGROUP) then fatal("SGroup_SetInvulnerable: sgroupid is invalid") end
+	if (scartype(enabled) ~= ST_BOOLEAN) and (scartype(enabled) ~= ST_NUMBER) then fatal("SGroup_SetInvulnerable: enabled is invalid") end
+	if (scartype(reset_time) ~= ST_NUMBER) then fatal("SGroup_SetInvulnerable: reset_time is invalid") end
+	
+	_Groups_Private.GroupSetInvulnerable(
+		sgroupid,
+		SGroupCaller,
+		enabled,
+		reset_time
+	)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Check invulnerablity state for ALL or ANY squads in a squad group.
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean all
+--? @extdesc
+--? Set all param to true to check for ALL or set to false to check for ANY.
+function SGroup_GetInvulnerable( sgroupid, all )
+
+	local result = _Groups_Private.GroupGetInvulnerable(
+		sgroupid,
+		SGroupCaller,
+		all
+	)
+	
+	return result
+
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Check if ALL or ANY squads in a sgroup have a leader
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean all
+--? @extdesc
+--? Set all param to true to check for ALL or set to false to check for ANY.
+function SGroup_HasLeader( sgroupid, all )
+	local HasLeader = function( groupid, itemindex, itemid )
+		return Squad_HasLeader( itemid )
+	end
+	
+	local result = SGroup_ForEachAllOrAny( sgroupid , all, HasLeader )
+	return result
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Destroys all items in a group that are in proximity to a given marker.
+--? @result Void
+--? @args SGroupID sgroup, MarkerID marker
+function SGroup_DestroyAllInMarker( sgroupid, markerid )	
+	
+	local squadsNearMarker = {}
+	
+	local CheckNearMarker = function ( groupid, itemindex, itemid )
+		if ( Marker_InProximity(markerid, Squad_GetPosition(itemid)) ) then
+			table.insert( squadsNearMarker, itemid )
+		end
+	end
+	
+	--
+	SGroup_ForEach( sgroupid, CheckNearMarker )
+	
+	--
+	for i = 1, (# squadsNearMarker ) do
+		Squad_Destroy( squadsNearMarker[i] ) -- squad will be removed from all groups when it is destroyed
+	end
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Adds a leader to all squads in a group that can take a leader.
+--? @extdesc This function will bypass all cost and queue prereqs
+--? @result Void
+--? @args SGroupID sgroup
+function SGroup_AddLeaders( sgroupid )	
+	local AddLeader = function( groupid, itemindex, itemid )
+		Squad_AddLeader( itemid )
+	end
+	
+	SGroup_ForEach( sgroupid, AddLeader )
+end
+
+--? @shortdesc Gets the amount of resource type for a squad.
+--? @extdesc If SGroup contains multiple squads, it will be the total of all
+--? @result Float
+--? @args SGroupID sgroup, ResourceType resource
+function SGroup_GetResource( sgroupid, resource )	
+	local resourceTotal = 0
+	
+	local _getResource = function( gid, idx, sid )
+		resourceTotal = (resourceTotal + Squad_GetResource(sid, resource))
+	end
+	
+	SGroup_ForEach( sgroupid, _getResource )
+	
+	return resourceTotal
+end
+
+--? @shortdesc Sets the amount of resource type for a squad.
+--? @extdesc If SGroup contains multiple squads, it will set for all
+--? @result Void
+--? @args SGroupID sgroup, ResourceType resource, Integer amount
+function SGroup_SetResource( sgroupid, resource, amount )	
+	local _setResource = function( gid, idx, sid )
+		Squad_SetResource(sid, resource, amount)
+	end
+	
+	SGroup_ForEach( sgroupid, _setResource )
+end
+
+--? @shortdesc Adds the amount of resource type for a squad.
+--? @extdesc If SGroup contains multiple squads, it will add for all
+--? @result Void
+--? @args SGroupID sgroup, ResourceType resource, Integer amount
+function SGroup_AddResource( sgroupid, resource, amount )
+	local _addResource = function( gid, idx, sid )
+		local curr = Squad_GetResource(sid, resource)
+		local new = curr + amount
+		
+		Squad_SetResource(sid, resource, new)
+	end
+	
+	SGroup_ForEach( sgroupid, _addResource )
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Makes two SGroups face each other
+--? @result Void
+--? @args SGroupID sgroup1, SGroupID sgroup2
+function SGroup_FaceEachOther( sgroupid1, sgroupid2 )
+	-- group1 face group2
+	SGroup_FacePosition( sgroupid1,  SGroup_GetPosition( sgroupid2 ) )
+	
+	-- group2 face group1
+	SGroup_FacePosition( sgroupid2,  SGroup_GetPosition( sgroupid1 ) )
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Makes two SGroups face each other at no time
+--? @result Void
+--? @args SGroupID sgroup1, SGroupID sgroup2
+function SGroup_SnapFaceEachOther( sgroupid1, sgroupid2 )
+	-- group1 face group2
+	SGroup_SnapFacePosition( sgroupid1,  SGroup_GetPosition( sgroupid2 ) )
+	
+	-- group2 face group1
+	SGroup_SnapFacePosition( sgroupid2,  SGroup_GetPosition( sgroupid1 ) )
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Makes a SGroup face a marker.
+--? @result Void
+--? @args SGroupID sgroup, MarkerID marker
+function SGroup_FaceMarker( sgroupid, markerid )
+	local pos = Marker_GetPosition( markerid )
+	SGroup_FacePosition( sgroupid, pos )
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Respawn all despawned squads in a group.
+--? @result Void
+--? @args SGroupID groupid
+function SGroup_ReSpawn( sgroupid )
+	_Groups_Private.DoGroupSpawn(
+		sgroupid, 
+		SGroupCaller,
+		true
+	)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Despawn all spawned squads in a group.
+--? @result Void
+--? @args SGroupID groupid
+function SGroup_DeSpawn( sgroupid )
+	_Groups_Private.DoGroupSpawn(
+		sgroupid, 
+		SGroupCaller,
+		false
+	)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Get a random spawned squad from sgroup
+--? @args SGroup sgroupid
+--? @result SquadID
+function SGroup_GetRandomSpawnedSquad( sgroupid )
+
+	local num = SGroup_CountSpawned(sgroupid)
+	
+	if ( num == 0 ) then
+		return 0
+	end
+
+	-- index is one based
+	local index = World_GetRand( 1, num )
+	
+	-- get the random squad
+	return SGroup_GetSpawnedSquadAt( sgroupid, index )
+
+end
+
+
+--? @shortdesc Get the closest squad in an sgroup to a given position 
+--? @args SGroup sgroupid, Marker/Pos position
+--? @result SquadID
+function SGroup_GetClosestSquad(sgroup, position)
+	
+	position = Util_GetPosition(position)
+	
+	local closest_distance = nil
+	local closest_squad = nil
+	
+	local _CheckSquad = function(gid, idx, sid)
+		
+		local distance = Util_GetDistanceSquared(sid, position)
+		
+		if closest_distance == nil or distance < closest_distance then
+			closest_distance = distance
+			closest_squad = sid
+		end
+		
+	end
+	SGroup_ForEach(sgroup, _CheckSquad)
+	
+	return closest_squad
+	
+end
+
+
+
+--? @shortdesc Set player selectable state of squads in the sgroup
+--? @args SGroup sgroupid, bool selectable
+function SGroup_SetSelectable( sgroupid, selectable )
+
+	_Groups_Private.GroupSetSelectable( sgroupid, SGroupCaller, selectable )
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+
+--? @shortdesc Sets whether a weapon will auto-target things or not
+--? @args SGroupID group, String/Int hardpoint, Bool enable
+--? @result Void
+function SGroup_SetAutoTargetting(sgroup, hardpoint, enable)
+	if hardpoint == ALL then	
+		for index = 1, 8 do
+			SGroup_SetAutoTargetting(sgroup, index, enable)
+		end
+		return
+	else	
+		if scartype(hardpoint) == ST_NUMBER then
+			hardpoint = "hardpoint_0"..hardpoint
+		end
+	end
+	
+	-- create the appropriate modifier
+	local modifier = 1
+	if enable == false then
+		modifier = Modifier_Create(MAT_Weapon, "auto_target_enable_weapon_modifier", MUT_Enable, true, -1, hardpoint)
+		-- apply this to each squad in the group
+		local _ApplyModifier = function (gid, idx, sid)
+			if Squad_IsValid(Squad_GetID(sid)) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+				-- check if it's already there
+				local modids = _Groups_Private.auto_targetting_modids[Squad_GetID(sid)]
+				if modids == nil then
+					modids = Modifier_ApplyToSquad(modifier, sid, 0)
+					_Groups_Private.auto_targetting_modids[Squad_GetID(sid)] = modids
+					Modifier_AddToSquadTable(sid, modids)
+				end
+			end
+		end
+		
+		SGroup_ForEachEx(sgroup, _ApplyModifier, true, true)
+	else
+		-- remove from each squad in the group
+		local _RemoveModifier = function (gid, idx, sid)
+			if Squad_IsValid(Squad_GetID(sid)) and Squad_Count(sid) > 0 and Squad_HasWeaponHardpoint(sid, hardpoint) then
+				local modids = _Groups_Private.auto_targetting_modids[Squad_GetID(sid)]
+				Modifier_Remove(modids)
+			end
+		end
+		
+		SGroup_ForEachEx(sgroup, _RemoveModifier, true, true)
+	end
+	
+end
+
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Check if the squads are attacked by the player
+--? @args SGroupID group, PlayerID attackerplayer, Float duration
+--? @result Bool
+function SGroup_IsUnderAttackByPlayer(groupid, attackerplayer, duration)
+
+	local result = false
+	
+	local _OneSquad = function (gid, idx, sid)
+		if ( Squad_IsUnderAttackByPlayer(sid, attackerplayer, duration) ) then
+			result = true
+		end
+		
+	end
+	
+	SGroup_ForEach(groupid, _OneSquad)
+	
+	return result
+	
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Get the entity id of the building that any squad of the sgroup is garrisoned in
+--? @args SGroupID groupid
+--? @result EntityID
+function SGroup_GetGarrisonedBuildingEntity(sgroupid)
+	
+	if ( SGroup_Count( sgroupid ) > 0 ) then
+		
+		local countSpawned = SGroup_CountSpawned( sgroupid )
+		for i=1, countSpawned do 
+			local squad = SGroup_GetSpawnedSquadAt( sgroupid, i )
+			if ( Squad_IsInHoldEntity( squad ) ) then
+				return Squad_GetHoldEntity( squad )
+			end
+		end
+		
+		local countDespawned = SGroup_CountDeSpawned( sgroupid )
+		for i=1, countDespawned do 
+			local squad = SGroup_GetDespawnedSquadAt( sgroupid, i )
+			if ( Squad_IsInHoldEntity( squad ) ) then
+				return Squad_GetHoldEntity( squad )
+			end
+		end
+		
+	end
+	
+	return nil
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Get the squad id of the vehicle squad that any squad of the sgroup is loaded in
+--? @args SGroupID groupid
+--? @result SquadID
+function SGroup_GetLoadedVehicleSquad(sgroupid)
+
+	if ( SGroup_Count( sgroupid ) > 0 ) then
+	
+		local countSpawned = SGroup_CountSpawned( sgroupid )
+		for i=1, countSpawned do 
+			local squad = SGroup_GetSpawnedSquadAt( sgroupid, i )
+			if ( Squad_IsInHoldSquad( squad ) ) then
+				return Squad_GetHoldSquad( squad )
+			end
+		end
+		
+		local countDespawned = SGroup_CountDeSpawned( sgroupid )
+		for i=1, countDespawned do 
+			local squad = SGroup_GetDeSpawnedSquadAt( sgroupid, i )
+			if ( Squad_IsInHoldSquad( squad ) ) then
+				return Squad_GetHoldSquad( squad )
+			end
+		end
+		
+	end
+	
+	return 0
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Get the suppression level for the first squad in the sgroup
+--? @args SGroupID groupid
+--? @result Float
+function SGroup_GetSuppression(sgroupid)
+
+	if ( SGroup_CountSpawned( sgroupid ) > 0 ) then
+		return Squad_GetSuppression( SGroup_GetSpawnedSquadAt( sgroupid, 1 ) ) 
+	end
+	
+	return 0.0
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Set the suppression level for all squads in the sgroup
+--? @args SGroupID groupid, Float suppression
+--? @result Void
+function SGroup_SetSuppression(sgroupid, suppression)
+
+	local _OneSquad = function (gid, idx, sid)
+		Squad_SetSuppression(sid, suppression)
+	end
+	
+	SGroup_ForEach(sgroupid, _OneSquad)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Enables or disables the surprise feature for an sgroup
+--? @args SGroupID groupid, Boolean enable
+--? @result Void
+function SGroup_EnableSurprise(sgroupid, bool)
+
+	local _OneSquad = function (gid, idx, sid)
+		Squad_EnableSurprise(sid, bool)
+	end
+	
+	SGroup_ForEach(sgroupid, _OneSquad)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Get the veterancy rank for the first squad in the sgroup
+--? @args SGroupID groupid
+--? @result Int
+function SGroup_GetVeterancyRank(sgroupid)
+
+	if ( SGroup_Count( sgroupid ) > 0 ) then
+		return Squad_GetVeterancyRank( SGroup_GetSpawnedSquadAt( sgroupid, 1 ) ) 
+	end
+	
+	return 0
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Get the veterancy experience value for the first squad in the sgroup
+--? @args SGroupID groupid
+--? @result Float
+function SGroup_GetVeterancyExperience(sgroupid)
+
+	if ( SGroup_Count( sgroupid ) > 0 ) then
+		return Squad_GetVeterancyExperience( SGroup_GetSpawnedSquadAt( sgroupid, 1 ) ) 
+	end
+	
+	return 0.0
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Increase squad veterancy rank for all squads in the sgroup. By default, increases rank by 1. Can do silent promotion (no sound/UI. ex: mass rank insrease at mission start)
+--? @args SGroupID groupid[, Integer numranks, Boolean silent]
+--? @result Void
+function SGroup_IncreaseVeterancyRank(sgroupid, numranks, silent)
+
+	if numranks == nil then
+		numranks = 1
+	end
+	
+	if silent == nil then
+		silent = false
+	end
+	
+	local _OneSquad = function (gid, idx, sid)
+		Squad_IncreaseVeterancyRank(sid, numranks, silent)
+	end
+	
+	SGroup_ForEach(sgroupid, _OneSquad)
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Increase squad veterancy experience for all squads in the sgroup. Can do silent promotion (no sound/UI). Can skip modifiers, giving you direct control of experience gained.
+--? @args SGroupID groupid, Float experience[, Boolean silent, Boolean applyModifiers]
+--? @result Void
+function SGroup_IncreaseVeterancyExperience(sgroupid, experience, silent, applyModifiers)
+
+	if silent == nil then
+		silent = false
+	end
+	
+	if applyModifiers == nil then
+		applyModifiers = true
+	end
+	
+	local _OneSquad = function (gid, idx, sid)
+		Squad_IncreaseVeterancyExperience(sid, experience, silent, applyModifiers)
+	end
+	
+	SGroup_ForEach(sgroupid, _OneSquad)
+end
+
+---------------------------------------------------------------------------------------------------
+
+--
+--
+--? @shortdesc Sets the visibility of in-game veterancy art for the squads in given SGroup
+--? @args SGroupID groupid, bool visible
+--? @result Void
+function SGroup_SetVeterancyDisplayVisibility(sgroupid, visible)
+
+	local _OneSquad = function (gid, idx, sid)
+		Squad_SetVeterancyDisplayVisibility(sid, visible)
+	end
+	
+	SGroup_ForEach(sgroupid, _OneSquad)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Hide or show all entities in all squads in an SGroup
+--? @extdesc Bool should be true to hide, false to show
+--? @args SGroupID sgroup, Bool hide
+--? @result Void
+function SGroup_Hide(group, bool)
+
+	local _HideSquad = function (gid, idx, sid)
+		for n = 1, Squad_Count(sid) do
+			Entity_VisHide(Squad_EntityAt(sid, n-1), bool)
+		end
+	end
+	
+	SGroup_ForEachEx(group, _HideSquad, true, true)
+	
+end
+
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Remove from the first SGroup all squads contained in the second SGroup. SGroup2 remains untouched.
+--? @args SGroupID group, SGroupID grouptoremove
+--? @result Void
+function SGroup_RemoveGroup(group, grouptoremove)
+
+	local _RemoveSquad = function (gid, idx, sid)
+		SGroup_Remove(group, sid)
+	end
+	
+	SGroup_ForEach(grouptoremove, _RemoveSquad)
+	
+end
+
+
+
+
+
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Returns true if ANY or ALL of the squads in the SGroup is dug in (or in the process of digging in)
+--? @args SGroupID group, Boolean all
+--? @result Boolean
+function SGroup_IsDugIn(group, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsDiggingOrDugIn(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, all, _CheckSquad)
+	
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Enable or disable decorators on all squads in the sgroup 
+--? @args SGroupID group, Boolean enable
+--? @result Void
+function SGroup_EnableUIDecorator(group, enable)
+
+	local _SetSquadDecorator = function (gid, idx, sid)
+		UI_EnableSquadDecorator(sid, enable)
+	end
+	
+	SGroup_ForEach(group, _SetSquadDecorator)
+--~ 	SGroup_ForEachAllOrAny(group, ALL, _SetSquadDecorator)
+end
+
+
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Enable or disable minimap indicator on all squads in the sgroup
+--? @args SGroupID group, Boolean enable
+--? @result Void
+function SGroup_EnableMinimapIndicator(group, enable)
+
+	local _SetSquadMinimapIndicator = function (gid, idx, sid)
+		UI_EnableSquadMinimapIndicator(sid, enable)
+	end
+	
+	SGroup_ForEach(group, _SetSquadMinimapIndicator)
+--~ 	SGroup_ForEachAllOrAny(group, ALL, _SetSquadMinimapIndicator)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Set team weapon in the squads to be capturable or not
+--? @args SGroupID group, Boolean enable
+--? @result Void
+function SGroup_SetTeamWeaponCapturable(group, enable)
+
+	local _SetSquadTeamWeaponCapturable = function (gid, idx, sid)
+		return Squad_SetRecrewable(sid, enable)
+	end
+	
+	SGroup_ForEachAllOrAny(group, ALL, _SetSquadTeamWeaponCapturable)
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Returns true is ANY or ALL of a group is suppressed
+--? @args SGroupID group, Boolean all
+--? @result Boolean
+function SGroup_IsSuppressed(group, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsSuppressed(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, all, _CheckSquad)
+	
+end
+
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Returns true if ANY or ALL of a group is pinned
+--? @args SGroupID group, Boolean all
+--? @result Boolean
+function SGroup_IsPinned(group, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsPinned(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, all, _CheckSquad)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Returns true if ANY or ALL of a group is pinned or suppressed
+--? @args SGroupID group, Boolean all
+--? @result Boolean
+function SGroup_IsPinnedOrSuppressed(group, all)
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_IsPinnedOrSuppressed(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, all, _CheckSquad)
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Set soldier mood mode. Mode could be MM_Auto, MM_ForceCalm or MM_ForceTense
+--? @args SGroupID group, Integer mode
+--? @result Void
+function SGroup_SetMoodMode(group, mode)
+
+	local _SetSquadMoodMode = function (gid, idx, sid)
+		return Squad_SetMoodMode(sid, mode)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, ALL, _SetSquadMoodMode)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Return true if ANY or ALL of a group can reinforce now
+--? @args SGroupID group, Boolean all
+--? @result Boolean
+function SGroup_CanInstantReinforceNow(group, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_CanInstantReinforceNow(sid)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, all, _CheckSquad)
+	
+end
+
+---------------------------------------------------------------------------------------------------
+--
+--
+--? @shortdesc Create and display kicker message on the each squad in the sgroup to the player
+--? @args SGroupID group, PlayerID player, LocString textid
+--? @result Void
+function SGroup_CreateKickerMessage(group, player, textid)
+
+	local _CreateSquadKickerMessage = function (gid, idx, sid)
+		return UI_CreateSquadKickerMessage(player,sid,textid)
+	end
+	
+	return SGroup_ForEachAllOrAny(group, ALL, _CreateSquadKickerMessage)
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL squads in an SGroup are moving.
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean all
+function SGroup_IsMoving(sgroupid, all)
+
+	local _IsSquadMoving = function (gid, idx, sid)
+		
+		return Squad_IsMoving(sid)
+		
+	end
+
+	return SGroup_ForEachAllOrAnyEx(sgroupid, all, _IsSquadMoving, true, false)
+	
+end
+
+--? @shortdesc Filters an SGroup by blueprint.
+--? @extdesc A table of blueprints can be specified if you want to filter on more than one type.
+--? Setting filtertype to FILTER_KEEP results in the group only containing squads of the types listed in the blueprint table.
+--? Setting filtertype to FILTER_REMOVE will strip those same squads out and leave those that aren't of the types listed.
+--? Setting splitSGroup will move any squads being KEEP or REMOVE to it.  This SGroup will NOT be cleared beforehand.
+--? SquadTypes can also be used in place of Blueprints. If you want a squad to match a bunch of SquadTypes at the same time (i.e. AND instead of OR) then they can be listed together in a sub-table.
+--? @result Void
+--? @args SGroupID sgroup, SBP/SquadType/Table blueprint, Integer filtertype[, SGroupID splitSGroup]
+function SGroup_Filter(groupid, blueprinttable, filtertype, splitGroupId)
+
+	-- stuff blueprint into a table if it isn't already
+	if (scartype(blueprinttable) ~= ST_TABLE) then
+		blueprinttable = {blueprinttable}
+	end
+	
+	local _FilterMe = function (gID, idx, sID)
+		
+		local hasBlueprint = Squad_HasBlueprint(sID, blueprinttable)
+		
+		if filtertype == FILTER_KEEP then
+			-- KEEP, so remove if it wasn't found in the table
+			if hasBlueprint == false then
+				if splitGroupId ~= nil then
+					SGroup_Add(splitGroupId, sID)
+				end
+				SGroup_Remove(gID, sID)				
+			end
+		elseif filtertype == FILTER_REMOVE then
+			-- REMOVE, so remove if it was found in the table
+			if hasBlueprint == true then
+				if splitGroupId ~= nil then
+					SGroup_Add(splitGroupId, sID)
+				end
+				SGroup_Remove(gID, sID)
+			end
+		end
+		
+	end
+	
+	SGroup_ForEachEx(groupid, _FilterMe, true, true)
+	
+end
+
+
+
+
+--? @shortdesc Filters an sgroup on spawned/despawned status. Use FILTER_KEEP to keep the spawned units (therefore removing the despawned), or FILTER_REMOVE to remove the spawned units (and keep the despawned).
+--? @args SGroupID sgroup, Integer filtertype[, SGroupID splitSGroup]
+function SGroup_FilterSpawned(groupid, filtertype, splitGroupId)
+	
+	local _RemoveSquad = function(gid, idx, sid)
+		
+		SGroup_Remove(groupid, sid)
+		if scartype(splitGroupId) == ST_SGROUP then
+			SGroup_Add(splitGroupId, sid)
+		end
+		
+	end
+	
+	if filtertype == FILTER_KEEP then
+		SGroup_ForEachEx(groupid, _RemoveSquad, false, true)
+	elseif filtertype == FILTER_REMOVE then
+		SGroup_ForEachEx(groupid, _RemoveSquad, true, false)
+	end
+	
+end
+
+
+--? @shortdesc Filters an sgroup base on proximity. Use FILTER_KEEP to keep the affected units, or FILTER_REMOVE to remove them. Set invertPosition to TRUE to affect the units outside the position. 
+--? @args SGroupID sgroup, position, Integer filtertype[Real OPT_range, SGroupID OPT_splitSGroup]
+function SGroup_FilterByProximity(sgroup, position, filtertype, range, splitGroup)
+	
+	local _CheckSquad = function(gid, idx, sid)
+		SGroup_Single(sg_single, sid)
+		if Prox_AreSquadsNearMarker(sg_single, position, ANY, range) then
+			if filtertype == FILTER_REMOVE then
+				SGroup_Remove(sgroup, sid)
+				if scartype(splitGroup) == ST_SGROUP then
+					SGroup_Add(splitGroup, sid)
+				end
+			end
+		else
+			if filtertype == FILTER_KEEP then
+				SGroup_Remove(sgroup, sid)
+				if scartype(splitGroup) == ST_SGROUP then
+					SGroup_Add(splitGroup, sid)
+				end
+			end
+		end
+	end
+	
+	SGroup_ForEach(sgroup, _CheckSquad)
+	
+end
+
+
+
+--? @shortdesc Pass in a group and it will filter it down to the indicated number
+--? @result Void
+--? @args SGroupID sgroup1, Int groupSize[, SGroupID splitSGroup]
+function SGroup_FilterCount(groupid, count, splitGroupId)
+	
+	local _FilterMe = function (gID, idx, sID)
+		
+		local ct = SGroup_Count(gID)
+		
+		if ct > count then 
+			SGroup_Remove(gID, sID)
+			if scartype(splitGroupId) == ST_SGROUP then
+				SGroup_Add(splitGroupId, sID)
+			end
+		else
+			return true
+		end
+		
+	end
+	
+	SGroup_ForEach(groupid, _FilterMe)
+	
+end
+
+--? @shortdesc Searches an SGroup and finds the first threat within the table (searching first to last) and removes all other SBPs.
+--? @extdesc
+--? Optional parameter bEmpty can be set to true, will clear the SGroup if none of the SBPS in the table are found.
+--? @args SGroupID sgroup, LuaTable tableSBPs, [Boolean bEmpty]
+--? @result Void
+function SGroup_FilterThreat(sgroup, tableSBPs, bEmpty)
+
+	local _sg_threat = SGroup_CreateIfNotFound("_sg_threat")
+	SGroup_AddGroup(_sg_threat, sgroup)
+
+	-- for determining whether or not a filtered object was found
+	local b_filtered = false
+
+	for i=1, (#tableSBPs) do
+		
+		SGroup_Filter(_sg_threat, tableSBPs[i], FILTER_KEEP)
+		
+		if SGroup_IsEmpty(_sg_threat) == false then
+			SGroup_Clear(sgroup)
+			SGroup_AddGroup(sgroup, _sg_threat)
+			b_filtered = true
+			break
+		else
+			SGroup_AddGroup(_sg_threat, sgroup)
+		end
+	
+	end
+	
+	-- determine if any of the filtered items were found
+	-- if not, and the player wants the SGroup empty, clear it
+	if b_filtered == false and bEmpty == true then
+		SGroup_Clear(sgroup)
+	end
+	
+	SGroup_Destroy(_sg_threat)
+	
+end
+
+
+--? @shortdesc Filters an SGroup to either FILTER_REMOVE or FILTER_KEEP units that are currently camouflaged (stealthed included)
+--? @extdesc
+--? @args SGroupID sgroup, Integer filtertype [,SGroupID splitSGroup]
+--? @result Void
+function SGroup_FilterCamouflaged(sgroup, filter_type, splitgroup)
+
+	local _CheckSquad = function(gid, idx, sid)
+		if Squad_IsCamouflaged(sid) then
+			if filter_type == FILTER_REMOVE then
+				SGroup_Remove(sgroup, sid)
+				if scartype(splitgroup) == ST_SGROUP then
+					SGroup_Add(splitgroup, sid)
+				end
+			end
+		else
+			if filter_type == FILTER_KEEP then
+				SGroup_Remove(sgroup, sid)
+				if scartype(splitgroup) == ST_SGROUP then
+					SGroup_Add(splitgroup, sid)
+				end
+			end
+		end
+	end
+	
+	SGroup_ForEach(sgroup, _CheckSquad)
+
+end
+
+
+
+--? @shortdesc Filters an SGroup by whether units are on screen or not. Percent refers to the screen area you are considering (0.8 is a good value to use - it won't include things that are right at the screen edge).
+--? @extdesc Setting filtertype to FILTER_KEEP results in the group only containing those squads that are on screen.
+--? @result Void
+--? @args SGroupID egroup, Real percent, Integer filtertype
+function SGroup_FilterOnScreen(groupid, percent, filtertype)
+	
+	local _FilterMe = function (gID, idx, sID)
+		
+		local onScreen = Misc_IsSquadOnScreen(sID, percent)
+		
+		if filtertype == FILTER_KEEP then
+			-- KEEP, so remove if it is off-screen
+			if onScreen == false then
+				SGroup_Remove(gID, sID)
+			end
+		elseif filtertype == FILTER_REMOVE then
+			-- REMOVE, so remove if it is on-screen
+			if onScreen == true then
+				SGroup_Remove(gID, sID)
+			end
+		end
+		
+	end
+	
+	SGroup_ForEach(groupid, _FilterMe)
+	
+end
+
+
+--? @shortdesc Filters an EGroup to either FILTER_REMOVE or FILTER_KEEP entities that are currently camouflaged (stealthed included)
+--? @extdesc
+--? @args EGroupID sgroup, Integer filtertype [,EGroupID splitEGroup]
+--? @result Void
+function EGroup_FilterCamouflaged(egroup, filter_type, splitgroup)
+
+	local _CheckEntity = function(gid, idx, eid)
+		if Entity_IsCamouflaged(eid) then
+			if filter_type == FILTER_REMOVE then
+				EGroup_Remove(egroup, eid)
+				if scartype(splitgroup) == ST_EGROUP then
+					EGroup_Add(splitgroup, eid)
+				end
+			end
+		else
+			if filter_type == FILTER_KEEP then
+				EGroup_Remove(egroup, eid)
+				if scartype(splitgroup) == ST_EGROUP then
+					EGroup_Add(splitgroup, eid)
+				end
+			end
+		end
+	end
+	
+	EGroup_ForEach(egroup, _CheckEntity)
+
+end
+
+
+--? @shortdesc Pass in a group to command to 'stop'. Pass in booleans for capturing and building
+--? @result Void
+--? @args SGroupID sgroup1[, Boolean stopCapture, Boolean stopBuild]
+function Cmd_StopSquadsExcept(groupid, capture, build)
+	
+	local _FilterMe = function (gID, idx, sID)
+		
+		-- filter out capturing squads
+		if capture == true then 
+			if Squad_IsCapturing(sID) then
+				SGroup_Remove(gID, sID)
+			end
+		end
+		
+		-- filter out constructing squads
+		if build == true then 
+			if Squad_IsConstructing(sID) then
+				SGroup_Remove(gID, sID)
+			end
+		end
+		
+	end
+	
+	SGroup_ForEach(groupid, _FilterMe)
+	Cmd_Stop(groupid)
+	
+end
+
+
+--? @shortdesc Duplicates an SGroup. Creates a copy of sgroup1 in sgroup2. The function will clear sgroup2 beforehand if necessary.
+--? @result Void
+--? @args SGroupID sgroup1, SGroupID sgroup2
+function SGroup_Duplicate(groupid1, groupid2)
+
+	-- clear group2
+	SGroup_Clear(groupid2)
+	
+	-- add group 1 to the empty group 2
+	SGroup_AddGroup(groupid2, groupid1)
+	
+end
+
+
+--? @shortdesc Returns the total count of all members of all the squads in a given SGroup.
+--? @result Integer
+--? @args SGroupID sgroup, Bool dontCountTeamWeapons
+function SGroup_TotalMembersCount(sgroupid, dontCountTeamWeapons)
+	local membercount = 0									-- initialise the tally counter
+	
+	local _CountThisGroup = function (gID, idx, sID)		-- add one group's member count to the tally
+		membercount = membercount + Squad_Count(sID)
+		if dontCountTeamWeapons == true and Squad_HasTeamWeapon(sID) then
+			membercount = membercount - 1
+		end
+	end
+	
+	SGroup_ForEachEx(sgroupid, _CountThisGroup, true, true)	-- call the above function for each squad in the group
+	return membercount									-- return the final tally	
+end
+
+--? @shortdesc Returns the total count of all squads in a given SGroup with the provided blueprint or type
+--? @result Integer
+--? @args SGroupID sgroup,  SBP/String/Table sbp
+function SGroup_CountBlueprints(sgroupid, sbp)
+
+	local membercount = 0									-- initialise the tally counter
+	
+	local _count = function(gid, idx, sid)
+		if Squad_HasBlueprint(sid, sbp) then
+			membercount = membercount + 1
+		end
+	end
+	SGroup_ForEachEx(sgroupid, _count, true, true)
+	
+	return membercount									-- return the final tally	
+	
+end
+
+--? @shortdesc Returns true if ANY or ALL (use those keywords) of the squads in the group are present onscreen. You can pass in a percentage of the screen to check, so 0.8 would be a centered rectangle occupying 80% of the screen.
+--? @result Bool
+--? @args SGroupID group, Bool all[, Float percent]
+function SGroup_IsOnScreen(groupid, all, pct)
+
+	if pct == nil then
+		pct = 1.0
+	end
+	
+	local _CheckSquad = function(gid, idx, sid)
+		return Misc_IsSquadOnScreen(sid, pct)
+	end
+	
+	return SGroup_ForEachAllOrAny(groupid, all, _CheckSquad)
+	
+end
+
+
+--? @shortdesc Returns true if ANY or ALL squads in an SGroup are attack moving.
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean all (TRUE by default)
+function SGroup_IsAttackMoving(sgroupid, all)
+
+	if all == nil then
+		all = true
+	end
+	
+	if (  SGroup_Count( sgroupid ) > 0 ) then
+	
+		local _IsSquadAttackMoving = function (gid, idx, sid)
+		
+			if ( Squad_HasActiveCommand( sid ) == false ) then
+				return false
+			end
+			
+			return Squad_IsAttackMoving(sid)
+		end
+		
+		return SGroup_ForEachAllOrAnyEx(sgroupid, all, _IsSquadAttackMoving, true, true)
+	end
+	
+	-- squad has no one
+	return false
+end
+
+--? @shortdesc Kills all squads in an SGroup. This kills them 'naturally', as opposed to SGroup_DestroyAllSquads() which makes them blink out of existance.
+--? @result Void
+--? @args SGroupID sgroup
+function SGroup_Kill(sgroupid)
+
+	local _KillSquad = function (gid, idx, sid)
+		Squad_Kill(sid)
+	end
+	
+	SGroup_ForEach(sgroupid, _KillSquad)
+	
+end
+
+
+--? @shortdesc Returns whether ANY or ALL squads in an SGroup have the specified upgrade
+--? @result Boolean
+--? @args SGroupID sgroup, UpgradeID upgrade, Boolean all
+function SGroup_HasUpgrade(sgroup, upgrade, all)
+
+	local _CheckSquad = function (gid, idx, sid)
+		return Squad_HasUpgrade(sid, upgrade)
+	end
+	
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+	
+end
+
+
+--? @shortdesc Applies an upgrade to all squad entities in an sgroup.
+--? @args SGroupID sgroup, UpgradeID upgrade
+--? @result Void
+function SGroup_CompleteEntityUpgrade(sgroup, upgrade)
+	for i=1, SGroup_CountSpawned(sgroup) do
+		for j=0, Squad_Count(SGroup_GetSpawnedSquadAt(sgroup, i))-1 do
+			Entity_CompleteUpgrade(Squad_EntityAt(SGroup_GetSpawnedSquadAt(sgroup, i), j), upgrade)
+		end
+	end
+end
+
+
+--? @shortdesc Returns the distance from the centre of the group of the unit that furthest out. 
+--? @result Real
+--? @args SGroupID sgroup
+function SGroup_GetSpread(sgroup)
+
+	local centerpos = SGroup_GetPosition(sgroup)
+	local maxdist = 0
+	
+	local _CheckSquad = function (gid, idx, sid)
+		
+		for n = 1, Squad_Count(sid) do
+			local newpos = Entity_GetPosition(Squad_EntityAt(sid, n-1))
+			local dist = World_DistancePointToPoint(centerpos, newpos)
+			if dist > maxdist then
+				maxdist = dist
+			end
+		end
+		
+	end
+	
+	SGroup_ForEach(sgroup, _CheckSquad)
+	
+	return maxdist
+	
+end
+
+--? @shortdesc Builds a table of SGroupIDs that are named in a sequence. i.e. a name of "sg_killer" will find groups "sg_killer1", "sg_killer2" and so on, up until it looks for a group that isn't there.
+--? @args String name
+--? @result Table
+function SGroup_GetSequence(name)
+
+	local num = 1
+	local result = {}
+	
+	while SGroup_Exists(name..num) do
+		table.insert(result, SGroup_FromName(name..num))
+		num = num + 1
+	end
+	
+	if num >= 2 then
+		print("Retrieved sequence of SGroups: "..name.."1 to "..name..(num-1))
+	end
+	
+	return result
+	
+end
+
+--? @shortdesc Creates a squad group containing a single squad
+--? @extdesc
+--? Creates an SGroup containing just one squad, creating the group if it doesn't exist and clearing it if it does. It returns the name of the SGroup.
+--? @result SGroupID
+--? @args SGroupID groupID, squadID squad
+function SGroup_Single(groupID, squadID)
+
+--	local groupID = SGroup_CreateIfNotFound(name)
+	SGroup_Clear(groupID)
+	
+	SGroup_Add(groupID, squadID)
+
+	return groupID
+	
+end
+
+
+
+
+
+
+
+--? @shortdesc Disables all current combat plans for the squads in the sgroup
+--? @args SGroupID groupID
+--? @result Void
+function SGroup_DisableCombatPlans(sgroupID)
+
+	if (not SGroup_IsEmpty(sgroupID) ) then
+		
+		local _SetEmptyPlans = function(gid, idx, sid)
+			
+			-- make this squad act dumb.
+			Squad_SetAttackPlan(sid, "empty-plan")
+			Squad_SetRetaliationPlan(sid, "empty-plan")
+			Squad_SetReactionPlan(sid, "empty-plan")
+			
+		end
+		
+		SGroup_ForEachEx(sgroupID, _SetEmptyPlans, true, false)
+		
+	end
+end
+
+--? @shortdesc Restore all current combat plans for the squads in the sgroup
+--? @args SGroupID sgroupID
+--? @result Void
+function SGroup_RestoreCombatPlans(sgroupID)
+
+	if (not SGroup_IsEmpty(sgroupID)) then
+		
+		local _RestorePlans = function(gid, idx, sid)
+			
+			-- restore default plans
+			Squad_SetAttackPlan(sid, "")
+			Squad_SetRetaliationPlan(sid, "")
+			Squad_SetReactionPlan(sid, "")
+			
+		end
+		
+		SGroup_ForEachEx(sgroupID, _RestorePlans, true, false)
+	end
+	
+end
+
+--? @shortdesc Checks if ANY or ALL squads in an SGroup are garrisoned in an entity (building) 
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean ALL
+function SGroup_IsInHoldEntity(sgroup, all)
+            
+	local _CheckSquad = function(gid, idx, sid)
+		if Squad_IsInHoldEntity(sid) then
+			return true
+		end
+	end
+   
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+end
+
+
+--? @shortdesc Checks if ANY or ALL squads in an SGroup are garrisoned in a squad (transport vehicle) 
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean ALL
+function SGroup_IsInHoldSquad(sgroup, all)
+            
+	local _CheckSquad = function(gid, idx, sid)
+		if Squad_IsInHoldSquad(sid) then
+			return true
+		end
+	end
+   
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+end
+
+
+
+--? @shortdesc Gets the last attacker(s) for all the squads in an SGroup
+--? Gets the last attacker for all the squads in an SGroup and stores that in SGroupAttacker
+--? @result Void
+--? @args SGroup SGroupVictim, SGroup SGroupAttacker[, Real seconds]
+function SGroup_GetLastAttacker(SGroupVictim, SGroupAttacker, seconds)
+	
+	SGroup_Clear(SGroupAttacker)
+	local tempSGroup = SGroup_Create("")
+	
+	if seconds == nil then
+		
+		local _CheckSquad = function(gid, idx, sid)
+			Squad_GetLastAttacker(sid, tempSGroup)
+			SGroup_AddGroup(SGroupAttacker, tempSGroup)
+		end
+		
+		SGroup_ForEach(SGroupVictim, _CheckSquad)
+		
+	else
+		
+		local _CheckSquad = function(gid, idx, sid)
+			Squad_GetLastAttackers(sid, tempSGroup, seconds)
+			SGroup_AddGroup(SGroupAttacker, tempSGroup)
+		end
+		
+		SGroup_ForEach(SGroupVictim, _CheckSquad)
+		
+	end
+	
+end
+
+--? @shortdesc Returns whether any entity in an SGroup has a hold on anything
+--? @args SGroupID sgroup
+--? @result Void
+function SGroup_IsHoldingAny(sgroup)
+
+	local _SquadHoldingAny = function(gid, idx, sid)
+		if Squad_IsHoldingAny(sid) then
+			return true
+		end
+	end
+	
+	return SGroup_ForEach(sgroup, _SquadHoldingAny)
+	
+end
+
+--? @shortdesc Returns an sgroup containing all squads held by any squad in an sgroup
+--? @args SGroupID sgroup, SGroupID sgroupRecipient
+--? @result Void
+function SGroup_GetSquadsHeld(sgroupIn, sgroupOut)
+
+	SGroup_Clear(sgroupOut)
+	
+	local _GetSquadsHeld = function(gid, idx, sid)
+		Squad_GetSquadsHeld(sid, sgroupOut)
+	end
+	
+	SGroup_ForEach(sgroupIn, _GetSquadsHeld)
+	
+end
+
+--? @shortdesc Returns a position (a certain distance away) relative to a squad's current position/orientation. see ScarUtil.scar for explanation of 'offset' parameter
+--? @args SGroupID sgroup, Integer offset, Real value
+--? @result Position
+function SGroup_GetOffsetPosition(sgroup, offset, distance)
+
+	if SGroup_IsEmpty(sgroup) then
+		fatal("SGroup_GetOffsetPosition: don't call this function with an empty SGroup, since it has no way to return an error (it returns a position)")
+	end
+	
+	return Squad_GetOffsetPosition(SGroup_GetSpawnedSquadAt(sgroup, 1), offset, distance)
+
+end
+
+--? @shortdesc Gets all the entities that an SGroup may occupy and adds them to the EGroupHold
+--? @result Void
+--? @args SGroupID sgroup, EGroup EGroupHold
+function SGroup_GetHoldEGroup(sgroup, egroup)
+
+	local _GetHold = function(gid, id, sid)
+		if Squad_IsInHoldEntity(sid) then
+			EGroup_Add(egroup, Squad_GetHoldEntity(sid))
+		end
+	
+	end
+	
+	SGroup_ForEach(sgroup, _GetHold)
+	
+end
+
+--? @shortdesc Gets all the squads that an SGroup may occupy and adds them to the SGroupHold
+--? @result Void
+--? @args SGroupID sgroup, SGroup SGroupHold
+function SGroup_GetHoldSGroup(sgroup, sgroup_hold)
+
+	local _GetHold = function(gid, id, sid)
+		if Squad_IsInHoldSquad(sid) then
+			SGroup_Add(sgroup_hold, Squad_GetHoldSquad(sid))
+		end
+	
+	end
+	
+	SGroup_ForEach(sgroup, _GetHold)
+	
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- QUERIES
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Returns true if ALL or ANY squads in a group are currently calling for reinforcments.
+--? @extdesc Set all to true to check for ALL or set to false to check for ANY
+--? @args SGroupID sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsReinforcing( sgroupid, all )
+	
+	local CheckIsReinforcing = function( groupid, itemindex, itemid )
+		return Squad_IsReinforcing( itemid )
+	end
+	
+	return SGroup_ForEachAllOrAnyEx( sgroupid, all, CheckIsReinforcing, true, true )
+end
+
+
+--? @shortdesc Returns true if ALL or ANY squads in a group are currently upgrading. You can pass in nil for upgradeid if it doesn't matter what is being upgraded.
+--? @extdesc Set all to true to check for ALL or set to false to check for ANY
+--? @args SGroupID sgroup, UpgradeBlueprint blueprint, Boolean all
+--? @result Boolean
+function SGroup_IsUpgrading( sgroupid, upgradeid, all )
+	
+	local CheckIsUpgrading = function( groupid, itemindex, itemid )
+		if upgradeid == nil then
+			return Squad_IsUpgradingAny( itemid )
+		else
+			return Squad_IsUpgrading( itemid, upgradeid )
+		end
+	end
+	
+	return SGroup_ForEachAllOrAnyEx( sgroupid, all, CheckIsUpgrading, true, true )
+end
+
+
+--? @shortdesc Checks if ANY or ALL squads in an SGroup are capturing
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean ALL
+function SGroup_IsCapturing( sgroupid, all)
+
+	if _IsCommandActive(sgroupid, SQUADSTATEID_Capture, all) then
+		return true
+	end
+	
+	return false
+	
+end
+
+--? @shortdesc Checks if ANY or ALL squads in an SGroup are idle
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean ALL
+function SGroup_IsIdle( sgroupid, all)
+	if scartype(sgroupid) == ST_SQUAD then
+		return Squad_IsIdle(sgroupid)
+	end
+
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_IsIdle(sid)
+	end
+
+	return SGroup_ForEachAllOrAny(sgroupid, all, _CheckSquad)
+end
+
+
+
+--? @shortdesc Returns true if ALL or ANY squads in a group are currently constructing a building.
+--? @extdesc Set all to true to check for ALL or set to false to check for ANY
+--? @args SGroup sgroup, Boolean all
+--? @result Boolean
+function SGroup_IsConstructingBuilding( sgroupid, all )
+	return _IsCommandActive(sgroupid, SQUADSTATEID_Construction, all)
+end
+
+
+--? @shortdesc Checks if ANY or ALL squads in an SGroup are using an ability
+--? @extdesc Does not check WHAT ability a squad is using.
+--? @result Boolean
+--? @args SGroupID sgroup, Boolean ALL
+function SGroup_IsUsingAbility( sgroupid, all )
+	return _IsCommandActive(sgroupid, SQUADSTATEID_Ability, all)
+end
+
+--? @shortdesc Give action points to the squad
+--? @result Void
+--? @args SGroupID sgroup, Float actionpoint
+function SGroup_RewardActionPoints( sgroup, actionpoint )
+	SGroup_CallSquadFunction(sgroup, Squad_RewardActionPoints, actionpoint)
+end
+
+--? @shortdesc Set animation state of a state machine for an SGroup. Please only use this for simple animations
+--? @args SGroupID sgroupid, String stateMachineName, String stateName
+--? @result Void
+function SGroup_SetAnimatorState(sgroupid, stateMachineName, stateName)
+	SGroup_CallSquadFunction(sgroupid, Squad_SetAnimatorState, stateMachineName, stateName)
+end
+
+--? @shortdesc Trigger animation action for an SGroup. Please only use this for simple animations
+--? @args SGroupID sgroupid, String actionName
+--? @result Void
+function SGroup_SetAnimatorAction(sgroupid, actionName)
+	SGroup_CallSquadFunction(sgroupid, Squad_SetAnimatorAction, actionName)
+end
+
+--? @shortdesc Trigger animation event for an SGroup. Please only use this for simple animations
+--? @args SGroupID sgroupid, String eventName
+--? @result Void
+function SGroup_SetAnimatorEvent(sgroupid, eventName)
+	SGroup_CallSquadFunction(sgroupid, Squad_SetAnimatorEvent, eventName)
+end
+
+--? @shortdesc Returns if ANY or ALL members of an SGroup are doing an ability
+--? @args SGroupID sgroupid, AbilityID ability, Boolean all
+--? @result Boolean
+function SGroup_IsDoingAbility(sgroupid, ability, all)
+	return SGroup_CallSquadFunctionAllOrAny(sgroupid, all, Squad_IsDoingAbility, ability)	
+end
+
+--? @shortdesc Overrides crushable behavior for an sgroup
+--? @args SGroupID sgroup, Boolean crushable
+--? @result Void
+function SGroup_SetCrushable(sgroup, crushable)
+	SGroup_CallEntityFunction(sgroup, Entity_SetCrushable, crushable)
+end
+
+--? @shortdesc Sets whether an entity pays attention to its surroundings
+--? @args SGroupID sgroup, Boolean attentive
+--? @result Void
+function SGroup_EnableAttention(sgroup, attentive)
+	SGroup_CallEntityFunction(sgroup, Entity_EnableAttention, attentive)
+end
+
+--? @shortdesc Makes an sgroup neutral
+--? @args SGroupID sgroup
+--? @result Void
+function SGroup_SetWorldOwned(sgroup)
+	SGroup_CallSquadFunction(sgroup, Squad_SetWorldOwned)
+end
+
+--? @shortdesc Enables shared team production on a building (teammates can build using THEIR resources)
+--? @args SGroupID egroup, Boolean enable
+--? @result Void
+function SGroup_SetSharedProductionQueue(sgroup, enable)
+	SGroup_CallSquadFunction(sgroup, Squad_SetSharedProductionQueue, enable)
+end
+
+--? @shortdesc Removes upgrade(s) from an sgroup
+--? @args SGroupID sgroup, UpgradeBlueprint/Table upgrade
+--? @result Void
+function SGroup_RemoveUpgrade(sgroup, upgrade)
+	if scartype(upgrade) ~= ST_TABLE then
+		upgrade = {upgrade}
+	end
+	
+	for i = 1, (#upgrade) do
+		SGroup_CallSquadFunction(sgroup, Squad_RemoveUpgrade, upgrade[i])
+	end
+end
+
+--? @shortdesc Sets all squads in as sgroup to be recrewable or not when abandoned
+--? @args SGroupID sgroup, Boolean recrewable
+--? @result Void
+function SGroup_SetRecrewable(sgroup, recrewable)
+	for i=1, SGroup_CountSpawned(sgroup) do
+		Squad_SetRecrewable(SGroup_GetSpawnedSquadAt(sgroup, i), recrewable)
+	end
+end
+
+--? @shortdesc Adds an ability to all squads in an sgroup.
+--? @args SGroupID sgroup, AbilityBlueprint ability
+--? @result Void
+function SGroup_AddAbility(sgroup, ability)
+	SGroup_CallSquadFunction(sgroup, Squad_AddAbility, ability)
+end
+
+
+--? @shortdesc Test whether ANY or ALL units in a group have a specified ability
+--? @args SGroupID sgroup, AbilityBlueprint ability, Boolean all
+--? @result Boolean
+function SGroup_HasAbility(sgroup, ability, all)
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_HasAbility(sid, ability)
+	end
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+end
+
+
+--? @shortdesc Removes an ability that was previously added by SGroup_AddAbility. You cannot remove static abilities (from AE: squad_ability_ext) 
+--? @args SGroupID sgroup, AbilityBlueprint ability
+--? @result Void
+function SGroup_RemoveAbility(sgroup, ability)
+	SGroup_CallSquadFunction(sgroup, Squad_RemoveAbility, ability)
+end
+
+
+--? @shortdesc Test whether ANY or ALL of a group can be ordered to do this ability on the target squad
+--? @args SGroupID caster, AbilityBlueprint ability, EntityID target_entity, Boolean all
+function SGroup_CanCastAbilityOnEntity(caster_sgroup, ability, target_entity, all)
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_CanCastAbilityOnEntity(sid, ability, target_entity)
+	end
+	return SGroup_ForEachAllOrAny(caster_sgroup, all, _CheckSquad)
+end
+
+--? @shortdesc Test whether ANY or ALL of a group can be ordered to do this ability on the target entity
+--? @args SGroupID caster, AbilityBlueprint ability, SquadID target_squad, Boolean all
+function SGroup_CanCastAbilityOnSquad(caster_sgroup, ability, target_squad, all)
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_CanCastAbilityOnSquad(sid, ability, target_squad)
+	end
+	return SGroup_ForEachAllOrAny(caster_sgroup, ANY, _CheckSquad)
+end
+
+--? @shortdesc Test whether ANY or ALL of a group can be ordered to do this ability on the target position
+--? @args SGroupID caster, AbilityBlueprint ability, Position position, Boolean all
+function SGroup_CanCastAbilityOnPosition(caster_sgroup, ability, position, all)
+	local _CheckSquad = function(gid, idx, sid)
+		return Squad_CanCastAbilityOnPosition(sid, ability, position)
+	end
+	return SGroup_ForEachAllOrAny(caster_sgroup, ANY, _CheckSquad)
+end
+
+ 	
+--? @shortdesc Test whether ANY or ALL of an SGroup is on screen currently (not strict) 
+--? @args SGroupID group, Real percent, Boolean all
+function Misc_IsSGroupOnScreen(sgroup, percent, all)
+	local _CheckSquad = function(gid, idx, sid)
+		return Misc_IsSquadOnScreen(sid, percent)
+	end
+	return SGroup_ForEachAllOrAny(sgroup, all, _CheckSquad)
+end
+
+
+--? @shortdesc Test whether ANY or ALL of an EGroup is on screen currently (not strict) 
+--? @args EGroupID group, Real percent, Boolean all
+function Misc_IsEGroupOnScreen(egroup, percent, all)
+	local _CheckEntity = function(gid, idx, eid)
+		return Misc_IsEntityOnScreen(eid, percent)
+	end
+	return EGroup_ForEachAllOrAny(egroup, all, _CheckEntity)
+end
+
+
+--? @shortdesc Return the average shield strengths of the squads in the SGroup (as a percentage)
+--? @args SGroupID sgroup
+function SGroup_GetAvgShieldPercentage(sgroup)
+
+	local total = 0
+	local count = 0
+	
+	local _CheckSquad = function(gid, idx, sid)
+		total = total + Squad_GetShieldPercentage(sid)
+		count = count + 1
+	end
+	SGroup_ForEach(sgroup, _CheckSquad)
+	
+	if count == 0 then
+		return 0
+	else
+		return total / count
+	end
+	
+end
+
+
+--? @shortdesc Return the average health ratio, including shield strengths, of the squads in the SGroup 
+--? @args SGroupID sgroup, Boolean includeBonuses
+function SGroup_GetAvgHealthPercentageWithShields(sgroup, includeBonuses)
+
+	local total = 0
+	local count = 0
+	
+	local _CheckSquad = function(gid, idx, sid)
+		total = total + Squad_GetHealthPercentageWithShields(sid, includeBonuses)
+		count = count + 1
+	end
+	SGroup_ForEach(sgroup, _CheckSquad)
+	
+	if count == 0 then
+		return 0
+	else
+		return total / count
+	end
+	
+end
+
+
+
+
+
+
+
+
+
+--? @shortdesc Instantly adds an upgrade to all squads in a given SGroup.
+--? @args SGroupID sgroup, UpgradeBlueprint upgrade
+function SGroup_CompleteUpgrade(sgroup, upgrade)
+
+	local _Squad = function(gid, idx, sid)
+		Squad_CompleteUpgrade(sid, upgrade)
+	end
+	SGroup_ForEach(sgroup, _Squad)
+
+end
+
+
+--? @shortdesc Instantly adds an upgrade to all entities in a given EGroup.
+--? @args EGroupID egroup, UpgradeBlueprint upgrade
+function EGroup_CompleteUpgrade(egroup, upgrade)
+
+	local _Entity = function(gid, idx, eid)
+		Entity_CompleteUpgrade(eid, upgrade)
+	end
+	EGroup_ForEach(egroup, _Entity)
+
+end
+
+
+
+--? @shortdesc Set the allowable methods of targeting the entities in this EGroup.
+--? @args EGroupID egroup, TargetingType targetingType
+function EGroup_SetTargetingType(egroup, type)
+
+	local _Entity = function(gid, idx, eid)
+		Entity_SetTargetingType(eid, type)
+	end
+	EGroup_ForEach(egroup, _Entity)
+
+end
+
+
+--? @shortdesc Restore the targeting type of the entities in this EGroup to their respective defaults (as found in their EBPs)
+--? @args EGroupID egroup
+function EGroup_RestoreTargetingType(egroup)
+
+	local _Entity = function(gid, idx, eid)
+		Entity_RestoreTargetingType(eid)
+	end
+	EGroup_ForEach(egroup, _Entity)
+
+end
+
+
+--? @shortdesc Enables or disables the burn extenstion
+--? @args EGroupID egroup, Boolean enabled
+function EGroup_SetBurnExtEnabled(egroup, enabled)
+
+	local _Entity = function(gid, idx, eid)
+		Entity_SetBurnExtEnabled(eid, enabled)
+	end
+	EGroup_ForEach(egroup, _Entity)
+
+end
+

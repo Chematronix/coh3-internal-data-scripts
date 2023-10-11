@@ -1,0 +1,108 @@
+------------------------------------------
+-- Print On Screen Debug functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+--? @shortdesc Prints a message on the screen
+--? @extdesc
+--? Prints the given message on the screen. It will stay there until you call PrintOnScreen_RemoveFromScreen()
+--? or print another message on the screen to replace it.
+--? @result Void
+--? @args String text
+function PrintOnScreen(...)
+	local arg = {...}
+	
+	local text = arg[1]
+	local duration = 2 + (string.len(text)*0.15)		-- default length of time is based on length of string
+	if ((#arg) == 2) then
+		duration = arg[2]								-- override default length
+	end
+
+	-- if there is still a message hanging about on the screen, remove it
+	if (_POS_messageonscreen == true) then
+		PrintOnScreen_RemoveFromScreen()
+	end
+	
+--~ 	print("Asked to PrintOnScreen - "..text)
+	dr_setautoclear("scartext", 0)
+	local xpos = 0.5-(string.len(text)*0.003)
+	local ypos = 0.3
+	dr_text2d("scartext", xpos, ypos, text, 213, 213, 213)
+
+	-- set the flag to indicate that the message is on the screen
+	_POS_messageonscreen = true
+end
+
+
+--? @shortdesc Remove any messages from the screen
+--? @extdesc
+--? Removes from the screen any messages put there with PrintOnScreen()
+--? @result Void
+--? @args Void
+function PrintOnScreen_RemoveFromScreen()
+
+	dr_clear("scartext")
+	_POS_messageonscreen = false
+
+end
+
+function PrintOnScreen_GetString(object, tabs, memory)
+	local memory = memory or { }
+	local tabs = tabs or "     "
+	local str = ""
+	local objectType = type(object)
+	
+	if (objectType == "string") then
+		str = str..'"'..object..'"'
+	elseif (objectType == "number") then
+		str = str..object
+	elseif (objectType == "table") then
+		if not (memory[tostring(object)]) then
+			memory[tostring(object)] = true
+			str = str..tostring(object)
+			for k, v in pairs(object) do
+				local newString = PrintOnScreen_GetString(v, tabs.."     ", memory)
+				if (newString) then
+					str = str.."\n"..tabs.."["..k.."] = "..newString
+				end
+			end
+		end
+	else
+		str = str..objectType..": "..tostring(object)
+	end
+	return str
+end
+
+local styleData = { default = { xpos = 0.05, ypos = 0.05, center = false, linespace = 0.2, id = "scartext", count = 0 } }
+styleData.victorypoints = { __index = styleData.default, xpos = 0.52, ypos = 0.035 }
+styleData.rostov1 = { __index = styleData.default, xpos = 0.45, ypos = 0.1 }
+styleData.rostov2 = { __index = styleData.default, xpos = 0.45, ypos = 0.125 }
+styleData.rostov3 = { __index = styleData.default, xpos = 0.45, ypos = 0.15 }
+
+
+--? @shortdesc Prints the lua content of an object on the screen
+--? @extdesc
+--? Prints the given message on the screen. If you would like to print multiple messages without clearing them you can
+--? assign them unique ID's. Must use PrintOnScreen_Remove(id) to remove each instance
+--? @result PrintOnScreenID
+--? @args Object object, String id[, String style]
+function PrintOnScreen_Add(object, id, style)
+	local style = style or "default"
+	local data = styleData[style] or styleData["default"]
+	local id = id or "scartext"
+	
+	dr_setautoclear(id, 0)
+	dr_clear(id)
+	dr_text2d(id, data.xpos, data.ypos, PrintOnScreen_GetString(object), 213, 213, 213)
+	return id
+end
+
+--? @shortdesc Removes the PrintOnScreen text of a given ID
+--? @result Void
+--? @args String id
+function PrintOnScreen_Remove(id)
+	if (type(id) == "string") then
+		dr_clear(id)
+	else
+		fatal("Passed in a "..type(id).." to PrintOnScreen_Remove, ID's can only be strings - "..tostring(id))
+	end
+end

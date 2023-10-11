@@ -1,0 +1,392 @@
+-- Copyright 2020 SEGA Corporation, Developed by Relic Entertainment
+
+--?    @shortdesc
+--?    Issue move order to SGroup and count how many of them arrived at destination.
+--?    
+--?    @extdesc 
+--?    Spawns a specified number of given SBPs at a start-position and orders them to move to the end-position. 
+--?    The test will count the number of Squads within the group that reached their destination within the 
+--?    time limit.
+--?    The test will finish once all of the specified coordinates are tested
+--?    and success will depend upon what % of units reached the end zone (only 100% will succeed)
+--?    
+--?    @args
+--?    table t_test_group {
+--?        int timeout_seconds,
+--?        table squad_blueprint_names,
+--?        int number_to_spawn,
+--?        int acceptable_distance,
+--?        table Util_GetPosition(startpos),
+--?        table Util_GetPosition(endpos),
+--?        bool highlight_locations }
+
+function Test_SquadNavigationBasics(t_test_group, t_params)
+
+	local timeout_seconds = t_params.timeout_seconds
+	-- Variables for received parameters
+	
+	local recountIntervalSeconds = 8
+	
+	local squad_blueprint_names = t_params.squad_blueprint_names
+	local number_of_blueprints = #t_params.squad_blueprint_names
+	local number_to_spawn = t_params.number_to_spawn or 1
+	local acceptable_distance = t_params.acceptable_distance or 4
+	
+	
+	-- declare main coordinate variables
+	local startpos = t_params.startpos
+	local endpos = t_params.endpos
+	
+	
+	-- unit and player variables
+	local player = Game_GetLocalPlayer()
+	local sgroup_name = "test_sgroup"
+	local sgroup = nil
+	local total_squads = (number_of_blueprints * number_to_spawn)
+	local spawned_squads_array = {} -- store pointers to each squad; use this in Squad_EntityAt() to extract number of Squad members.
+	
+	
+	-- declare test progress variables
+	local position_phase = 0
+	--[[
+	if (position_phase == 0) then we are checking errors/setting up/spawning/.
+	if (position_phase == 1) then Squad member-entities are in motion, headed toward destination.
+	if (position_phase == 2) then some member-entities have reached the destination but others have not.
+	]]--
+
+	local rule_id_wait_for_move = nil
+	local rule_id_wait_for_move_done = false
+	local phase_one_wait_for_move_done = false
+	local phase_two_loop_again = false
+	local wait_for_squads = false
+	local squad_reached_destination = false
+	local total_squad_member_entities = 0
+	local arrived_squad_member_entities = nil
+	local number_of_arrivals = 0
+	local move_success = false
+	
+	
+	-- Obstacle variables
+	local spawn_test_obstacles = t_params.spawn_test_obstacles or false 
+	local quantity_of_obstacles = t_params.quantity_of_obstacles or 0
+	local obstacle_ebp = t_params.obstacle_ebp
+	local obstacle_marker_prefix = t_params.obstacle_marker_prefix or nil
+	local e_obst_errors = 0
+	local e_squd_errors = 0
+	-- \end of obstacle variable section
+	
+	
+	-- show destination zone
+	local highlight_locations = t_params.highlight_locations or false
+
+
+	local function InitializeTestVariables()
+		-- Re-initialize variables which are subject to change during the test 
+	
+		-- unit and player variables
+		player = Game_GetLocalPlayer()
+		sgroup_name = "test_sgroup"
+		sgroup = nil
+		total_squads = (number_of_blueprints * number_to_spawn)
+		spawned_squads_array = {} -- store pointers to each squad; use this in Squad_EntityAt() to extract number of Squad members.
+		
+		
+		-- declare test progress variables
+		position_phase = 0
+		rule_id_wait_for_move = nil
+		rule_id_wait_for_move_done = false
+		phase_one_wait_for_move_done = false
+		phase_two_loop_again = false
+		wait_for_squads = false
+		squad_reached_destination = false
+		total_squad_member_entities = 0
+		arrived_squad_member_entities = nil
+		number_of_arrivals = 0
+		move_success = false
+	
+		e_obst_errors = 0
+		e_squd_errors = 0
+		-- \end of obstacle variable section
+	
+	end
+
+	--/end of variable initialization
+	--------------------------------------------------------------------------------------------------
+	-- define helper functions
+
+	-- Error-Check Functions
+	local function CheckSquadSetupErrors(sbpn, num_bps, num_spawn)
+		local errors = 0
+		if (sbpn == nil) then
+			sbpn[1] = "{invalid SBP}"
+			standard_test.printFail(tostring(sbpn[1]) ..
+				" aborting test.")
+			errors = errors + 1
+		end
+		if (num_spawn < 1) then
+			standard_test.printFail("Please provide a number_to_spawn above 0.")
+			errors = errors + 1
+		end
+		if (errors > 0) then
+			standard_test.print("Aborting autotest, " .. tostring(errors) ..
+				" setup errors found. Please verify your configuration.")
+		end
+
+		check_for_errors = false
+		return errors
+	end
+
+
+	-- Error-Check Function for Obstacle Spawn
+	local function CheckObstacleSetupErrors(obstacles_true, quant, obstacle_ebp, name_prefix)
+		local oe = 0
+		if (obstacles_true) then
+			-- First, check to make sure we actually want more than 0 obstacle-entities
+			if (not (quant > 0)) then
+				standard_test.printFail("Failed to spawn invalid quantity of obstacles! We received value [tostring:] " .. tostring(quant))
+				oe = oe + 1
+			end
+			
+			if (obstacle_ebp == nil) then
+				standard_test.printFail("No obstacle EBP provided!")
+				oe = oe + 1
+			end
+			
+			if (name_prefix == nil) then
+				standard_test.printFail("No obstacle-marker name prefix provided from JSON!")
+				oe = oe + 1
+			end
+			
+			if (oe > 0) then
+				standard_test.print(oe .. " obstacle errors detected.  Aborting test...")
+				standard_test.print("Obstacles are optional;")
+				standard_test.print("  to disable, set JSON parameter \"spawn_test_obstacles\": false.")
+			end
+		end
+		return oe
+	end
+
+
+	-- function: Spawn our squads and add them to a table
+	local function SpawnSquads()
+		-- Spawn our Squads
+		for sbp_list_index = 1, number_of_blueprints do
+			for i = 1, number_to_spawn do
+				Util_CreateSquads(player, sgroup, BP_GetSquadBlueprint(squad_blueprint_names[sbp_list_index]), startpos)
+				table.insert(spawned_squads_array, SGroup_GetSpawnedSquadAt(sgroup, i))
+			end
+		end
+	end
+
+
+	-- Spawn obstacles, if desired and specified by user
+	local function SpawnObstacles(prefix, quant, ebp, facing)
+		local temp_marker_name = ""
+		local temp_pos = Util_ScarPos(0,0)
+		local t_loc = {}
+		local oe = 0
+
+		-- Iterate through markers by name-value increment until we can't find one
+		for m = 1, quant do
+			temp_marker_name = ( prefix .. tostring(m) )
+			if (Marker_Exists(temp_marker_name, "")) then
+				temp_pos = Marker_GetPosition( Marker_FromName(temp_marker_name, "") )
+				table.insert(t_loc, m, temp_pos)
+				standard_test.print("Adding to marker position list: " .. temp_marker_name)
+			else
+				standard_test.printFail("Invalid marker name " .. temp_marker_name .. "! " ..
+					"Make sure to append incrementing values for your obstacle marker names!")
+				oe = oe + 1
+			end
+		end
+
+		eg_obst = EGroup_CreateIfNotFound("eg_obst")
+		local player2 = World_GetPlayerAt(2)
+		-- Spawn our chosen obstacle entity at the saved locations, FACING the initial spawn position
+		for emi = 1, #t_loc do
+			Util_CreateEntities(player2, eg_obst, BP_GetEntityBlueprint(ebp), t_loc[emi], 1, facing)
+			standard_test.print("Spawning " .. ebp .. ".")
+		end
+
+		if (oe > 0) then
+			return oe
+		else
+			return 0
+		end
+	end
+
+
+	-- function: Initiate move command after spawning
+	local function MoveToDestination(player, sgroup, endpos)
+		Cmd_Move(sgroup, endpos)
+	end
+
+
+	-- function: Count member entities in our SGroup so we know what to compare against
+	function CountEntitiesInSGroup(sg)
+		-- Return the total number of entity-members for the provided SGroup
+		local temp_count_of_members = 0
+		temp_count_of_members = SGroup_TotalMembersCount(sg, false)
+
+		return temp_count_of_members 
+	end
+
+
+	-- function: check if all Squad member entities are within our destination zone
+	local function CountSquadArrivals(sg)
+		local entity_count = 0
+		local _CheckSquad = function(gid, idx, sid)
+			local count = Squad_Count(sid)
+			for entityIndex = 1, count do
+				local entity = Squad_EntityAt(sid, entityIndex - 1)
+				if Util_GetDistance(endpos, Util_GetPosition(entity)) <= acceptable_distance then 
+					entity_count = entity_count + 1
+				end
+			end
+		end
+
+		SGroup_ForEach(sg, _CheckSquad)
+		return entity_count
+	end
+
+	--/ end of function initialization
+	--------------------------------------------------------------------------------------------------
+	-- start test
+
+	local function Start()
+
+		-- Ensure that we are running restarted or repeated tests with default values
+		InitializeTestVariables()
+
+		-- check for invalid parameters
+		e_squd_errors = CheckSquadSetupErrors(squad_blueprint_names, number_of_blueprints, number_to_spawn)
+		if (e_squd_errors > 0) then
+			standard_test.printFail( tostring(e_squd_errors) .. " Squad set-up errors found!")
+			return false
+		end
+
+
+		FOW_PlayerRevealAll(player)
+		sgroup = SGroup_CreateIfNotFound(sgroup_name)
+
+		SpawnSquads()
+
+		Camera_MoveTo(startpos)
+		Camera_FollowSquad(SGroup_GetSquadAt(sgroup, 1))
+
+		-- draw start/end visuals on terrain
+		local circle_points = 16
+		local circle_thickness = 6
+
+		-- debug renderer is not locked to sim time; circles will vanish before test ends
+		TestUtil_HighlightCircleRadius(startpos, acceptable_distance, timeout_seconds, 181, 230, 29,
+			circle_points, 1)
+		--/ end debug draw
+
+	end
+
+
+
+	local function Update()
+
+
+		if (position_phase == 0) then
+			-- Check for obstacle-errors if applicable; abort test if any exist
+
+				local obst_err = CheckObstacleSetupErrors(spawn_test_obstacles, quantity_of_obstacles, obstacle_ebp, obstacle_marker_prefix)
+				if (obst_err == 0) and (e_squd_errors == 0) then
+					SpawnObstacles(obstacle_marker_prefix, quantity_of_obstacles, obstacle_ebp, startpos)
+				else
+					return false
+				end
+
+
+			-- Count how many entities we have spawned in total, amongst all spawned squads
+			total_squad_member_entities = CountEntitiesInSGroup(sgroup)
+			MoveToDestination(player, sgroup, endpos)
+			position_phase = 1
+
+
+		elseif (position_phase == 1) then
+			-- units are moving, check if near destination
+
+			if (Util_GetDistance(sgroup, endpos) < acceptable_distance) then
+				position_phase = 2
+				standard_test.print("Average position of group is within target zone.")
+				standard_test.print("Starting timer for rest of the group to arrive.")
+
+				wait_for_squads = true
+				local function StopWaitingForSquads()
+					wait_for_squads = false
+				end
+
+				rule_id_wait_for_move = UnsavedTimeRule_AddOneShot(StopWaitingForSquads, 8)
+			end
+
+
+		elseif (position_phase == 2) and (not move_success) then
+			-- only some units arrived at destination
+
+				number_of_arrivals = CountSquadArrivals(sgroup)
+			if (number_of_arrivals == total_squad_member_entities) then
+				move_success = true
+				return false
+			elseif wait_for_squads then 
+				-- keep waiting until the timerule changes the bool
+				return true 
+			else
+				standard_test.print("Remaining member-entities took too long to arrive at target location.")
+				move_success = false
+				return false
+			end
+			
+		elseif (not (move_success == nil)) then
+			return false
+		end
+
+		if (not move_success) and (highlight_locations) then
+			-- draw a circle around the destination
+			TestUtil_HighlightCircleRadius(endpos, acceptable_distance, 1, 253, 36, 253,
+				circle_points, circle_thickness)
+		end
+
+	return true
+	end
+
+	local function Finish()
+
+		-- report number of units at the goal vs. total units spawned
+		standard_test.print("Units reached destination zone: ")
+		standard_test.print(tostring(number_of_arrivals) ..
+			" arrived out of " ..
+			tostring(total_squad_member_entities))
+		if (move_success == false) then
+			standard_test.printFail("Not all units reached the destination zone!")
+		end
+		FOW_UnRevealAll()
+		SGroup_DestroyAllSquads(sgroup)
+
+		return move_success
+	end
+
+
+	-- set name and description variables
+	local name = t_params.name
+
+	if name == nil then
+		name = "Basic Pathfinding using " .. #squad_blueprint_names * number_to_spawn .. " squads"
+	end
+
+	TestUtil_RegisterTest(
+		t_test_group,
+		name,
+		"Gives a move command to a group of squads and checks if all their members" .. 
+			" reached their destination zone.",
+		Start,
+		Update,
+		Finish,
+		timeout_seconds,
+		false, -- don't care about savegame
+		standard_test.reset_mode.NONE) -- don't let framework destroy entities and squads between tests
+end
+

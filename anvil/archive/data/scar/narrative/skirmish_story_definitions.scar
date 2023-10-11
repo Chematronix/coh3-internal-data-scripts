@@ -1,0 +1,1871 @@
+--
+-- Skirmish Story Definitions
+-- Generated from Articy project - Italy Campaign
+--
+-- Exported by RE\harrisp
+-- Monday, June 6, 2022 8:54:28 AM
+--
+-- Essence Toolkit v1.1.9 - 2 June 2022
+--
+
+g_skirmish_story_definitions =
+{
+    story_skr001_wasp =
+    {
+        start_node = "story_skr001_wasp",
+
+        story_skr001_wasp =
+        {
+            nodename = "story_skr001_wasp",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr001_chapter") == 1 end,
+                    destination_node = "select_skr001_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr001_chapter") == 2 end,
+                    destination_node = "select_skr001_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr001_chapter") == 3 end,
+                    destination_node = "select_skr001_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr001_chapter") == 4 end,
+                    destination_node = "select_skr001_c4"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr001_chapter") == 5 end,
+                    destination_node = "select_skr001_c5"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr001_chapter") == 6 end,
+                    destination_node = "select_skr001_c6"
+                },
+            }
+        },
+
+        proxy_story_skr001_wasp =
+        {
+            nodename = "proxy_story_skr001_wasp",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr001_c1
+        select_skr001_c1 =
+        {
+            pre_vignette = "vig_skr001_wasp_c1_pre",
+            success_vignette = "vig_skr001_wasp_c1_post",
+            failure_vignette = "vig_skr001_wasp_c1_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr001_chapter", GetNarrativeVariable("soldier_story_state.skr001_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr001_wasp"
+                },
+            },
+        },
+
+        -- select_skr001_c2
+        select_skr001_c2 =
+        {
+            pre_vignette = "vig_skr001_wasp_c2_pre",
+            success_vignette = "vig_skr001_wasp_c2_post",
+            failure_vignette = "vig_skr001_wasp_c2_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr001_chapter", GetNarrativeVariable("soldier_story_state.skr001_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr001_wasp"
+                },
+            },
+        },
+
+        -- select_skr001_c3
+        select_skr001_c3 =
+        {
+            pre_vignette = "vig_skr001_wasp_c3_pre",
+            success_vignette = "vig_skr001_wasp_c3_post",
+            failure_vignette = "vig_skr001_wasp_c3_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr001_chapter", GetNarrativeVariable("soldier_story_state.skr001_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr001_wasp"
+                },
+            },
+        },
+
+        -- select_skr001_c4
+        select_skr001_c4 =
+        {
+            pre_vignette = "vig_skr001_wasp_c4_pre",
+            success_vignette = "vig_skr001_wasp_c4_post",
+            failure_vignette = "vig_skr001_wasp_c4_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr001_chapter", GetNarrativeVariable("soldier_story_state.skr001_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr001_wasp"
+                },
+            },
+        },
+
+        -- select_skr001_c5
+        select_skr001_c5 =
+        {
+            pre_vignette = "vig_skr001_wasp_c5_pre",
+            success_vignette = "vig_skr001_wasp_c5_post",
+            failure_vignette = "vig_skr001_wasp_c5_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr001_chapter", GetNarrativeVariable("soldier_story_state.skr001_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr001_wasp"
+                },
+            },
+        },
+
+        -- select_skr001_c6
+        select_skr001_c6 =
+        {
+            pre_vignette = "vig_skr001_wasp_c6_pre",
+            success_vignette = "vig_skr001_wasp_c6_post",
+            failure_vignette = "vig_skr001_wasp_c6_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr001_chapter", GetNarrativeVariable("soldier_story_state.skr001_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr001_wasp"
+                },
+            },
+        },
+
+    },
+
+    story_skr201_theartist =
+    {
+        start_node = "story_skr201_theartist",
+
+        story_skr201_theartist =
+        {
+            nodename = "story_skr201_theartist",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr201_chapter") == 1 end,
+                    destination_node = "select_skr201_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr201_chapter") == 2 end,
+                    destination_node = "select_skr201_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr201_chapter") == 3 end,
+                    destination_node = "select_skr201_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr201_chapter") == 4 end,
+                    destination_node = "select_skr201_c4"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr201_chapter") == 5 end,
+                    destination_node = "select_skr201_c5"
+                },
+            }
+        },
+
+        proxy_story_skr201_theartist =
+        {
+            nodename = "proxy_story_skr201_theartist",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr201_c1
+        select_skr201_c1 =
+        {
+            pre_vignette = "vig_skr201_theartist_c1_pre",
+            success_vignette = "vig_skr_201_theartist_c1_post_success",
+            failure_vignette = "vig_skr_201_theartist_c1_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr201_chapter", GetNarrativeVariable("soldier_story_state.skr201_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr201_theartist"
+                },
+            },
+        },
+
+        -- select_skr201_c2
+        select_skr201_c2 =
+        {
+            pre_vignette = "vig_skr201_theartist_c2_pre",
+            success_vignette = "vig_skr_201_theartist_c2_post_success",
+            failure_vignette = "vig_skr_201_theartist_c2_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr201_chapter", GetNarrativeVariable("soldier_story_state.skr201_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr201_theartist"
+                },
+            },
+        },
+
+        -- select_skr201_c3
+        select_skr201_c3 =
+        {
+            pre_vignette = "vig_skr201_theartist_c3_pre",
+            success_vignette = "vig_skr_201_theartist_c3_post_success",
+            failure_vignette = "vig_skr_201_theartist_c3_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr201_chapter", GetNarrativeVariable("soldier_story_state.skr201_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr201_theartist"
+                },
+            },
+        },
+
+        -- select_skr201_c4
+        select_skr201_c4 =
+        {
+            pre_vignette = "vig_skr201_theartist_c4_pre",
+            success_vignette = "vig_skr_201_theartist_c4_post_success",
+            failure_vignette = "vig_skr_201_theartist_c4_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr201_chapter", GetNarrativeVariable("soldier_story_state.skr201_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr201_theartist"
+                },
+            },
+        },
+
+        -- select_skr201_c5
+        select_skr201_c5 =
+        {
+            pre_vignette = "vig_skr201_theartist_c5_pre",
+            success_vignette = "vig_skr_201_theartist_c5_post_success",
+            failure_vignette = "vig_skr_201_theartist_c5_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr201_chapter", GetNarrativeVariable("soldier_story_state.skr201_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr201_theartist"
+                },
+            },
+        },
+
+    },
+
+    ffr_3022991f =
+    {
+        start_node = "ffr_3022991f",
+
+        SKR002_THEMEDIC =
+        {
+            nodename = "SKR002_THEMEDIC",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr002_themedic =
+    {
+        start_node = "story_skr002_themedic",
+
+        story_skr002_themedic =
+        {
+            nodename = "story_skr002_themedic",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr002_chapter") == 1 end,
+                    destination_node = "select_skr002_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr002_chapter") == 2 end,
+                    destination_node = "select_skr002_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr002_chapter") == 3 end,
+                    destination_node = "select_skr002_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr002_chapter") == 4 end,
+                    destination_node = "select_skr002_c4"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr002_chapter") == 5 end,
+                    destination_node = "select_skr002_c5"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr002_chapter") == 6 end,
+                    destination_node = "select_skr002_c6"
+                },
+            }
+        },
+
+        proxy_story_skr002_themedic =
+        {
+            nodename = "proxy_story_skr002_themedic",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr002_c1
+        select_skr002_c1 =
+        {
+            pre_vignette = "vig_skr002_themedic_c1_pre",
+            success_vignette = "vig_skr002_themedic_c1_post_success",
+            failure_vignette = "vig_skr002_themedic_c1_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr002_chapter", GetNarrativeVariable("soldier_story_state.skr002_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr002_themedic"
+                },
+            },
+        },
+
+        -- select_skr002_c2
+        select_skr002_c2 =
+        {
+            pre_vignette = "vig_skr002_themedic_c2_pre",
+            success_vignette = "vig_skr002_themedic_c2_post_success",
+            failure_vignette = "vig_skr002_themedic_c2_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr002_chapter", GetNarrativeVariable("soldier_story_state.skr002_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr002_themedic"
+                },
+            },
+        },
+
+        -- select_skr002_c3
+        select_skr002_c3 =
+        {
+            pre_vignette = "vig_skr002_themedic_c3_pre",
+            success_vignette = "vig_skr002_themedic_c3_post_success",
+            failure_vignette = "vig_skr002_themedic_c3_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr002_chapter", GetNarrativeVariable("soldier_story_state.skr002_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr002_themedic"
+                },
+            },
+        },
+
+        -- select_skr002_c4
+        select_skr002_c4 =
+        {
+            pre_vignette = "vig_skr002_themedic_c4_pre",
+            success_vignette = "vig_skr002_themedic_c4_post_success",
+            failure_vignette = "vig_skr002_themedic_c4_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr002_chapter", GetNarrativeVariable("soldier_story_state.skr002_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr002_themedic"
+                },
+            },
+        },
+
+        -- select_skr002_c5
+        select_skr002_c5 =
+        {
+            pre_vignette = "vig_skr002_themedic_c5_pre",
+            success_vignette = "vig_skr002_themedic_c5_post_success",
+            failure_vignette = "vig_skr002_themedic_c5_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr002_chapter", GetNarrativeVariable("soldier_story_state.skr002_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr002_themedic"
+                },
+            },
+        },
+
+        -- select_skr002_c6
+        select_skr002_c6 =
+        {
+            pre_vignette = "vig_skr002_themedic_c6_pre",
+            success_vignette = "vig_skr002_themedic_c6_post_success",
+            failure_vignette = "vig_skr002_themedic_c6_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr002_chapter", GetNarrativeVariable("soldier_story_state.skr002_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr002_themedic"
+                },
+            },
+        },
+
+    },
+
+    ffr_c59f248e =
+    {
+        start_node = "ffr_c59f248e",
+
+        SKR003_XTROOPER =
+        {
+            nodename = "SKR003_XTROOPER",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr003_xtrooper =
+    {
+        start_node = "story_skr003_xtrooper",
+
+        story_skr003_xtrooper =
+        {
+            nodename = "story_skr003_xtrooper",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr003_chapter") == 1 end,
+                    destination_node = "select_skr003_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr003_chapter") == 2 end,
+                    destination_node = "select_skr003_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr003_chapter") == 3 end,
+                    destination_node = "select_skr003_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr003_chapter") == 4 end,
+                    destination_node = "select_skr003_c4"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr003_chapter") == 5 end,
+                    destination_node = "select_skr003_c5"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr003_chapter") == 6 end,
+                    destination_node = "select_skr003_c6"
+                },
+            }
+        },
+
+        proxy_story_skr003_xtrooper =
+        {
+            nodename = "proxy_story_skr003_xtrooper",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr003_c1
+        select_skr003_c1 =
+        {
+            pre_vignette = "vig_skr003_xtrooper_c1_pre",
+            success_vignette = "vig_skr003_xtrooper_c1_post_success",
+            failure_vignette = "vig_skr003_xtrooper_c1_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr003_chapter", GetNarrativeVariable("soldier_story_state.skr003_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr003_xtrooper"
+                },
+            },
+        },
+
+        -- select_skr003_c2
+        select_skr003_c2 =
+        {
+            pre_vignette = "vig_skr003_xtrooper_c2_pre",
+            success_vignette = "vig_skr003_xtrooper_c2_post_success",
+            failure_vignette = "vig_skr003_xtrooper_c2_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr003_chapter", GetNarrativeVariable("soldier_story_state.skr003_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr003_xtrooper"
+                },
+            },
+        },
+
+        -- select_skr003_c3
+        select_skr003_c3 =
+        {
+            pre_vignette = "vig_skr003_xtrooper_c3_pre",
+            success_vignette = "vig_skr003_xtrooper_c3_post_success",
+            failure_vignette = "vig_skr003_xtrooper_c3_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr003_chapter", GetNarrativeVariable("soldier_story_state.skr003_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr003_xtrooper"
+                },
+            },
+        },
+
+        -- select_skr003_c4
+        select_skr003_c4 =
+        {
+            pre_vignette = "vig_skr003_xtrooper_c4_pre",
+            success_vignette = "vig_skr003_xtrooper_c4_post_success",
+            failure_vignette = "vig_skr003_xtrooper_c4_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr003_chapter", GetNarrativeVariable("soldier_story_state.skr003_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr003_xtrooper"
+                },
+            },
+        },
+
+        -- select_skr003_c5
+        select_skr003_c5 =
+        {
+            pre_vignette = "vig_skr003_xtrooper_c5_pre",
+            success_vignette = "vig_skr003_xtrooper_c5_post_success",
+            failure_vignette = "vig_skr003_xtrooper_c5_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr003_chapter", GetNarrativeVariable("soldier_story_state.skr003_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr003_xtrooper"
+                },
+            },
+        },
+
+        -- select_skr003_c6
+        select_skr003_c6 =
+        {
+            pre_vignette = "vig_skr003_xtrooper_c6_pre",
+            success_vignette = "vig_skr003_xtrooper_c6_post_success",
+            failure_vignette = "vig_skr003_xtrooper_c6_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr003_chapter", GetNarrativeVariable("soldier_story_state.skr003_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr003_xtrooper"
+                },
+            },
+        },
+
+    },
+
+    ffr_54362ad3 =
+    {
+        start_node = "ffr_54362ad3",
+
+        SKR004_THECHAPLAIN =
+        {
+            nodename = "SKR004_THECHAPLAIN",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr004_thechaplain =
+    {
+        start_node = "story_skr004_thechaplain",
+
+        story_skr004_thechaplain =
+        {
+            nodename = "story_skr004_thechaplain",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr004_chapter") == 1 end,
+                    destination_node = "select_skr004_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr004_chapter") == 2 end,
+                    destination_node = "select_skr004_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr004_chapter") == 3 end,
+                    destination_node = "select_skr004_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr004_chapter") == 4 end,
+                    destination_node = "select_skr004_c4"
+                },
+            }
+        },
+
+        proxy_story_skr004_thechaplain =
+        {
+            nodename = "proxy_story_skr004_thechaplain",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr004_c1
+        select_skr004_c1 =
+        {
+            pre_vignette = "vig_skr004_thechaplain_c1_pre",
+            success_vignette = "vig_skr004_thechaplain_c1_post_success",
+            failure_vignette = "vig_skr004_thechaplain_c1_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr004_chapter", GetNarrativeVariable("soldier_story_state.skr004_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr004_thechaplain"
+                },
+            },
+        },
+
+        -- select_skr004_c2
+        select_skr004_c2 =
+        {
+            pre_vignette = "vig_skr004_thechaplain_c2_pre",
+            success_vignette = "vig_skr004_thechaplain_c2_post_success",
+            failure_vignette = "vig_skr004_thechaplain_c2_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr004_chapter", GetNarrativeVariable("soldier_story_state.skr004_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr004_thechaplain"
+                },
+            },
+        },
+
+        -- select_skr004_c3
+        select_skr004_c3 =
+        {
+            pre_vignette = "vig_skr004_thechaplain_c3_pre",
+            success_vignette = "vig_skr004_thechaplain_c2_post_success",
+            failure_vignette = "vig_skr004_thechaplain_c3_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr004_chapter", GetNarrativeVariable("soldier_story_state.skr004_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr004_thechaplain"
+                },
+            },
+        },
+
+        -- select_skr004_c4
+        select_skr004_c4 =
+        {
+            pre_vignette = "vig_skr004_thechaplain_c4_pre",
+            success_vignette = "vig_skr004_thechaplain_c4_post_success",
+            failure_vignette = "vig_skr004_thechaplain_c4_post_failure",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr004_chapter", GetNarrativeVariable("soldier_story_state.skr004_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr004_thechaplain"
+                },
+            },
+        },
+
+    },
+
+    ffr_f7433197 =
+    {
+        start_node = "ffr_f7433197",
+
+        SKR005_TRAVEL_WRITER =
+        {
+            nodename = "SKR005_TRAVEL_WRITER",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr005_salerno =
+    {
+        start_node = "story_skr005_salerno",
+
+        story_skr005_salerno =
+        {
+            nodename = "story_skr005_salerno",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_salerno") == 1 end,
+                    destination_node = "select_skr005_salerno"
+                },
+            }
+        },
+
+        proxy_story_skr005_salerno =
+        {
+            nodename = "proxy_story_skr005_salerno",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_salerno
+        select_skr005_salerno =
+        {
+            pre_vignette = "vig_skr005_travel_writer_salerno_pre",
+            success_vignette = "vig_skr005_travel_writer_salerno_post",
+            failure_vignette = "vig_skr005_travel_writer_salerno_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_salerno", GetNarrativeVariable("soldier_story_state.skr005_chapter_salerno")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_salerno"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_naples =
+    {
+        start_node = "story_skr005_naples",
+
+        story_skr005_naples =
+        {
+            nodename = "story_skr005_naples",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_naples") == 1 end,
+                    destination_node = "select_skr005_naples"
+                },
+            }
+        },
+
+        proxy_story_skr005_naples =
+        {
+            nodename = "proxy_story_skr005_naples",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_naples
+        select_skr005_naples =
+        {
+            pre_vignette = "vig_skr005_travel_writer_naples_pre",
+            success_vignette = "vig_skr005_travel_writer_naples_post",
+            failure_vignette = "vig_skr005_travel_writer_naples_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_naples", GetNarrativeVariable("soldier_story_state.skr005_chapter_naples")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_naples"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_potenza =
+    {
+        start_node = "story_skr005_potenza",
+
+        story_skr005_potenza =
+        {
+            nodename = "story_skr005_potenza",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_potenza") == 1 end,
+                    destination_node = "select_skr005_potenza"
+                },
+            }
+        },
+
+        proxy_story_skr005_potenza =
+        {
+            nodename = "proxy_story_skr005_potenza",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_potenza
+        select_skr005_potenza =
+        {
+            pre_vignette = "vig_skr005_travel_writer_potenza_pre",
+            success_vignette = "vig_skr005_travel_writer_potenza_post",
+            failure_vignette = "vig_skr005_travel_writer_potenza_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_potenza", GetNarrativeVariable("soldier_story_state.skr005_chapter_potenza")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_potenza"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_bari =
+    {
+        start_node = "story_skr005_bari",
+
+        story_skr005_bari =
+        {
+            nodename = "story_skr005_bari",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_bari") == 1 end,
+                    destination_node = "select_skr005_bari"
+                },
+            }
+        },
+
+        proxy_story_skr005_bari =
+        {
+            nodename = "proxy_story_skr005_bari",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_bari
+        select_skr005_bari =
+        {
+            pre_vignette = "vig_skr005_travel_writer_bari_pre",
+            success_vignette = "vig_skr005_travel_writer_bari_post",
+            failure_vignette = "vig_skr005_travel_writer_bari_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_bari", GetNarrativeVariable("soldier_story_state.skr005_chapter_bari")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_bari"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_taranto =
+    {
+        start_node = "story_skr005_taranto",
+
+        story_skr005_taranto =
+        {
+            nodename = "story_skr005_taranto",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_taranto") == 1 end,
+                    destination_node = "select_skr005_taranto"
+                },
+            }
+        },
+
+        proxy_story_skr005_taranto =
+        {
+            nodename = "proxy_story_skr005_taranto",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_taranto
+        select_skr005_taranto =
+        {
+            pre_vignette = "vig_skr005_travel_writer_taranto_pre",
+            success_vignette = "vig_skr005_travel_writer_taranto_post",
+            failure_vignette = "vig_skr005_travel_writer_taranto_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_taranto", GetNarrativeVariable("soldier_story_state.skr005_chapter_taranto")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_taranto"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_gaeta =
+    {
+        start_node = "story_skr005_gaeta",
+
+        story_skr005_gaeta =
+        {
+            nodename = "story_skr005_gaeta",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_gaeta") == 1 end,
+                    destination_node = "select_skr005_gaeta"
+                },
+            }
+        },
+
+        proxy_story_skr005_gaeta =
+        {
+            nodename = "proxy_story_skr005_gaeta",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_gaeta
+        select_skr005_gaeta =
+        {
+            pre_vignette = "vig_skr005_travel_writer_gaeta_pre",
+            success_vignette = "vig_skr005_travel_writer_gaeta_post",
+            failure_vignette = "vig_skr005_travel_writer_gaeta_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_gaeta", GetNarrativeVariable("soldier_story_state.skr005_chapter_gaeta")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_gaeta"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_avellino =
+    {
+        start_node = "story_skr005_avellino",
+
+        story_skr005_avellino =
+        {
+            nodename = "story_skr005_avellino",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_avellino") == 1 end,
+                    destination_node = "select_skr005_avellino"
+                },
+            }
+        },
+
+        proxy_story_skr005_avellino =
+        {
+            nodename = "proxy_story_skr005_avellino",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_avellino
+        select_skr005_avellino =
+        {
+            pre_vignette = "vig_skr005_travel_writer_avellino_pre",
+            success_vignette = "vig_skr005_travel_writer_avellino_post",
+            failure_vignette = "vig_skr005_travel_writer_avellino_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_avellino", GetNarrativeVariable("soldier_story_state.skr005_chapter_avellino")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_avellino"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_foggia =
+    {
+        start_node = "story_skr005_foggia",
+
+        story_skr005_foggia =
+        {
+            nodename = "story_skr005_foggia",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_foggia") == 1 end,
+                    destination_node = "select_skr005_foggia"
+                },
+            }
+        },
+
+        proxy_story_skr005_foggia =
+        {
+            nodename = "proxy_story_skr005_foggia",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_foggia
+        select_skr005_foggia =
+        {
+            pre_vignette = "vig_skr005_travel_writer_foggia_pre",
+            success_vignette = "vig_skr005_travel_writer_foggia_post",
+            failure_vignette = "vig_skr005_travel_writer_foggia_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_foggia", GetNarrativeVariable("soldier_story_state.skr005_chapter_foggia")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_foggia"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_termoli =
+    {
+        start_node = "story_skr005_termoli",
+
+        story_skr005_termoli =
+        {
+            nodename = "story_skr005_termoli",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_termoli") == 1 end,
+                    destination_node = "select_skr005_termoli"
+                },
+            }
+        },
+
+        proxy_story_skr005_termoli =
+        {
+            nodename = "proxy_story_skr005_termoli",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr005_termoli
+        select_skr005_termoli =
+        {
+            pre_vignette = "vig_skr005_travel_writer_termoli_pre",
+            success_vignette = "vig_skr005_travel_writer_termoli_post",
+            failure_vignette = "vig_skr005_travel_writer_termoli_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_termoli", GetNarrativeVariable("soldier_story_state.skr005_chapter_termoli")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_termoli"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_sanpancrazio =
+    {
+        start_node = "story_skr005_sanpancrazio",
+
+        story_skr005_sanpancrazio =
+        {
+            nodename = "story_skr005_sanpancrazio",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_sanpancrazio") == 1 end,
+                    destination_node = "story_skr005_sanpancrazio"
+                },
+            }
+        },
+
+        proxy_story_skr005_sanpancrazio =
+        {
+            nodename = "proxy_story_skr005_sanpancrazio",
+            connections =
+            {
+            }
+        },
+
+        -- story_skr005_sanpancrazio
+        story_skr005_sanpancrazio =
+        {
+            pre_vignette = "vig_skr005_travel_writer_sanpancrazio_pre",
+            success_vignette = "vig_skr005_travel_writer_sanpancrazio_post",
+            failure_vignette = "vig_skr005_travel_writer_sanpancrazio_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_sanpancrazio", GetNarrativeVariable("soldier_story_state.skr005_chapter_sanpancrazio")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_sanpancrazio"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_casteldisangro =
+    {
+        start_node = "story_skr005_casteldisangro",
+
+        story_skr005_casteldisangro =
+        {
+            nodename = "story_skr005_casteldisangro",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_casteldisangro") == 1 end,
+                    destination_node = "story_skr005_casteldisangro"
+                },
+            }
+        },
+
+        proxy_story_skr005_casteldisangro =
+        {
+            nodename = "proxy_story_skr005_casteldisangro",
+            connections =
+            {
+            }
+        },
+
+        -- story_skr005_casteldisangro
+        story_skr005_casteldisangro =
+        {
+            pre_vignette = "vig_skr005_travel_writer_casteldisangro_pre",
+            success_vignette = "vig_skr005_travel_writer_casteldisangro_post",
+            failure_vignette = "vig_skr005_travel_writer_casteldisangro_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_casteldisangro", GetNarrativeVariable("soldier_story_state.skr005_chapter_casteldisangro")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_casteldisangro"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_calitri =
+    {
+        start_node = "story_skr005_calitri",
+
+        story_skr005_calitri =
+        {
+            nodename = "story_skr005_calitri",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_calitri") == 1 end,
+                    destination_node = "story_skr005_calitri"
+                },
+            }
+        },
+
+        proxy_story_skr005_calitri =
+        {
+            nodename = "proxy_story_skr005_calitri",
+            connections =
+            {
+            }
+        },
+
+        -- story_skr005_calitri
+        story_skr005_calitri =
+        {
+            pre_vignette = "vig_skr005_travel_writer_calitri_pre",
+            success_vignette = "vig_skr005_travel_writer_calitri_post",
+            failure_vignette = "vig_skr005_travel_writer_calitri_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_calitri", GetNarrativeVariable("soldier_story_state.skr005_chapter_calitri")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_calitri"
+                },
+            },
+        },
+
+    },
+
+    story_skr005_benevento =
+    {
+        start_node = "story_skr005_benevento",
+
+        story_skr005_benevento =
+        {
+            nodename = "story_skr005_benevento",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr005_chapter_benevento") == 1 end,
+                    destination_node = "story_skr005_benevento"
+                },
+            }
+        },
+
+        proxy_story_skr005_benevento =
+        {
+            nodename = "proxy_story_skr005_benevento",
+            connections =
+            {
+            }
+        },
+
+        -- story_skr005_benevento
+        story_skr005_benevento =
+        {
+            pre_vignette = "vig_skr005_travel_writer_benevento_pre",
+            success_vignette = "vig_skr005_travel_writer_benevento_post",
+            failure_vignette = "vig_skr005_travel_writer_benevento_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr005_chapter_benevento", GetNarrativeVariable("soldier_story_state.skr005_chapter_benevento")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr005_benevento"
+                },
+            },
+        },
+
+    },
+
+    ffr_2851f114 =
+    {
+        start_node = "ffr_2851f114",
+
+        SKR006_THEPOSTMAN =
+        {
+            nodename = "SKR006_THEPOSTMAN",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr006_thepostman =
+    {
+        start_node = "story_skr006_thepostman",
+
+        story_skr006_thepostman =
+        {
+            nodename = "story_skr006_thepostman",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr006_chapter") == 1 end,
+                    destination_node = "select_skr006_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr006_chapter") == 2 end,
+                    destination_node = "select_skr006_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr006_chapter") == 5 end,
+                    destination_node = "select_skr006_c5"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr006_chapter") == 3 end,
+                    destination_node = "select_skr006_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr006_chapter") == 4 end,
+                    destination_node = "select_skr006_c4"
+                },
+            }
+        },
+
+        proxy_story_skr006_thepostman =
+        {
+            nodename = "proxy_story_skr006_thepostman",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr006_c1
+        select_skr006_c1 =
+        {
+            pre_vignette = "vig_skr006_thepostman_c1_pre",
+            success_vignette = "vig_skr006_thepostman_c1_post",
+            failure_vignette = "vig_skr006_thepostman_c1_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr006_chapter", GetNarrativeVariable("soldier_story_state.skr006_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr006_thepostman"
+                },
+            },
+        },
+
+        -- select_skr006_c2
+        select_skr006_c2 =
+        {
+            pre_vignette = "vig_skr006_thepostman_c2_pre",
+            success_vignette = "vig_skr006_thepostman_c2_post",
+            failure_vignette = "vig_skr006_thepostman_c2_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr006_chapter", GetNarrativeVariable("soldier_story_state.skr006_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr006_thepostman"
+                },
+            },
+        },
+
+        -- select_skr006_c3
+        select_skr006_c3 =
+        {
+            pre_vignette = "vig_skr006_thepostman_c3_pre",
+            success_vignette = "vig_skr006_thepostman_c3_post",
+            failure_vignette = "vig_skr006_thepostman_c3_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr006_chapter", GetNarrativeVariable("soldier_story_state.skr006_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr006_thepostman"
+                },
+            },
+        },
+
+        -- select_skr006_c4
+        select_skr006_c4 =
+        {
+            pre_vignette = "vig_skr006_thepostman_c4_pre",
+            success_vignette = "vig_skr006_thepostman_c4_post",
+            failure_vignette = "vig_skr006_thepostman_c4_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr006_chapter", GetNarrativeVariable("soldier_story_state.skr006_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr006_thepostman"
+                },
+            },
+        },
+
+        -- select_skr006_c5
+        select_skr006_c5 =
+        {
+            pre_vignette = "vig_skr006_thepostman_c5_pre",
+            success_vignette = "vig_skr006_thepostman_c5_post",
+            failure_vignette = "vig_skr006_thepostman_c5_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr006_chapter", GetNarrativeVariable("soldier_story_state.skr006_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr006_thepostman"
+                },
+            },
+        },
+
+    },
+
+    skr007_theinfiltrator =
+    {
+        start_node = "skr007_theinfiltrator",
+
+        SKR007_THEINFILTRATOR =
+        {
+            nodename = "SKR007_THEINFILTRATOR",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr007_theinfiltrator_start =
+    {
+        start_node = "story_skr007_theinfiltrator_start",
+
+        story_skr007_theinfiltrator_start =
+        {
+            nodename = "story_skr007_theinfiltrator_start",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr007_chapter") == 1 end,
+                    destination_node = "select_skr007_c1"
+                },
+            }
+        },
+
+        proxy_story_skr007_theinfiltrator_start =
+        {
+            nodename = "proxy_story_skr007_theinfiltrator_start",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr007_c1
+        select_skr007_c1 =
+        {
+            pre_vignette = "vig_skr007_theinflitrator_c1_pre",
+            success_vignette = "vig_skr007_theinflitrator_c1_post",
+            failure_vignette = "vig_skr007_theinflitrator_c1_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr007_chapter", GetNarrativeVariable("soldier_story_state.skr007_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr007_theinfiltrator_start"
+                },
+            },
+        },
+
+    },
+
+    story_skr007_theinfiltrator_end =
+    {
+        start_node = "story_skr007_theinfiltrator_end",
+
+        story_skr007_theinfiltrator_end =
+        {
+            nodename = "story_skr007_theinfiltrator_end",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr007_chapter") == 2 end,
+                    destination_node = "select_skr007_c2"
+                },
+            }
+        },
+
+        proxy_story_skr007_theinfiltrator_end =
+        {
+            nodename = "proxy_story_skr007_theinfiltrator_end",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr007_c2
+        select_skr007_c2 =
+        {
+            pre_vignette = "vig_skr007_theinflitrator_c2_pre",
+            success_vignette = "vig_skr007_theinflitrator_c2_post",
+            failure_vignette = "vig_skr007_theinflitrator_c2_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr007_chapter", GetNarrativeVariable("soldier_story_state.skr007_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr007_theinfiltrator_end"
+                },
+            },
+        },
+
+    },
+
+    skr008_familyman =
+    {
+        start_node = "skr008_familyman",
+
+        SKR008_FAMILYMAN =
+        {
+            nodename = "SKR008_FAMILYMAN",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr008_familyman =
+    {
+        start_node = "story_skr008_familyman",
+
+        story_skr008_familyman =
+        {
+            nodename = "story_skr008_familyman",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr008_chapter") == 1 end,
+                    destination_node = "select_skr008_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr008_chapter") == 2 end,
+                    destination_node = "select_skr008_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr008_chapter") == 3 end,
+                    destination_node = "select_skr008_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr008_chapter") == 4 end,
+                    destination_node = "select_skr008_c4"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr008_chapter") == 5 end,
+                    destination_node = "select_skr008_c5"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr008_chapter") == 6 end,
+                    destination_node = "select_skr008_c6"
+                },
+            }
+        },
+
+        proxy_story_skr008_familyman =
+        {
+            nodename = "proxy_story_skr008_familyman",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr008_c1
+        select_skr008_c1 =
+        {
+            pre_vignette = "vig_skr008_familyman_c1_pre",
+            success_vignette = "vig_skr008_familyman_c1_post",
+            failure_vignette = "vig_skr008_familyman_c1_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr008_chapter", GetNarrativeVariable("soldier_story_state.skr008_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr008_familyman"
+                },
+            },
+        },
+
+        -- select_skr008_c2
+        select_skr008_c2 =
+        {
+            pre_vignette = "vig_skr008_familyman_c2_pre",
+            success_vignette = "vig_skr008_familyman_c2_post",
+            failure_vignette = "vig_skr008_familyman_c2_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr008_chapter", GetNarrativeVariable("soldier_story_state.skr008_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr008_familyman"
+                },
+            },
+        },
+
+        -- select_skr008_c3
+        select_skr008_c3 =
+        {
+            pre_vignette = "vig_skr008_familyman_c3_pre",
+            success_vignette = "vig_skr008_familyman_c3_post",
+            failure_vignette = "vig_skr008_familyman_c3_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr008_chapter", GetNarrativeVariable("soldier_story_state.skr008_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr008_familyman"
+                },
+            },
+        },
+
+        -- select_skr008_c4
+        select_skr008_c4 =
+        {
+            pre_vignette = "vig_skr008_familyman_c4_pre",
+            success_vignette = "vig_skr008_familyman_c4_post",
+            failure_vignette = "vig_skr008_familyman_c4_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr008_chapter", GetNarrativeVariable("soldier_story_state.skr008_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr008_familyman"
+                },
+            },
+        },
+
+        -- select_skr008_c5
+        select_skr008_c5 =
+        {
+            pre_vignette = "vig_skr008_familyman_c5_pre",
+            success_vignette = "vig_skr008_familyman_c5_post",
+            failure_vignette = "vig_skr008_familyman_c5_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr008_chapter", GetNarrativeVariable("soldier_story_state.skr008_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr008_familyman"
+                },
+            },
+        },
+
+        -- select_skr008_c6
+        select_skr008_c6 =
+        {
+            pre_vignette = "vig_skr008_familyman_c6_pre",
+            success_vignette = "vig_skr008_familyman_c6_post",
+            failure_vignette = "vig_skr008_familyman_c6_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr008_chapter", GetNarrativeVariable("soldier_story_state.skr008_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr008_familyman"
+                },
+            },
+        },
+
+    },
+
+    skr009_polishsoldier =
+    {
+        start_node = "skr009_polishsoldier",
+
+        SKR009_POLISHSOLDIER =
+        {
+            nodename = "SKR009_POLISHSOLDIER",
+            connections =
+            {
+            }
+        },
+
+    },
+
+    story_skr009_polishsoldier =
+    {
+        start_node = "story_skr009_polishsoldier",
+
+        story_skr009_polishsoldier =
+        {
+            nodename = "story_skr009_polishsoldier",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr009_chapter") == 1 end,
+                    destination_node = "select_skr009_c1"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr009_chapter") == 2 end,
+                    destination_node = "select_skr009_c2"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr009_chapter") == 3 end,
+                    destination_node = "select_skr009_c3"
+                },
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr009_chapter") == 4 end,
+                    destination_node = "select_skr009_c4"
+                },
+            }
+        },
+
+        proxy_story_skr009_polishsoldier =
+        {
+            nodename = "proxy_story_skr009_polishsoldier",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr009_c1
+        select_skr009_c1 =
+        {
+            pre_vignette = "vig_skr008_polishsoldier_c1_pre",
+            success_vignette = "vig_skr008_polishsoldier_c1_post",
+            failure_vignette = "vig_skr008_polishsoldier_c1_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr009_chapter", GetNarrativeVariable("soldier_story_state.skr009_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr009_polishsoldier"
+                },
+            },
+        },
+
+        -- select_skr009_c2
+        select_skr009_c2 =
+        {
+            pre_vignette = "vig_skr008_polishsoldier_c2_pre",
+            success_vignette = "vig_skr008_polishsoldier_c2_post",
+            failure_vignette = "vig_skr008_polishsoldier_c2_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr009_chapter", GetNarrativeVariable("soldier_story_state.skr009_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr009_polishsoldier"
+                },
+            },
+        },
+
+        -- select_skr009_c3
+        select_skr009_c3 =
+        {
+            pre_vignette = "vig_skr008_polishsoldier_c3_pre",
+            success_vignette = "vig_skr008_polishsoldier_c3_post",
+            failure_vignette = "vig_skr008_polishsoldier_c3_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr009_chapter", GetNarrativeVariable("soldier_story_state.skr009_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr009_polishsoldier"
+                },
+            },
+        },
+
+        -- select_skr009_c4
+        select_skr009_c4 =
+        {
+            pre_vignette = "vig_skr008_polishsoldier_c4_pre",
+            success_vignette = "vig_skr008_polishsoldier_c4_post",
+            failure_vignette = "vig_skr008_polishsoldier_c4_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr009_chapter", GetNarrativeVariable("soldier_story_state.skr009_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr009_polishsoldier"
+                },
+            },
+        },
+
+    },
+
+    story_skr009_polishsoldier_cassino =
+    {
+        start_node = "story_skr009_polishsoldier_cassino",
+
+        story_skr009_polishsoldier_cassino =
+        {
+            nodename = "story_skr009_polishsoldier_cassino",
+            connections =
+            {
+                {
+                    condition = function() return GetNarrativeVariable("soldier_story_state.skr009_chapter") == 5 end,
+                    destination_node = "select_skr009_c5"
+                },
+            }
+        },
+
+        proxy_story_skr009_polishsoldier_cassino =
+        {
+            nodename = "proxy_story_skr009_polishsoldier_cassino",
+            connections =
+            {
+            }
+        },
+
+        -- select_skr009_c5
+        select_skr009_c5 =
+        {
+            pre_vignette = "vig_skr008_polishsoldier_c5_pre",
+            success_vignette = "vig_skr008_polishsoldier_c5_post",
+            failure_vignette = "vig_skr008_polishsoldier_c5_post",
+
+            connections =
+            {
+                {
+                    exit_expression = function() SetNarrativeVariable("soldier_story_state.skr009_chapter", GetNarrativeVariable("soldier_story_state.skr009_chapter")+1)  end,
+                    condition = function() return true end,
+                    destination_node = "proxy_story_skr009_polishsoldier_cassino"
+                },
+            },
+        },
+
+    },
+
+}

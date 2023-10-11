@@ -1,0 +1,264 @@
+
+-- create a generic menu that can navigate submenus and a series
+-- of commands that can also have hotkeys bound to them
+
+
+rawset(_G,"render_line", nil)
+
+function render_line( x, y, str, hilite )
+	
+	local col = {220, 240, 255}
+	if (hilite) then
+		col = {255, 0, 200}
+	end
+	
+	dr_text2d( s_view_frame, x, y, str, col[1], col[2], col[3] )
+		
+end
+
+-- returns the type of this value in string format (eg. table, string, number, pbg, entity, position, etc)
+function db_gettype( val )
+	
+	local mtype = scartype( val )
+	return scartype_tostring(mtype)
+end
+
+function userdata_str( val )
+
+	local mtype = db_gettype( val )
+	
+	if (mtype == "pbg") then
+		return BP_GetName( val )
+	end
+
+	return db_gettype( val )
+
+end
+
+function typestr( val ) 
+
+	local text = "UNKNOWN"
+	
+	local vtype = type(val)
+	local mtype = getmetatype( val )
+	if (mtype ~= 0) then
+		text = userdata_str( val )
+	else
+	
+		if (vtype == "table") then
+			text = "TABLE"
+		elseif (vtype == "userdata") then
+			text = userdata_str( val )
+		else
+			text = tostring( val )
+		end
+	
+	end
+
+	return text
+end
+
+function render_menu()
+
+	dr_clear(s_view_frame)
+	dr_setautoclear(s_view_frame,0)
+
+	local miny = 0.10
+	local x = 0.02
+	local y = miny
+	local xstep = 0.03
+	local ystep = 0.03
+	local count = 1
+
+	function render_element( k, v )
+		
+		local text = tostring(k).." ( "
+		
+		text = text .. typestr( v )
+		
+		if (db_gettype(v) == "table") then
+			text = "+ "..text
+		end
+		
+		text = text .. " )"
+		
+		if (y >= miny and y < 0.9) then
+			render_line( x, y, text, k == s_hilitekey )
+		end
+		y = y + ystep
+		
+	end
+
+	if (s_active_count > k_max_menu_items) then
+		y = y - (s_active_count-k_max_menu_items)*ystep
+	end
+	
+	-- total count - to determine how far we push the menus up
+	for k,v in pairs(s_activemenu) do
+		render_element(k,v)
+	end
+	
+	
+end
+
+-- moves the cursor up and down in the menu
+function menu_change( changeBy )
+	
+	if (s_enabled==0) then
+		return
+	end
+	
+	if (changeBy > 0) then
+		s_hilitekey = next( s_activemenu, s_hilitekey )
+						
+	elseif (changeBy < 0) then
+		
+		local lastk = nil
+		--
+		for k,v in pairs(s_activemenu) do
+			if (s_hilitekey == k) then
+				s_hilitekey = lastk
+				break
+			end
+			lastk = k
+		end
+		
+	end
+	
+	if (s_hilitekey) then
+		s_active_count = s_active_count + changeBy
+	else 
+		s_active_count = 0
+	end
+	
+	print("Count:"..s_active_count)
+	
+end
+
+rawset(_G,"menu_run", nil)
+
+function menu_run()
+
+	if (s_enabled==0) then
+		return
+	end
+	
+	-- if there is no hilitekey then there is no item selected
+	if (s_hilitekey == nil) then
+		return
+	end
+	
+	-- this will update the active menu 
+	if ( type(s_activemenu) == "table" and db_gettype(s_activemenu[s_hilitekey]) == "table" ) then
+
+		local lastref = s_lastinfo
+		-- remember the last table we were looking at 
+		s_lastinfo = {tbl = s_activemenu, hilite = s_hilitekey, count = s_active_count, backref = lastref}
+		-- set next menu up
+		s_activemenu = s_activemenu[s_hilitekey]
+		-- get the first element-key from this table, if any
+		s_hilitekey = next(s_activemenu)
+		s_active_count = 1
+		
+		s_depth = s_depth + 1
+
+	end
+
+end
+
+rawset(_G,"menu_back", nil)
+
+function menu_back()
+
+	if (s_lastinfo) then
+		s_activemenu = s_lastinfo.tbl
+		s_hilitekey = s_lastinfo.hilite
+		s_active_count = s_lastinfo.count
+		s_lastinfo = s_lastinfo.backref
+		s_depth = s_depth - 1
+	end
+end
+
+rawset(_G,"initmenu", nil)
+
+--
+function set_table_active( tbl )
+
+	s_activemenu = {}
+	s_hilitekey = nil
+	
+	if (type(tbl) ~= "table") then
+		return
+	end
+
+	-- this goes through the past in table and filters it down to only what we want to see
+	for k,v in pairs(tbl) do 
+		if (v and type(v) ~= "function" and v ~= _G and v ~= s_activemenu and (not s_filter or s_filter( k,v)) ) then
+			s_activemenu[k] = v
+		end
+	end
+	
+	-- get first item in table and set as hilite
+	s_hilitekey = next(s_activemenu)
+	
+end
+
+-- called at the beginning of game
+function initmenu( mainmenu, filter )
+
+	print("initmenu")
+	
+	-- save the filter
+	s_filter = filter
+	
+	s_startmenu = mainmenu
+	
+	-- this sets the activemenu
+	set_table_active( mainmenu )
+
+	-- this is the first menu in the list (saved)
+	s_lastinfo = nil
+	s_enabled = 0
+	s_active_count = 1
+	s_depth = 0
+	
+	--
+	k_max_menu_items = 16
+
+end
+
+function enable_menu( bEnable )
+	
+	print("enable_debug_ai_menu:"..bEnable)
+	s_view_frame = "ai_menu".. AI_GetPlayerID()
+	
+	s_enabled = bEnable
+	
+	if (s_enabled == 1) then
+		TimeRule_Remove(render_menu)
+		TimeRule_AddInterval(render_menu,0.25, 0)
+	else
+		TimeRule_Remove(render_menu)
+		print("Clear:"..s_view_frame)
+		-- make sure to clear it one last Timer_Add
+		dr_clear(s_view_frame)
+	end
+end
+
+-- 
+function menu_refresh()
+	
+	if (s_startmenu) then
+		initmenu( s_startmenu, s_filter )
+		enable_menu(1)
+	end
+	
+end
+
+
+function toggle_menu()
+	s_enabled = 1-s_enabled
+	enable_menu( s_enabled );
+end
+
+

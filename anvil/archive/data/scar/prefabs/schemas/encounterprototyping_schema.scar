@@ -1,0 +1,637 @@
+--
+-- WorldBuilder prefab
+-- "encounterprototyping"
+--
+
+
+-- Schema
+
+encounterprototyping_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "encounterprototyping",																						-- name the prefab uses to identify itself
+	description = "encounterprototyping",																				-- name to display for this prefab
+	script = "encounterprototyping.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+	
+		------------------------
+		------------------------ ENCOUNTER ZONES
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "encounter",
+			description = "zones the enemies will populate",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_MARKER,
+					name = "area",
+					description = "The enemy will attack any unit entering this area so long their encounter is active",
+					colour = "blue",
+					hasDirection = true,
+				},
+				{
+					type = ST_SGROUP,
+					name = "sgroup_encounter",
+					description = "SGroup for the encounter",							
+					
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "useIdle",
+					description = "If changed to false this encounter will start immdediately",
+					category = "Options",							
+					default = true,
+				},
+				{
+						type = ST_TABLE,
+						name = "units",
+						description = "All conditions to check",
+						multiplicity = "multiple",
+						itemSchema = {
+						{
+							type = ST_PBG,
+							name = "sbp",
+							blueprintType = "squad",
+							description = "Unit to spawn",
+							category = "Options",
+						},
+						{
+							type = ST_NUMBER,
+							name = "member_loadout",
+							description = "Number of members in the squad.  0 treated as nil, which defaults to full loadout",
+							category = "Options",
+							default = -1,
+						},
+						{
+							type = ST_SGROUP,
+							name = "sgroup_unit",
+							description = "SGroup for the unit.",
+						},
+						{
+							type = ST_MARKER,
+							name = "spawn",
+							description = "Where the unit should be spawned in. If it's an HMG it'll use the direction to setup.",
+							colour = "red",
+							hasDirection = true,
+						},
+						{
+							type = ST_STRING,
+							name = "reposition",
+							description = "When the unit should move to the destination or garrison",
+							options = {"NEVER", "SPAWN", "COMBAT"},
+							default = "NEVER",
+						},
+						{
+							type = ST_MARKER,
+							name = "destination",
+							description = "Where the unit will move to once engaged.",
+							colour = "yellow",
+							hasDirection = true,
+						},
+						{
+							type = ST_EGROUP,
+							name = "garrison",
+							description = "EGroup for the unit to garrison. Will prioritize garrisoning over moving to a destination if this has a value.",							
+							requirement = {"reposition", "SPAWN", "COMBAT"},
+						},
+						{
+							type = ST_BOOLEAN,
+							name = "move_in_combat",
+							description = "If false then the unit will stand where it is and attack.",
+							category = "Options",							
+							default = true,
+						},
+					},
+				},
+				
+				{
+						type = ST_TABLE,
+						name = "flares",
+						description = "All conditions to check",
+						multiplicity = "multiple",
+						itemSchema = {
+						{
+							type = ST_MARKER,
+							name = "flare",
+							description = "Location for a flare to spawn",
+							colour = "orange",
+							hasDirection = true,
+						},
+						
+					},
+				},
+				
+				
+				{
+						type = ST_TABLE,
+						name = "additionalConditions",
+						description = "All conditions to check",
+						multiplicity = "multiple",
+						itemSchema = {
+							{
+								type = ST_STRING,
+								name = "condition",
+								description = "Condition to trigger the following actions",
+								options = {"None", "Boolean", "HasUnits", "HasBuildings","UnitAtLocation", "EntityAtLocation", "CompareUnitCounts", "ObjectiveCounter", "ObjectiveTimer", "HealthPercentage",
+									"GroupCount", "PlayerCanSee", "HasResources", "GameTime", "AskScarFunction", "LocationCleared", "PlayerHasAbilityOrUpgrade", "PlayerOwner"},
+								default = "None",
+								category = "Condition",
+							},
+							
+							
+							
+							-----------------------
+							--OPTIONS--
+							{
+								type = ST_PLAYER,
+								name = "player",
+								description = "The target player",
+								requirement = {"condition", "HasUnits", "HasBuildings", "UnitAtLocation", "EntityAtLocation", "PlayerCanSee", "HasResources", "LocationCleared", "PlayerHasAbilityOrUpgrade", "PlayerOwner"},
+								category = "Options",
+								allowWorld = true,
+								default = "Player1",
+							},
+							
+							{
+								type = ST_STRING,
+								name = "comparison",
+								description = "How to compare the numbers",
+								options = {"IS_EQUAL", "IS_LESS_THAN", "IS_GREATER_THAN", "IS_LESS_THAN_OR_EQUAL", "IS_GREATER_THAN_OR_EQUAL", "IS_NOT_EQUAL"},
+								default = "IS_LESS_THAN_OR_EQUAL",
+								requirement = {"condition", "HasUnits", "HasBuildings", "CompareUnitCounts", "ObjectiveCounter", "ObjectiveTimer", "HealthPercentage", "GroupCount", "GameTime", "HasResources"},
+								category = "Options",
+							},
+							
+							{
+								type = ST_NUMBER,
+								name = "number",
+								description = "Number to compare to",
+								requirement = {"condition", "HasUnits", "HasBuildings", "ObjectiveCounter", "ObjectiveTimer", "GroupCount", "HasResources"},
+								category = "Options",
+								default = 0,
+							},
+							
+							{
+								type = ST_STRING,
+								name = "target",
+								description = "What target type to use for this condition: EGroup or SGroup",
+								options = {"SGROUP", "EGROUP"},
+								default = "SGROUP",
+								requirement = {"condition", "HealthPercentage", "GroupCount", "PlayerCanSee", "PlayerOwner"},
+								category = "Options",
+							},
+							
+							{
+								type = ST_SGROUP,
+								name = "sgroup",
+								description = "SGroup targeted",							
+								requirement = 
+							{
+									operator = "ANY",
+									{"condition", "UnitAtLocation", "HealthPercentage", "GroupCount", "PlayerOwner"},
+								{
+									operator = "ALL",
+									{"condition", "PlayerCanSee"},
+									{"target", "SGROUP"},
+								},
+							},
+								category = "Options",
+							},
+							
+							{
+								type = ST_EGROUP,
+								name = "egroup",
+								description = "EGroup targeted",							
+								requirement = 
+							{
+									operator = "ANY",
+									{"condition", "HealthPercentage", "GroupCount", "EntityAtLocation", "PlayerOwner"},
+								{
+									operator = "ALL",
+									{"condition", "PlayerCanSee"},
+									{"target", "EGROUP"},
+								},
+							},
+								category = "Options",
+							},
+							
+							{
+								type = ST_MARKER,
+								name = "position",
+								description = "Where to check. May take into account range.",							
+								requirement = {"condition", "UnitAtLocation", "CompareUnitCounts", "EntityAtLocation", "LocationCleared"},
+								category = "Options",
+							},
+							
+							{
+								type = ST_PBG,
+								name = "unitType",
+								blueprintType = "squad",
+								description = "type of unit to filter",							
+								requirement = {"condition", "UnitAtLocation", "HasUnits"},
+								category = "Options",
+							},
+							{
+								type = ST_PBG,
+								name = "buildingTypes",
+								blueprintType = "entity",
+								description = "type of buildings to filter",							
+								requirement = {"condition", "HasBuildings"},
+								category = "Options",
+							},
+							{
+								type = ST_PBG,
+								name = "entityType",
+								blueprintType = "entity",
+								description = "type of entity to filter",							
+								requirement = {"condition", "EntityAtLocation"},
+								category = "Options",
+							},
+							{
+								type = ST_PBG,
+								name = "ability_pbg",
+								blueprintType = "ability",
+								description = "type of ability to check",							
+								requirement = {"condition", "PlayerHasAbilityOrUpgrade"},
+								category = "Options",
+							},
+							{
+								type = ST_PBG,
+								name = "upgrade_pbg",
+								blueprintType = "upgrade",
+								description = "type of upgrade to check",							
+								requirement = {"condition", "PlayerHasAbilityOrUpgrade"},
+								category = "Options",
+							},
+							{
+								type = ST_STRING,
+								name = "abilityOrUpgrade",
+								description = "Ability or Upgrade to check",							
+								options = {"Ability", "Upgrade"},
+								default = "Ability",
+								requirement = {"condition", "PlayerHasAbilityOrUpgrade"},
+								category = "Options",							
+								
+							},
+							{
+								type = ST_PLAYER,
+								name = "playerA",
+								description = "The first player in a comparison",
+								requirement = {"condition", "CompareUnitCounts"},
+								category = "Options",
+								default = "Player1",
+							},
+							
+							{
+								type = ST_PLAYER,
+								name = "playerB",
+								description = "The second player in a comparison",
+								requirement = {"condition", "CompareUnitCounts"},
+								category = "Options",
+								default = "Player1",
+							},
+							
+							{
+								type = ST_SGROUP,
+								name = "sgroupA",
+								description = "First group in a comparison",							
+								requirement = {"condition", "CompareUnitCounts"},
+								category = "Options",
+							},
+							
+							{
+								type = ST_SGROUP,
+								name = "sgroupB",
+								description = "Second group in a comparison",							
+								requirement = {"condition", "CompareUnitCounts"},
+								category = "Options",
+							},
+							
+							{
+								type = ST_NUMBER,
+								name = "percentage",
+								description = "Percentage value for comparison: 0.0-1.0",
+								requirement = {"condition", "HealthPercentage"},
+								category = "Options",
+								default = 0,
+								integer = false,
+								min = 0,
+								max = 1,
+							},
+							
+							{
+								type = ST_BOOLEAN,
+								name = "all",
+								description = "If true it uses the ALL check, if unchecked it uses ANY",							
+								requirement = {"condition", "PlayerCanSee"},
+								category = "Options",							
+								default = false,
+							},
+							
+							{
+								type = ST_STRING,
+								name = "resourceType",
+								description = "Resource type to use (Manpower, Fuel, Munition)",
+								options = {"Manpower", "Fuel", "Munition"},
+								requirement = {"condition", "HasResources"},
+								category = "Options",
+								default = "Manpower",
+							},
+							
+							{
+								type = ST_NUMBER,
+								name = "timeStamp",
+								description = "ID of Time Stamp [optional]",
+								requirement = {"condition", "GameTime"},
+								category = "Options",
+								default = -1,
+							},
+							
+							{
+								type = ST_NUMBER,
+								name = "seconds",
+								description = "Seconds for comparison",
+								requirement = {"condition", "GameTime"},
+								category = "Options",
+								default = 1,
+							},
+							
+							{
+								type = ST_STRING,
+								name = "functionName",
+								description = "Calls a function of this name - function must return a true or false",
+								requirement = {"condition", "AskScarFunction"},
+								category = "Options",
+							},
+							{
+								type = ST_BOOLEAN,
+								name = "countBuildingsUnderConstruction",
+								description = "include buildings that are under constructions",							
+								requirement = {"condition", "HasBuildings"},
+								category = "Options",							
+								default = false,
+							},
+							---------------
+							--BOOLEAN--
+							{
+								type = ST_STRING,
+								name = "boolean",
+								description = "Checks sub conditions to see if ANY #, ALL, or NONE have been completed",
+								options = {"ALL", "ANY", "NONE"},
+								requirement = {"condition", "Boolean"},
+								category = "Options",
+								default = "ALL",
+							},
+							{
+								type = ST_NUMBER,
+								name = "minRequired",
+								description = "Minimum number of conditions passed",
+								requirement = {"boolean", "ANY"},
+								category = "Options",
+							},
+							{
+								type = ST_TABLE,
+								name = "subconditions",
+								description = "All conditions to check for the Boolean condition",
+								multiplicity = "multiple",
+								requirement = {"condition", "Boolean"},
+								itemSchema = {
+									{
+								type = ST_STRING,
+								name = "condition",
+								description = "Condition to trigger the following actions",
+								options = {"None", "Boolean", "HasUnits", "HasBuildings","UnitAtLocation", "EntityAtLocation", "CompareUnitCounts", "ObjectiveCounter", "ObjectiveTimer", "HealthPercentage",
+									"GroupCount", "PlayerCanSee", "HasResources", "GameTime", "AskScarFunction", "LocationCleared", "PlayerHasAbilityOrUpgrade", "PlayerOwner"},
+								default = "None",
+								category = "Condition",
+							},
+									-----------------------
+									--OPTIONS--
+									{
+										type = ST_PLAYER,
+										name = "player",
+										description = "The target player",
+										requirement = {"condition", "HasUnits", "HasBuildings", "UnitAtLocation", "EntityAtLocation", "PlayerCanSee", "HasResources", "LocationCleared", "PlayerHasAbilityOrUpgrade", "PlayerOwner"},
+										category = "Options",
+										allowWorld = true,
+										default = "Player1",
+									},
+									
+									{
+										type = ST_STRING,
+										name = "comparison",
+										description = "How to compare the numbers",
+										options = {"IS_EQUAL", "IS_LESS_THAN", "IS_GREATER_THAN", "IS_LESS_THAN_OR_EQUAL", "IS_GREATER_THAN_OR_EQUAL", "IS_NOT_EQUAL"},
+										default = "IS_LESS_THAN_OR_EQUAL",
+										requirement = {"condition", "HasUnits", "HasBuildings", "CompareUnitCounts", "ObjectiveCounter", "ObjectiveTimer", "HealthPercentage", "GroupCount", "GameTime", "HasResources"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_NUMBER,
+										name = "number",
+										description = "Number to compare to",
+										requirement = {"condition", "HasUnits", "HasBuildings", "ObjectiveCounter", "ObjectiveTimer", "GroupCount", "HasResources"},
+										category = "Options",
+										default = 0,
+									},
+									
+									{
+										type = ST_STRING,
+										name = "target",
+										description = "What target type to use for this condition: EGroup or SGroup",
+										options = {"SGROUP", "EGROUP"},
+										default = "SGROUP",
+										requirement = {"condition", "HealthPercentage", "GroupCount", "PlayerCanSee", "PlayerOwner"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_SGROUP,
+										name = "sgroup",
+										description = "SGroup targeted",							
+										requirement = {"condition", "UnitAtLocation", "HealthPercentage", "GroupCount", "PlayerCanSee", "PlayerOwner"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_EGROUP,
+										name = "egroup",
+										description = "EGroup targeted",							
+										requirement = {"condition", "HealthPercentage", "GroupCount", "EntityAtLocation", "PlayerCanSee", "PlayerOwner"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_MARKER,
+										name = "position",
+										description = "Where to check. May take into account range.",							
+										requirement = {"condition", "UnitAtLocation", "CompareUnitCounts", "EntityAtLocation", "LocationCleared"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_PBG,
+										name = "unitType",
+										blueprintType = "squad",
+										description = "type of unit to filter",							
+										requirement = {"condition", "UnitAtLocation", "HasUnits"},
+										category = "Options",
+									},
+									{
+										type = ST_PBG,
+										name = "buildingTypes",
+										blueprintType = "entity",
+										description = "type of buildings to filter",							
+										requirement = {"condition", "HasBuildings"},
+										category = "Options",
+									},
+									{
+										type = ST_PBG,
+										name = "entityType",
+										blueprintType = "entity",
+										description = "type of entity to filter",							
+										requirement = {"condition", "EntityAtLocation"},
+										category = "Options",
+									},
+									{
+										type = ST_PBG,
+										name = "ability_pbg",
+										blueprintType = "ability",
+										description = "type of ability to check",							
+										requirement = {"condition", "PlayerHasAbilityOrUpgrade"},
+										category = "Options",
+									},
+									{
+										type = ST_PBG,
+										name = "upgrade_pbg",
+										blueprintType = "upgrade",
+										description = "type of upgrade to check",							
+										requirement = {"condition", "PlayerHasAbilityOrUpgrade"},
+										category = "Options",
+									},
+									{
+										type = ST_STRING,
+										name = "abilityOrUpgrade",
+										description = "Ability or Upgrade to check",							
+										options = {"Ability", "Upgrade"},
+										default = "Ability",
+										requirement = {"condition", "PlayerHasAbilityOrUpgrade"},
+										category = "Options",							
+										
+									},
+									{
+										type = ST_PLAYER,
+										name = "playerA",
+										description = "The first player in a comparison",
+										requirement = {"condition", "CompareUnitCounts"},
+										category = "Options",
+										default = "Player1",
+									},
+									
+									{
+										type = ST_PLAYER,
+										name = "playerB",
+										description = "The second player in a comparison",
+										requirement = {"condition", "CompareUnitCounts"},
+										category = "Options",
+										default = "Player1",
+									},
+									
+									{
+										type = ST_SGROUP,
+										name = "sgroupA",
+										description = "First group in a comparison",							
+										requirement = {"condition", "CompareUnitCounts"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_SGROUP,
+										name = "sgroupB",
+										description = "Second group in a comparison",							
+										requirement = {"condition", "CompareUnitCounts"},
+										category = "Options",
+									},
+									
+									{
+										type = ST_NUMBER,
+										name = "percentage",
+										description = "Percentage value for comparison: 0.0-1.0",
+										requirement = {"condition", "HealthPercentage"},
+										category = "Options",
+										default = 0,
+										integer = false,
+										min = 0,
+										max = 1,
+									},
+									
+									{
+										type = ST_BOOLEAN,
+										name = "all",
+										description = "If true it uses the ALL check, if unchecked it uses ANY",							
+										requirement = {"condition", "PlayerCanSee"},
+										category = "Options",							
+										default = false,
+									},
+									
+									{
+										type = ST_STRING,
+										name = "resourceType",
+										description = "Resource type to use (Manpower, Fuel, Munition)",
+										options = {"Manpower", "Fuel", "Munition"},
+										requirement = {"condition", "HasResources"},
+										category = "Options",
+										default = "Manpower",
+									},
+									
+									{
+										type = ST_NUMBER,
+										name = "timeStamp",
+										description = "ID of Time Stamp [optional]",
+										requirement = {"condition", "GameTime"},
+										category = "Options",
+										default = -1,
+									},
+									
+									{
+										type = ST_NUMBER,
+										name = "seconds",
+										description = "Seconds for comparison",
+										requirement = {"condition", "GameTime"},
+										category = "Options",
+										default = 1,
+									},
+									
+									{
+										type = ST_STRING,
+										name = "functionName",
+										description = "Calls a function of this name - function must return a true or false",
+										requirement = {"condition", "AskScarFunction"},
+										category = "Options",
+									},
+									{
+										type = ST_BOOLEAN,
+										name = "countBuildingsUnderConstruction",
+										description = "include buildings that are under constructions",							
+										requirement = {"condition", "HasBuildings"},
+										category = "Options",							
+										default = false,
+									},
+					
+								},
+							},
+			
+						},
+					},
+				},
+		}
+		
+		
+	},
+}

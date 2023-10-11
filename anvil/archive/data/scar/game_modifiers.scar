@@ -1,0 +1,93 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- MODIFIER FUNCTIONS
+-- Game specific part of the interface to add and remove specific modifiers from groups and players.
+--
+-- Copyright 2018 SEGA Corporation, Developed by Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+import("modifiers.scar")
+import("partialsave.scar")
+
+local _upgradeResourceCostModifiers =
+{
+	[RT_Action] = nil,
+	[RT_Command] = nil
+}
+
+local _playerResourceIncomeModifiers = 
+{
+	[RT_Action] = 'player_rate_action',
+	[RT_Command] = nil,
+	[RT_Fuel] = 'player_rate_fuel',
+	[RT_Munition] = 'player_rate_munition',
+	[RT_Manpower] = 'player_rate_manpower',
+}
+
+local _playerResourceCapModifiers =
+{
+	[RT_Action] = 'player_max_action',
+	[RT_Command] = 'player_max_command',
+	[RT_Manpower] = 'player_max_manpower',
+	[RT_Munition] = 'player_max_munition',
+	[RT_Fuel] = 'player_max_fuel'
+}
+
+local _entityResourceCostModifiers =
+{
+	[RT_Action] = nil,
+	[RT_Command] = nil
+}
+
+local _playerResourceUpkeepModifiers = 
+{
+	[RT_Action] = nil,
+	[RT_Command] = nil
+}
+
+GameModifiers = {}
+
+function GameModifiers.Modifier_InitGame()
+	Modifier_InitResourceBasedModifierTables(
+		_upgradeResourceCostModifiers,
+		_playerResourceIncomeModifiers,
+		_playerResourceCapModifiers,
+		_entityResourceCostModifiers,
+		_playerResourceUpkeepModifiers)
+	
+	Game_SetGameRestoreCallback(GameModifiers_OnGameRestore)
+end
+Scar_AddInit(GameModifiers.Modifier_InitGame)
+
+function GameModifiers_OnGameRestore()
+	Modifier_InitResourceBasedModifierTables(
+		_upgradeResourceCostModifiers,
+		_playerResourceIncomeModifiers,
+		_playerResourceCapModifiers,
+		_entityResourceCostModifiers,
+		_playerResourceUpkeepModifiers)
+end
+
+function GameModifiers.Modifier_RestorePartialSave(saveTable)
+	GameModifiers.Modifier_InitGame()
+end
+PartialSave_AddRestoreFunction(GameModifiers.Modifier_RestorePartialSave)
+
+--? @shortdesc Allows paratroopers to reinforce from the sky.  Set to true to enable, false to disable.
+--? @args PlayerID playerId, Boolean enable
+function GameModifiers.Modify_Enable_ParadropReinforcements(playerid, value)
+	
+	if value == true then
+		value = 1
+	elseif value == false then
+		value = 0
+	end
+	
+	-- create the appropriate modifier
+	local modifier = Modifier_Create(MAT_Player, "paradrop_reinforcements_modifier", MUT_Enable, false, value, upgrade)
+	Modifier_ApplyToPlayer( modifier, playerid, 0 )
+	
+end

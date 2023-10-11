@@ -1,0 +1,675 @@
+----------------------------------------------------------------------------------------------------------------
+-- Game specific single player scar helper functions
+-- Copyright 2017 SEGA Corporation, Developed by Relic Entertainment
+
+import("ScarUtil.scar")
+import("game_modifiers.scar")
+import("objectives.scar")
+
+-- Extra cheats for trailers and screenshots
+if Misc_IsCommandLineOptionSet("fws") then
+	import("fws_cheats.scar")
+end
+
+-- RESOURCE MOD TABLES
+g_mods_defaultManpower = {}
+g_mods_defaultMunitions = {}
+g_mods_defaultFuel = {}
+
+g_mods_manpowerCap = {}
+g_mods_munitionsCap = {}
+g_mods_fuelCap = {}
+
+g_modAllyPlayersForDifficulty = false
+
+--? @shortdesc Set a player's resource income. Provide income-per-minute values. For SP missions. 
+--? @extdesc Default values are set in anvil.scar. To set all values to default, provide only the player argument.
+--? @args PlayerID player, [Float manpowerIncome, Float munitionsIncome, Float fuelIncome, Float manpowerCap, Float, munitionsCap, Float fuelCap])
+--? @result nil
+function Anvil_SetPlayerResources(player, manpowerIncome, munitionsIncome, fuelIncome, manpowerCap, munitionsCap, fuelCap)
+	
+	local simRate = Game_GetSimRate()
+	local playerID = Player_GetID(player)
+	local man = manpowerIncome or INCOME_MANPOWER
+	local mun = munitionsIncome  or INCOME_MUNITIONS
+	local fue = fuelIncome or INCOME_FUEL
+	local manCap = manpowerCap or RESOURCE_CAP_MANPOWER 
+	local munCap = munitionsCap or RESOURCE_CAP_MUNITIONS
+	local fueCap = fuelCap or RESOURCE_CAP_FUEL
+	
+	-- Disable resource income granted by army state trees. (e.g. "american.rdo")
+	if Player_HasUpgrade(player, BP_GetUpgradeBlueprint("disable_passive_resource_income")) == false then
+		Player_CompleteUpgrade(player, BP_GetUpgradeBlueprint("disable_passive_resource_income"))
+	end
+	
+	if scartype(player) ~= ST_PLAYER then
+		fatal( "Anvil_SetPlayerResources did not receive a valid player")
+	end
+	
+	if g_mods_defaultManpower[playerID] ~= nil then Modifier_Remove(g_mods_defaultManpower[playerID]) end
+	
+	if man >= 0 then
+		g_mods_defaultManpower[playerID] = Modify_PlayerResourceRate(player, RT_Manpower, (man / 60 / simRate), MUT_Addition)
+	end
+
+	if g_mods_defaultMunitions[playerID] ~= nil then Modifier_Remove(g_mods_defaultMunitions[playerID]) end
+	
+	if mun >= 0 then
+		g_mods_defaultMunitions[playerID] = Modify_PlayerResourceRate(player, RT_Munition, (mun / 60 / simRate) , MUT_Addition)
+	end
+
+	if g_mods_defaultFuel[playerID] ~= nil then Modifier_Remove(g_mods_defaultFuel[playerID]) end
+	
+	if fue >= 0 then
+		g_mods_defaultFuel[playerID] = Modify_PlayerResourceRate(player, RT_Fuel, (fue / 60 / simRate), MUT_Addition)
+	end
+
+	if g_mods_manpowerCap[playerID] ~= nil then Modifier_Remove(g_mods_manpowerCap[playerID]) end
+	g_mods_manpowerCap[playerID] = Modify_PlayerResourceCap(player, RT_Manpower, manCap/9999, MUT_Multiplication)
+	
+	if g_mods_munitionsCap[playerID] ~= nil then Modifier_Remove(g_mods_munitionsCap[playerID]) end
+	g_mods_munitionsCap[playerID] = Modify_PlayerResourceCap(player, RT_Munition, munCap/9999, MUT_Multiplication)
+	
+	if g_mods_fuelCap[playerID] ~= nil then Modifier_Remove(g_mods_fuelCap[playerID]) end
+	g_mods_fuelCap[playerID] = Modify_PlayerResourceCap(player, RT_Fuel, fueCap/9999, MUT_Multiplication)
+end
+
+--? @shortdesc Following a path from origin to destination, finds the HS_CLOSEST/HS_FURTHEST hidden position to/from the destination
+--? @extdesc If no position is found, returns origin. HS_FURTHEST returns origin position if it is hidden.
+--? @args Position origin, Position destination, Boolean furthest
+--? @result Position 
+function Anvil_FindHiddenSpawn(origin, destination, furthest)
+	
+	if furthest == nil then
+		furthest = HS_FURTHEST
+	end
+	
+	if furthest == HS_FURTHEST then
+		local start = Util_GetPosition(origin)
+		local finish = Util_GetPosition(destination)
+		local curr = start
+		
+		while Player_CanSeePosition(player1, curr) == true do
+			curr = Util_GetPositionFromAtoB(curr, finish, 1)
+			if curr == start or World_DistancePointToPoint(curr, finish) <= 2 then
+				return curr
+			end
+		end
+		
+		if (curr == start) then
+			return start
+		else
+			local spawn = Util_GetPositionFromAtoB(curr, start, 10)
+			if Player_CanSeePosition(player1, spawn) then
+				return start
+			else
+				return spawn
+			end
+		end
+	
+	else
+		local start = Util_GetPosition(destination)
+		local finish = Util_GetPosition(origin)
+		local curr = start
+		
+		while Player_CanSeePosition(player1, curr) == true do
+			curr = Util_GetPositionFromAtoB(curr, finish, 1)
+			if curr == start or World_DistancePointToPoint(curr, finish) <= 2 then
+				return curr
+			end
+		end
+		
+		if (curr == start) then
+			return start
+		else
+			local spawn = Util_GetPositionFromAtoB(curr, finish, 10)
+			if Player_CanSeePosition(player1, spawn) then
+				return finish
+			else
+				return spawn
+			end
+		end
+		
+	end
+	
+end
+
+--? @shortdesc Returns the name of the RTS version of the given race. 
+--? @extdesc If a player has a race like "americans_campaign" it will map to "americans." The assumption is that races
+--? are named the same but have an appended "_campaign" to the end
+--? @args ScarRacePBG racePBG
+function Anvil_GetRtsRaceFromMetamapRace(racePBG)
+	-- To match regular matches we are converting from campaign to RTS race, but perhaps this won't
+	-- always be desirable. In that case, just use the name of the race directly.
+	
+	local campaignRaceName = BP_GetName(racePBG)
+	local new_race_name = string.gsub(campaignRaceName, "_campaign$", "")
+	
+	if new_race_name ~= nil and new_race_name ~= "" then
+		return new_race_name
+	end
+	
+	return campaignRaceName
+end
+
+--? @shortdesc Filter out specific types of squads from an SGroup. Add to this function if more types need to be considered as Forbidden
+--? @extdesc remove_airplanes, remove_casualties, remove_auto_builder_squads, remove_building_squads, remove_medic
+--? @args SGroup sgroup
+function Anvil_FilterOutForbiddenSquadTypes(sgroup, types_to_filter_out)
+	local to_filter_out = {}
+	for key, value in pairs(types_to_filter_out) do
+		if value == true then
+			local filter_na = string.find(key, "_na")
+			if filter_na == nil then
+				local filter_bp = string.find(key, "ignore_bp_")
+				local filter_type = string.find(key, "ignore_type_")
+				local filter = nil
+				if filter_bp ~= nil and filter_type == nil then
+					local str = string.gsub(key, "ignore_bp_", "")
+					filter = BP_GetSquadBlueprint(str)
+				elseif filter_bp == nil and filter_type ~= nil then
+					local str = string.gsub(key, "ignore_type_", "")
+					filter = str
+				else
+					error("Both _bp_ and _type_ have been found to query. This is not allowed.")
+				end
+				if filter ~= nil then
+					table.insert(to_filter_out, filter)
+				end
+			end
+		end
+	end
+	
+	SGroup_Filter(sgroup, to_filter_out, FILTER_REMOVE)
+end
+
+--? @shortdesc Destroy entities, by type or blueprint, inside a marker or sector, or near a position
+--? @extdesc By default this function will kill any entity with the "wreck" unit_type. Use OPT_num_to_kill to specify how many entities
+--? will be destroyed by the function. By default, all matching entities will be destroyed.
+--? @args MarkerID/Pos/SectorID pos, Unit_type/Ebp OPT_entity_type, Real OPT_range  Int OPT_num_to_kill
+function Anvil_KillNeutralEntitiesNearPosition(pos, OPT_entity_type, OPT_range, OPT_num_to_kill)
+
+	local eg_killentitiesgroup = EGroup_CreateIfNotFound("eg_killentitiesgroup")
+	OPT_entity_type = OPT_entity_type or "wreck"
+	OPT_num_to_kill = OPT_num_to_kill or 0
+	
+	-- get all the neutral entities (different methods for different class types)
+	if scartype(pos) == ST_MARKER then
+		if OPT_range == nil then
+			World_GetNeutralEntitiesNearMarker(eg_killentitiesgroup, pos)
+		else
+			World_GetNeutralEntitiesNearPoint(eg_killentitiesgroup, Marker_GetPosition(pos), OPT_range)
+		end
+	elseif scartype(pos) == ST_SCARPOS then
+		World_GetNeutralEntitiesNearPoint(eg_killentitiesgroup, pos, OPT_range)
+	elseif scartype(pos) == ST_NUMBER then
+		World_GetNeutralEntitiesWithinTerritorySector(eg_killentitiesgroup, pos)
+	end
+	
+	-- Filter by unit_type or blueprint, then kill the group
+	if scartype(OPT_entity_type) == ST_PBG then
+		EGroup_Filter(eg_killentitiesgroup, {OPT_entity_type}, FILTER_KEEP)
+	elseif scartype(OPT_entity_type) == ST_STRING then
+		local filter = function(gid, idx, entity)
+			if Entity_IsOfType(entity, OPT_entity_type) == false then
+				EGroup_Remove(eg_killentitiesgroup, entity)
+			end
+		end
+		EGroup_ForEach(eg_killentitiesgroup, filter)
+	end
+	
+	if OPT_num_to_kill > 0 and OPT_num_to_kill <= EGroup_CountAlive(eg_killentitiesgroup) then
+		for i = 1,OPT_num_to_kill do
+			local entity = EGroup_GetRandomSpawnedEntity(eg_killentitiesgroup)
+			Entity_Kill(entity)
+		end
+	else
+		EGroup_Kill(eg_killentitiesgroup)
+	end
+	
+end
+
+--? @shortdesc Set an sgroup's targeting type (how enemy weapons target the squads)
+--? @extdesc Targeting types are: Targeting_Automatic, Targeting_Manual, Targeting_None
+--? @args SGroupID sgroup, TargetingType targetingType
+function Anvil_SGroupSetTargetingType(sgroup, targetingType)
+	local f = function(group, idx, squad)
+		local n = Squad_Count(squad)
+		for i = 0, n-1 do
+			local entity = Squad_EntityAt(squad, i)
+			Entity_SetTargetingType(entity, targetingType)
+		end 
+	end
+	if scartype(sgroup) == ST_SGROUP then
+		SGroup_ForEach(sgroup, f)
+	else
+		assert(false, "Anvil_SGroupSetTargetingType did not receive a valid SGroup.")
+	end
+end
+
+--? @shortdesc Set chance that team weapons in sgroup will self destruct on abandon 
+--? @args SGroupID sgroup, Real destroyOnAbandonChance
+--? @result nil
+function SGroup_SetTeamWeaponDestroyOnAbandonChance(sgroup, chance)
+    local f = function (gid, idx, squad)
+    	Squad_SetTeamWeaponDestroyOnAbandonChance(squad,chance)
+    end
+    SGroup_ForEach(sgroup, f)
+end
+
+--? @shortdesc Set chance that team weapons in egroup will self destruct on abandon 
+--? @args EGroupID egroup, Real destroyOnAbandonChance
+--? @result nil
+function EGroup_SetTeamWeaponDestroyOnAbandonChance(egroup, chance)
+    local f = function (gid, idx, entity)
+    	Entity_SetTeamWeaponDestroyOnAbandonChance(entity,chance)
+    end
+    EGroup_ForEach(egroup, f)
+end
+
+---- DEV-ONLY DESIGNER FUNCTIONS. Will not show up in ScarDoc ----
+
+function Dev_GrantCompanyAbilities(OPT_player, OPT_no_company) -- Grants company upgrades and abilities when launching via the build launcher (no campaign data available)
+    
+    local companyType
+    local upgrade
+    local affectorsTable = Affectors_GetTable()
+	local campaign = Game_RetrieveTableData("campaign", false)
+    local player = OPT_player or Game_GetLocalPlayer()
+	local no_company = OPT_no_company or false
+    local race = Player_GetRace(player)
+	
+	-- In Campaign, unlock grenades and rifle grenades by default
+	Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("sp_generic_company_check"), 1)
+	Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("sp_generic_squad_ability_unlock"), 1)
+	
+	-- Prevent players from converting any building to a forward base
+	if BP_AbilityExists("convert_to_forward_base") then
+		Player_SetAbilityAvailability(player, ABILITY.COMMON.CONVERT_TO_FORWARD_BASE, ITEM_REMOVED)
+	end
+	
+	-- Remove tank-trap construction from missions
+	local tank_traps = {"tank_trap_us", "tank_trap_rifleman_us", "tank_trap_uk", "tank_trap_ak"}
+	for k,trap in pairs(tank_traps) do
+		if EBP_Exists(trap) then
+			Player_SetEntityProductionAvailability(player, BP_GetEntityBlueprint(trap), ITEM_REMOVED)
+		end
+	end		
+	
+	if race == RACE.AMERICANS then
+		if BP_AbilityExists("grenade_riflemen_us") then
+			Player_AddAbility(player, ABILITY.AMERICAN.GRENADE_RIFLEMEN_US)
+		end
+		if BP_UpgradeExists("grenade_riflemen_us") then
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("grenade_riflemen_us"), 1)
+		end
+		if BP_AbilityExists("precision_shot_bazooka_team_us") then
+			Modify_AbilityMunitionsCost(player, ABILITY.AMERICAN.PRECISION_SHOT_BAZOOKA_TEAM_US, 0, MUT_Multiplication)
+		end
+		if BP_AbilityExists("flare_scout_us") then
+			Modify_AbilityMunitionsCost(player, ABILITY.AMERICAN.FLARE_SCOUT_US, 0, MUT_Multiplication)
+		end
+		if BP_AbilityExists("smoke_rifle_grenade_scout_us") then
+			Modify_AbilityMunitionsCost(player, ABILITY.AMERICAN.SMOKE_RIFLE_GRENADE_SCOUT_US, 0, MUT_Multiplication)
+		end
+	elseif race == RACE.BRITISH then
+		if BP_AbilityExists("rifle_grenade_tommy_uk") then
+			Player_AddAbility(player, ABILITY.BRITISH.RIFLE_GRENADE_TOMMY_UK)
+		end
+		if BP_UpgradeExists("rifle_grenade_tommy_uk") then
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("rifle_grenade_tommy_uk"), 1)
+		end
+		if BP_AbilityExists("flare_tommy_uk") then
+			Modify_AbilityMunitionsCost(player, ABILITY.BRITISH.FLARE_TOMMY_UK, 0, MUT_Multiplication)
+		end
+	elseif race == RACE.AFRIKA_KORPS then
+		if BP_UpgradeExists("anti_tank_package_ak") then
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("anti_tank_package_ak"), 1)
+		end
+		if BP_UpgradeExists("mobile_assault_munitions_ak") then
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("mobile_assault_munitions_ak"), 1)
+		end
+		if BP_UpgradeExists("light_infantry_munitions") then
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("light_infantry_munitions"), 1)
+		end
+		if BP_UpgradeExists("sp_generic_tech_unlock") then
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint("sp_generic_tech_unlock"), 1)
+		end
+	end
+	
+	if Misc_IsDevMode() then
+		if affectorsTable == nil or affectorsTable.player_company_bp_name == nil or (campaign == nil or campaign.campaign_id == nil or campaign.campaign_id == "") then
+			
+			if Misc_IsCommandLineOptionSet("companytype") then
+				companyType = Misc_GetCommandLineString("companytype")
+			end
+			
+			if Misc_IsCommandLineOptionSet("reinforcingcompanytype") and player ~= Game_GetLocalPlayer() then
+				companyType = Misc_GetCommandLineString("reinforcingcompanytype")
+			end
+			
+			if companyType == "any" then
+				companyType = affectorsTable.player_company_bp_name
+			end
+			
+			if companyType == "company_paratrooper_us" then
+				upgrade = {"dev_unlock_all_core_abilities_airborne_us", "airborne_company_us"}
+			elseif companyType == "company_armoured_us" then
+				upgrade = {"dev_unlock_all_core_abilities_armoured_us", "c_armoured_company_us"}
+			elseif companyType == "company_spec_ops_us" then
+				upgrade = {"dev_unlock_all_core_abilities_special_operations_us", "c_special_operations_company_us"}
+			elseif companyType == "company_infantry_us" then
+				upgrade = {"dev_unlock_all_core_abilities_infantry_us", "c_infantry_company_us"}
+			elseif companyType == "company_airborne_uk" then
+				upgrade = "dev_unlock_all_core_air_and_sea_abilities_uk"
+			elseif companyType == "company_armoured_uk" then
+				upgrade = "dev_unlock_all_core_armored_abilities_uk"
+			elseif companyType == "company_artillery_uk" then
+				upgrade = "dev_unlock_all_core_artillery_abilities_uk"
+			end
+			
+			if upgrade == nil then
+				if race == RACE.AMERICANS then
+					upgrade = Table_GetRandomItem({{"dev_unlock_all_core_abilities_airborne_us", "airborne_company_us"}, "dev_unlock_all_core_abilities_special_operations_us"})
+				elseif race == RACE.BRITISH then
+					upgrade = Table_GetRandomItem({"dev_unlock_all_core_armored_abilities_uk", "dev_unlock_all_core_artillery_abilities_uk"})
+				end
+			end
+			
+			if scartype(upgrade) == ST_STRING and BP_UpgradeExists(upgrade) then
+				upgrade = BP_GetUpgradeBlueprint(upgrade)
+			elseif scartype(upgrade) == ST_TABLE then
+				for i=1, #upgrade do
+					if BP_UpgradeExists(upgrade[i]) then
+						upgrade[i] = BP_GetUpgradeBlueprint(upgrade[i])
+					end
+				end
+			end
+			
+			if (scartype(upgrade) == ST_PBG or scartype(upgrade) == ST_TABLE) and no_company == false then    
+				Cmd_InstantUpgrade(player, upgrade, 1)
+			end
+		end
+	end
+		
+end
+
+function Dev_ModifyEnemyPlayers(unlockAbilities) -- Tweaks some values to reduce difficulty spikes
+	local enemy_player = Player_FindFirstEnemyPlayer(Game_GetLocalPlayer())
+	local unlock = unlockAbilities
+	local upgrade = BP_GetUpgradeBlueprint("sp_generic_squad_ability_unlock")
+	local lockedAbilities = {ABILITY.GERMAN.GRENADE_RIFLE_GRENADIER_GER, ABILITY.BRITISH_AFRICA.RIFLE_GRENADE_TOMMY_AFRICA_UK} 
+	
+	if unlock == nil then 
+		unlock = true 
+	end
+	
+	-- Set the enemy company
+	if Misc_IsDevMode() then
+		local affectorsTable = Affectors_GetTable()
+		if affectorsTable ~= nil and affectorsTable.enemy_company_bp_name == nil and Player_GetRace(enemy_player) == RACE.GERMANS then
+			local company = "company_armored_ger"		
+			if Misc_IsCommandLineOptionSet("enemycompanytype") then
+				local arg = string.lower(Misc_GetCommandLineString("enemycompanytype"))
+				if string.find("company_infantry_ger", arg) then
+					company = "company_infantry_ger"
+				elseif string.find("company_luftwaffe_ger", arg) then
+					company = "company_luftwaffe_ger"
+				elseif string.find("company_mechanized_ger", arg) then
+					company = "company_mechanized_ger"
+				end
+			end
+			local campaign = Game_RetrieveTableData("campaign", false)
+			if campaign.mission_affectors == nil then
+				campaign.mission_affectors = {}
+			end
+			campaign.mission_affectors["enemy_company_bp_name"] = company
+			Game_StoreTableData("campaign", campaign)
+		end
+	end
+
+	local _modifyProjectile = function(player, blueprint, factor)
+		if EBP_Exists(blueprint) then
+			Modify_ProjectileDelayTime(player, BP_GetEntityBlueprint(blueprint), factor) -- Grenade fuses should range from 4.5 to 7.5 seconds
+		end
+	end
+
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		if Player_ObserveRelationship(Game_GetLocalPlayer(), player) == R_ENEMY then
+			_modifyProjectile(player, "p_throw_grenade_pineapple", 2.1875)
+
+			-- German ability mods
+			Modify_AbilityRechargeTime(player, ABILITY.GERMAN.GRENADE_M24_STICK_GRENADIER_GER, 2, MUT_Multiplication)
+			Modify_AbilityRechargeTime(player, ABILITY.GERMAN.PANZERFAUST_GRENADIER_GER, 2, MUT_Multiplication)
+			Modify_AbilityRechargeTime(player, ABILITY.GERMAN.IMPROVED_PANZERFAUST_GRENADIER_VET_GER, 2, MUT_Multiplication)
+			Modify_AbilityRechargeTime(player, ABILITY.GERMAN.BUNDLE_GRENADE_PANZERGRENADIER_GER, 2, MUT_Multiplication)
+			-- UK ability mods
+			Modify_AbilityRechargeTime(player, ABILITY.BRITISH_AFRICA.AT_GRENADE_SAPPER_AFRICA_UK, 3, MUT_Multiplication)
+			Modify_AbilityRechargeTime(player, ABILITY.BRITISH_AFRICA.GRENADE_NO69_AFRICA_UK, 3, MUT_Multiplication)
+			Modify_AbilityRechargeTime(player, ABILITY.BRITISH.GURKHA_GRENADE_ASSAULT_UK, 3, MUT_Multiplication)
+			Modify_AbilityRechargeTime(player, ABILITY.BRITISH.GRENADE_COMMANDO_UK, 3, MUT_Multiplication)
+			if unlock ~= false then
+				Cmd_InstantUpgrade(player, upgrade, 1)
+			end
+			for k, ability in pairs(lockedAbilities) do
+				Player_SetAbilityAvailability(player, ability, ITEM_LOCKED)
+			end
+		end
+	end
+
+	Rule_AddOneShot(Dev_AddGermanFieldMarshalUpgrade, 5)
+end
+
+
+function Dev_AddGermanFieldMarshalUpgrade()
+	local upgrades = {
+		BP_GetUpgradeBlueprint("field_commander_defensive_ger"),
+		BP_GetUpgradeBlueprint("field_commander_mechanized_ger"),
+		BP_GetUpgradeBlueprint("field_commander_special_ops_ger")
+	}
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		if Player_ObserveRelationship(Game_GetLocalPlayer(), player) == R_ENEMY and Player_GetRace(player) == RACE.GERMANS then
+			local player_has_upgrade
+			for _, upgrade in pairs(upgrades) do
+				player_has_upgrade = player_has_upgrade or Player_HasUpgrade(player, upgrade)
+			end
+			if not player_has_upgrade then
+				Cmd_InstantUpgrade(player, Table_GetRandomItem(upgrades), 1)
+			end
+		end
+	end
+end
+
+-- COMMAND POINTS --
+local actionPointsCapped = false
+local playerCommandPointCap = 12
+local modID_playerCommandPointCap = nil
+local modID_playerActionPointCap = nil
+
+function Dev_UpdateCommandPoints(command_points, cp_cap_boost)
+	local points = command_points or 0
+	local cap_boost = cp_cap_boost or points
+	local player = Game_GetLocalPlayer()
+	local current = Player_GetResource(player, RT_Command)
+	
+	if modID_playerCommandPointCap ~= nil then
+		Modifier_Remove(modID_playerCommandPointCap)
+	end
+	
+	playerCommandPointCap = playerCommandPointCap + cap_boost
+	modID_playerCommandPointCap = Modify_PlayerResourceCap(player, RT_Command, (playerCommandPointCap/32 --[[tunable max in AE]]), MUT_Multiplication)
+	
+	if points > 0 then
+		Player_AddUnspentCommandPoints(player, points)
+		UI_CreateEventCue(11206638 --[[Command Points Awarded]], Loc_Empty(), "low_priority", "icons/campaign/hud/commander_reward_icon.png", "", ECV_Queue, 20.0)
+	end
+	
+	if Rule_Exists(Dev_ManageActionPoints) == false then
+		Rule_Add(Dev_ManageActionPoints)
+	end
+end
+
+function Dev_ManageActionPoints()
+	local player = Game_GetLocalPlayer()
+	local currentCP = Player_GetResource(player, RT_Command)
+	local cap = playerCommandPointCap
+	
+	if currentCP == cap and actionPointsCapped == false then
+		actionPointsCapped = true
+		modID_playerActionPointCap = Modify_PlayerResourceCap(player, RT_Action, 0, MUT_Multiplication)
+	elseif currentCP ~= cap and actionPointsCapped then
+		Modifier_Remove(modID_playerActionPointCap)
+	end
+end
+	
+function Anvil_CalculateAssaultDamage(attacker, defender, opt_bonus_attack, opt_bonus_defense, opt_attacker_health_override, opt_defender_health_override)
+	local attacker_attack_damage_pct = 0
+	local attacker_type = scartype(attacker)
+	local defender_type = scartype(defender)
+	
+	local attacker_health_override = opt_attacker_health_override or 0
+	local defender_health_override = opt_defender_health_override or 0
+	
+	if attacker_type == ST_SQUAD then
+		if defender_type == ST_SQUAD then
+			attacker_attack_damage_pct = World_CalculateAssaultDamageSquadToSquad(attacker, defender, opt_bonus_attack, opt_bonus_defense, attacker_health_override, defender_health_override)
+		elseif defender_type == ST_ENTITY then
+			attacker_attack_damage_pct = World_CalculateAssaultDamageSquadToEntity(attacker, defender, opt_bonus_attack, opt_bonus_defense, attacker_health_override, defender_health_override)
+		end
+		
+	elseif attacker_type == ST_ENTITY then
+		if defender_type == ST_SQUAD then
+			attacker_attack_damage_pct = World_CalculateAssaultDamageEntityToSquad(attacker, defender, opt_bonus_attack, opt_bonus_defense, attacker_health_override, defender_health_override)
+		elseif defender_type == ST_ENTITY then
+			attacker_attack_damage_pct = World_CalculateAssaultDamageEntityToEntity(attacker, defender, opt_bonus_attack, opt_bonus_defense, attacker_health_override, defender_health_override)
+		end
+	end
+	
+	return attacker_attack_damage_pct
+end
+
+function Anvil_SetUpgradeAvailability(grantedUpgrades, unlockedUpgrades, removedUpgrades)
+	local player = Game_GetLocalPlayer()
+	local grant = grantedUpgrades or {}
+	local unlock = unlockedUpgrades or {}
+	local remove = removedUpgrades or {}
+	
+	for k, upgrade in pairs(grant) do
+		if BP_UpgradeExists(upgrade) then
+			Player_SetUpgradeAvailability()
+			Cmd_InstantUpgrade(player, BP_GetUpgradeBlueprint(upgrade), 1)
+		end
+	end
+	
+	for k, upgrade in pairs(unlock) do
+		if BP_UpgradeExists(upgrade) then
+			Player_SetUpgradeAvailability(player, BP_GetUpgradeBlueprint(upgrade), ITEM_UNLOCKED)
+		end
+	end
+	
+	for k, upgrade in pairs(remove) do
+		if BP_UpgradeExists(upgrade) then
+			Player_SetUpgradeAvailability(player, BP_GetUpgradeBlueprint(upgrade), ITEM_REMOVED)
+		end
+	end
+	
+end
+
+--? @shortdesc Creates a clickable event cue that centers camera on target when clicked.
+--? @extdesc Optionally creates a 5-second hintpoint at/on the target and/or invokes a callback function when clicked (only activated once to avoid stacking).
+--? @args LocString title, [string data_template, Marker/Pos/EGroup/SGroup/entity/squad target, string icon, string sound, 
+--? string blip_template, LuaFunction callback, Boolean dismiss_on_click, LocString hint]
+--? @result event cue ID
+function EventCue_Create(title, data_template, target, icon, sound, blip_template, callback, dismiss_on_click, hint)
+	local id = UI_CreateEventCueClickable(
+		-1,
+		2,
+		20.0,
+		5.0,
+		0,
+		0.0,
+		title,
+		Loc_Empty(),
+		data_template or "low_priority",
+		icon,
+		sound or "",
+		255, 255, 255, 255,
+		ECV_Queue,
+		EventCue_InternalManager)
+
+	-- Use the system in ui.scar
+	local data = {icon = icon, snd = sound, title = title, description = description, lifetime = lifetime, dismissOnClick = dismiss_on_click}
+	_EventCueList[id] = {location = target, hintpoint = hint, extrafunc = callback, lasttrigger = World_GetGameTime(), data = data}
+
+	-- Back-up location in case target squad/entity is destroyed before event cue is clicked
+	if target then
+		_EventCueList[id].backuplocation = Util_GetPosition(target)
+		if scartype(target) == ST_ENTITY then
+			_EventCueList[id].location = Entity_GetID(target)
+		elseif scartype(target) == ST_SQUAD then
+			_EventCueList[id].location = Squad_GetID(target)
+		end
+	end
+
+	-- Ping mini-map
+	if target and blip_template then
+		UI_CreateMinimapBlip(target, 5.0, blip_template)
+	end
+end
+
+--? @shortdesc Get the squad's detachments 
+--? @args Table(Squad) squad 
+--? @result SGroup
+function Anvil_GetSquadDetachments(squad)
+	local squadGroup = SGroup_CreateUnique()
+	
+	Squad_GetStateModelSquadTargetSGroup(squad, "owned_platoons", squadGroup)
+	
+	return squadGroup	
+end
+
+--? @shortdesc Kill pre-placed vehicle entities and collect their wreck entities into the same egroups.
+--? @extdesc The first argument is a table of egroups like {eg_vehicle1, eg_vehicle2}. The second argument lets you collect all the wrecks into a parent egroup.
+--? @args Table wreckGroups, [EGroup overGroup]
+--? @result nil
+function Anvil_SetupWreckRecovery(wreckGroups, overGroup)
+	
+	local wreck_pairs = {}
+	
+	if scartype(overGroup) == ST_STRING then
+		overGroup = EGroup_CreateIfNotFound(overGroup)
+	end
+	
+	for k, group in pairs(wreckGroups) do
+		local pos = EGroup_GetPosition(group)
+		EGroup_Kill(group)
+		EGroup_Clear(group)
+		table.insert(wreck_pairs, {pos = pos, group = group})
+	end
+	
+	Rule_Add(_SetupWreckRecovery_collectWrecks, {wreck_pairs = wreck_pairs, overGroup = overGroup})
+end
+
+function _SetupWreckRecovery_collectWrecks(context, data)
+	local count = 0
+	for k, entry in pairs(data.wreck_pairs) do 
+		World_GetNeutralEntitiesNearPoint(entry.group, entry.pos, 2 --[[ fixed radius of 2]])
+
+		local filter = function(gid, idx, entity)
+			if Entity_IsOfType(entity, "wreck") == false then
+				EGroup_Remove(entry.group, entity)
+			end
+		end
+		EGroup_ForEach(entry.group, filter)
+		if scartype(data.overGroup) == ST_EGROUP then
+			EGroup_AddEGroup(data.overGroup, entry.group)
+		end
+		count = count + EGroup_Count(entry.group)
+	end
+	
+	if count == #data.wreck_pairs then
+		Rule_RemoveMe()
+	end
+end

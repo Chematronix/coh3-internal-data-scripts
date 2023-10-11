@@ -1,0 +1,31 @@
+import("prefabs/schemas/locationgroupinfo.scar")
+-- LOCATION GROUPS
+-- These prefabs specify groups of 'location markers' which are simply SCAR markers tagged with
+-- extra data. These can be used as contexts that are selected dynamically when a playbill is
+-- triggered.
+
+function locationgroup_Init(data)
+	-- Initialization function for locationgroup prefab data.
+	
+	-- Each different tag has its own global context list for easy filtering later on.
+	-- Each context list is stored in g_location_markers:
+	g_location_markers = g_location_markers or {}
+	for i = 1, #data.locations do
+		local location = data.locations[i]
+		
+		-- For every tag that is enabled on the location, add the location to the
+		-- global context list for that tag:
+		local add_location_to_location_list = function(tag)
+			local global_context_list_for_tag = g_location_markers[tag]
+			local location_list_for_tag = global_context_list_for_tag or {} -- nil if this tag hasn't been setup before
+			
+			location_list_for_tag[#location_list_for_tag + 1] = location
+				
+			if global_context_list_for_tag == nil then
+				g_location_markers[tag] = location_list_for_tag
+			end
+		end
+		locationgroup_ForEachCheckedTag(location, add_location_to_location_list)
+	end
+
+end

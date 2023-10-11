@@ -1,0 +1,2168 @@
+--
+-- Narrative Variable Initialization Function
+-- Generated from Articy project - Italy Campaign
+--
+-- Exported by RE\hunterd
+-- Wednesday, February 8, 2023 3:35:09 PM
+--
+-- Essence Toolkit v1.2.0 - 6 February 2023
+--
+
+function InitializeNarrativeVariables()
+
+    SetNarrativeVariable("state_game.battleplan", 1) -- Battleplan selected by the player  1 =US Special Forces 2 = US Armored 3 = UK Armored 
+    SetNarrativeVariable("state_game.battleplan_turn", 0) -- Last turn that battleplan was changed
+    SetNarrativeVariable("state_game.turn", 1) -- Current turn number
+    SetNarrativeVariable("state_game.turn_turn", 0) -- Last turn that turn was changed
+    SetNarrativeVariable("state_game.objective_count", 0) -- Number of objectives currently active
+    SetNarrativeVariable("state_game.objective_count_turn", 0) -- Last turn that objective_count was changed
+    SetNarrativeVariable("state_narrative.narrative_beat", 1) -- 
+    SetNarrativeVariable("state_narrative.narrative_beat_turn", 0) -- Last turn that narrative_beat was changed
+    SetNarrativeVariable("state_narrative.narrative_cooldown", 2) -- 
+    SetNarrativeVariable("state_narrative.narrative_cooldown_turn", 0) -- Last turn that narrative_cooldown was changed
+    SetNarrativeVariable("state_narrative.check_satisfaction", false) -- TRUE if we should consider displaying a subcommander satisfaction beat
+    SetNarrativeVariable("state_narrative.check_satisfaction_turn", 0) -- Last turn that check_satisfaction was changed
+    SetNarrativeVariable("state_narrative.version", 1) -- Number representing version of narrative
+    SetNarrativeVariable("state_narrative.version_turn", 0) -- Last turn that version was changed
+    SetNarrativeVariable("state_subcommander.valenti_override", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_override_turn", 0) -- Last turn that valenti_override was changed
+    SetNarrativeVariable("state_subcommander.norton_override", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_override_turn", 0) -- Last turn that norton_override was changed
+    SetNarrativeVariable("state_subcommander.buckram_override", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_override_turn", 0) -- Last turn that buckram_override was changed
+    SetNarrativeVariable("state_subcommander.buckram_satisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_satisfied_turn", 0) -- Last turn that buckram_satisfied was changed
+    SetNarrativeVariable("state_subcommander.norton_satisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_satisfied_turn", 0) -- Last turn that norton_satisfied was changed
+    SetNarrativeVariable("state_subcommander.valenti_satisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_satisfied_turn", 0) -- Last turn that valenti_satisfied was changed
+    SetNarrativeVariable("state_subcommander.valenti_dissatisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_dissatisfied_turn", 0) -- Last turn that valenti_dissatisfied was changed
+    SetNarrativeVariable("state_subcommander.buckram_dissatisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_dissatisfied_turn", 0) -- Last turn that buckram_dissatisfied was changed
+    SetNarrativeVariable("state_subcommander.norton_dissatisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_dissatisfied_turn", 0) -- Last turn that norton_dissatisfied was changed
+    SetNarrativeVariable("state_subcommander.norton_neutral", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_neutral_turn", 0) -- Last turn that norton_neutral was changed
+    SetNarrativeVariable("state_subcommander.buckram_neutral", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_neutral_turn", 0) -- Last turn that buckram_neutral was changed
+    SetNarrativeVariable("state_subcommander.valenti_neutral", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_neutral_turn", 0) -- Last turn that valenti_neutral was changed
+    SetNarrativeVariable("state_subcommander.norton_override_satisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_override_satisfied_turn", 0) -- Last turn that norton_override_satisfied was changed
+    SetNarrativeVariable("state_subcommander.buckram_override_satisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_override_satisfied_turn", 0) -- Last turn that buckram_override_satisfied was changed
+    SetNarrativeVariable("state_subcommander.valenti_override_satisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_override_satisfied_turn", 0) -- Last turn that valenti_override_satisfied was changed
+    SetNarrativeVariable("state_subcommander.valenti_override_dissatisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_override_dissatisfied_turn", 0) -- Last turn that valenti_override_dissatisfied was changed
+    SetNarrativeVariable("state_subcommander.norton_override_dissatisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_override_dissatisfied_turn", 0) -- Last turn that norton_override_dissatisfied was changed
+    SetNarrativeVariable("state_subcommander.buckram_override_dissatisfied", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_override_dissatisfied_turn", 0) -- Last turn that buckram_override_dissatisfied was changed
+    SetNarrativeVariable("state_subcommander.valenti_override_neutral", false) -- 
+    SetNarrativeVariable("state_subcommander.valenti_override_neutral_turn", 0) -- Last turn that valenti_override_neutral was changed
+    SetNarrativeVariable("state_subcommander.buckram_override_neutral", false) -- 
+    SetNarrativeVariable("state_subcommander.buckram_override_neutral_turn", 0) -- Last turn that buckram_override_neutral was changed
+    SetNarrativeVariable("state_subcommander.norton_override_neutral", false) -- 
+    SetNarrativeVariable("state_subcommander.norton_override_neutral_turn", 0) -- Last turn that norton_override_neutral was changed
+    SetNarrativeVariable("state_subcommander.valenti_abandoned", false) -- TRUE if the Valenti abandoned the player
+    SetNarrativeVariable("state_subcommander.valenti_abandoned_turn", 0) -- Last turn that valenti_abandoned was changed
+    SetNarrativeVariable("state_subcommander.valenti_contacted", false) -- TRUE is the player has made contact with Valenti
+    SetNarrativeVariable("state_subcommander.valenti_contacted_turn", 0) -- Last turn that valenti_contacted was changed
+    SetNarrativeVariable("state_subcommander.buckram_loyalty", 0) -- Current Buckram Loyalty
+    SetNarrativeVariable("state_subcommander.buckram_loyalty_turn", 0) -- Last turn that buckram_loyalty was changed
+    SetNarrativeVariable("state_subcommander.norton_loyalty", 0) -- Current Norton Loyalty
+    SetNarrativeVariable("state_subcommander.norton_loyalty_turn", 0) -- Last turn that norton_loyalty was changed
+    SetNarrativeVariable("state_subcommander.valenti_loyalty", 0) -- Current Valenti Loyalty
+    SetNarrativeVariable("state_subcommander.valenti_loyalty_turn", 0) -- Last turn that valenti_loyalty was changed
+    SetNarrativeVariable("state_subcommander.valenti_loyalty_shadow", 0) -- Valenti's loyalty while her Loyalty is locked
+    SetNarrativeVariable("state_subcommander.valenti_loyalty_shadow_turn", 0) -- Last turn that valenti_loyalty_shadow was changed
+    SetNarrativeVariable("state_subcommander.valenti_loyalty_locked", false) -- TRUE if Valenti is blocked from getting loyalty increases
+    SetNarrativeVariable("state_subcommander.valenti_loyalty_locked_turn", 0) -- Last turn that valenti_loyalty_locked was changed
+    SetNarrativeVariable("state_subcommander.valenti_lock_limit", 59) -- Point at which Valenti's loyalty gets locked
+    SetNarrativeVariable("state_subcommander.valenti_lock_limit_turn", 0) -- Last turn that valenti_lock_limit was changed
+    SetNarrativeVariable("state_subcommander.valenti_enigma_narrative", false) -- TRUE if the Valenti Enigma narrative is complete
+    SetNarrativeVariable("state_subcommander.valenti_enigma_narrative_turn", 0) -- Last turn that valenti_enigma_narrative was changed
+    SetNarrativeVariable("state_event.partisan_resources_success", false) -- TRUE if the player successfully completed the partisan resources event
+    SetNarrativeVariable("state_event.partisan_resources_success_turn", 0) -- Last turn that partisan_resources_success was changed
+    SetNarrativeVariable("state_event.partisan_resources_failure", false) -- TRUE if the player failed the partisan resources event
+    SetNarrativeVariable("state_event.partisan_resources_failure_turn", 0) -- Last turn that partisan_resources_failure was changed
+    SetNarrativeVariable("state_event.partisan_supplyline_failure", false) -- TRUE if the player failed the Partisan supply line event
+    SetNarrativeVariable("state_event.partisan_supplyline_failure_turn", 0) -- Last turn that partisan_supplyline_failure was changed
+    SetNarrativeVariable("state_event.partisan_supplyline_success", false) -- TRUE if the player successfully completed the Partisan supply line event
+    SetNarrativeVariable("state_event.partisan_supplyline_success_turn", 0) -- Last turn that partisan_supplyline_success was changed
+    SetNarrativeVariable("state_event.partisan_rescue_declined", false) -- TRUE if the player declined the Partisan rescue mission
+    SetNarrativeVariable("state_event.partisan_rescue_declined_turn", 0) -- Last turn that partisan_rescue_declined was changed
+    SetNarrativeVariable("state_event.partisan_protect_success", false) -- TRUE if the player successfully completed the Partisan protect event
+    SetNarrativeVariable("state_event.partisan_protect_success_turn", 0) -- Last turn that partisan_protect_success was changed
+    SetNarrativeVariable("na001_bari.concerns_addressed", false) -- TRUE if the player addressed the doctor's concerns 
+    SetNarrativeVariable("na001_bari.concerns_addressed_turn", 0) -- Last turn that concerns_addressed was changed
+    SetNarrativeVariable("na001_bari.partisan_uncovered_truth", false) -- TRUE if the Partisans discovered the truth about Bari
+    SetNarrativeVariable("na001_bari.partisan_uncovered_truth_turn", 0) -- Last turn that partisan_uncovered_truth was changed
+    SetNarrativeVariable("na001_bari.covered_up", false) -- TRUE if the truth about Bari was never revealed
+    SetNarrativeVariable("na001_bari.covered_up_turn", 0) -- Last turn that covered_up was changed
+    SetNarrativeVariable("na001_bari.revealed", false) -- TRUE if the truth about Bari was revealed
+    SetNarrativeVariable("na001_bari.revealed_turn", 0) -- Last turn that revealed was changed
+    SetNarrativeVariable("na001_bari.start_turn", 0) -- Turn on which the Bari event started
+    SetNarrativeVariable("na001_bari.start_turn_turn", 0) -- Last turn that start_turn was changed
+    SetNarrativeVariable("na001_bari.delta", 0) -- Number of turns since the event started
+    SetNarrativeVariable("na001_bari.delta_turn", 0) -- Last turn that delta was changed
+    SetNarrativeVariable("na001_bari.bombing_failed", false) -- TRUE if ships were not bombed
+    SetNarrativeVariable("na001_bari.bombing_failed_turn", 0) -- Last turn that bombing_failed was changed
+    SetNarrativeVariable("na001_bari.bombing_succeeded", false) -- TRUE if ships were successfully bombed
+    SetNarrativeVariable("na001_bari.bombing_succeeded_turn", 0) -- Last turn that bombing_succeeded was changed
+    SetNarrativeVariable("na001_bari.assistance_not_provided", false) -- TRUE if the player didn't provide medical assistance
+    SetNarrativeVariable("na001_bari.assistance_not_provided_turn", 0) -- Last turn that assistance_not_provided was changed
+    SetNarrativeVariable("na001_bari.assistance_provided", false) -- TRUE if the player provided medical assistance
+    SetNarrativeVariable("na001_bari.assistance_provided_turn", 0) -- Last turn that assistance_provided was changed
+    SetNarrativeVariable("na001_bari.concerns_ignored", false) -- TRUE if the player ignore the doctor's concerns
+    SetNarrativeVariable("na001_bari.concerns_ignored_turn", 0) -- Last turn that concerns_ignored was changed
+    SetNarrativeVariable("state_capture.avellino_failure", false) -- TRUE if the player failed the partisan rescue mission
+    SetNarrativeVariable("state_capture.avellino_failure_turn", 0) -- Last turn that avellino_failure was changed
+    SetNarrativeVariable("state_capture.avellino_success", false) -- TRUE if the player successfully completed the partisan rescue mission
+    SetNarrativeVariable("state_capture.avellino_success_turn", 0) -- Last turn that avellino_success was changed
+    SetNarrativeVariable("state_capture.diversion_failure", false) -- TRUE if the player failed the Partisan diversion event
+    SetNarrativeVariable("state_capture.diversion_failure_turn", 0) -- Last turn that diversion_failure was changed
+    SetNarrativeVariable("state_capture.diversion_success", false) -- TRUE if the player successfully completed the partisan diversion event
+    SetNarrativeVariable("state_capture.diversion_success_turn", 0) -- Last turn that diversion_success was changed
+    SetNarrativeVariable("state_capture.partisan_protect_declined", false) -- TRUE if the player declined the Partisan protect event
+    SetNarrativeVariable("state_capture.partisan_protect_declined_turn", 0) -- Last turn that partisan_protect_declined was changed
+    SetNarrativeVariable("state_capture.partisan_protect_failure", false) -- TRUE if the player failed the Partisan protect event
+    SetNarrativeVariable("state_capture.partisan_protect_failure_turn", 0) -- Last turn that partisan_protect_failure was changed
+    SetNarrativeVariable("state_capture.bari_captured", false) -- True if the player has captured Bari
+    SetNarrativeVariable("state_capture.bari_captured_turn", 0) -- Last turn that bari_captured was changed
+    SetNarrativeVariable("state_capture.foggia_captured", false) -- True if the player has captured Foggia
+    SetNarrativeVariable("state_capture.foggia_captured_turn", 0) -- Last turn that foggia_captured was changed
+    SetNarrativeVariable("campaign.buckram_bomb_request_accepted", false) -- TRUE if the player agreed to Buckram's request to bomb
+    SetNarrativeVariable("campaign.buckram_bomb_request_accepted_turn", 0) -- Last turn that buckram_bomb_request_accepted was changed
+    SetNarrativeVariable("campaign.buckram_bomb_request_ignored", false) -- TRUE if the player ignored Buckram's request to bomb
+    SetNarrativeVariable("campaign.buckram_bomb_request_ignored_turn", 0) -- Last turn that buckram_bomb_request_ignored was changed
+    SetNarrativeVariable("campaign.buckram_bomb_request_declined", false) -- TRUE if the player declined Buckram's request to bomb
+    SetNarrativeVariable("campaign.buckram_bomb_request_declined_turn", 0) -- Last turn that buckram_bomb_request_declined was changed
+    SetNarrativeVariable("campaign.battleplan_salerno", false) -- TRUE if the player selected the Salerno battleplan
+    SetNarrativeVariable("campaign.battleplan_salerno_turn", 0) -- Last turn that battleplan_salerno was changed
+    SetNarrativeVariable("campaign.battleplan_taranto", false) -- TRUE if player selected the Taranto battleplan
+    SetNarrativeVariable("campaign.battleplan_taranto_turn", 0) -- Last turn that battleplan_taranto was changed
+    SetNarrativeVariable("campaign.battleplan_combined", false) -- TRUE if player selected the two landing battleplan
+    SetNarrativeVariable("campaign.battleplan_combined_turn", 0) -- Last turn that battleplan_combined was changed
+    SetNarrativeVariable("campaign.buckram", true) -- TRUE if player agrees to bomb
+    SetNarrativeVariable("campaign.buckram_turn", 0) -- Last turn that buckram was changed
+    SetNarrativeVariable("campaign.norton", true) -- TRUE if player agrees to land first
+    SetNarrativeVariable("campaign.norton_turn", 0) -- Last turn that norton was changed
+    SetNarrativeVariable("campaign.valentia", true) -- TRUE if the player agrees to help the partisans
+    SetNarrativeVariable("campaign.valentia_turn", 0) -- Last turn that valentia was changed
+    SetNarrativeVariable("campaign.valentib", true) -- TRUE if the player doens't agreet to help the partisans
+    SetNarrativeVariable("campaign.valentib_turn", 0) -- Last turn that valentib was changed
+    SetNarrativeVariable("narrative_config.disable_arcs", false) -- TRUE if we should disable all narrative arcs
+    SetNarrativeVariable("narrative_config.disable_arcs_turn", 0) -- Last turn that disable_arcs was changed
+    SetNarrativeVariable("narrative_config.disable_core", false) -- TRUE if the main narrative is disabled
+    SetNarrativeVariable("narrative_config.disable_core_turn", 0) -- Last turn that disable_core was changed
+    SetNarrativeVariable("narrative_config.fast_core", false) -- TRUE if we should play through the narrative as quickly as possible
+    SetNarrativeVariable("narrative_config.fast_core_turn", 0) -- Last turn that fast_core was changed
+    SetNarrativeVariable("termoli.fsj_deployable", false) -- 
+    SetNarrativeVariable("termoli.fsj_deployable_turn", 0) -- Last turn that fsj_deployable was changed
+    SetNarrativeVariable("termoli.panzers_nearby", false) -- 
+    SetNarrativeVariable("termoli.panzers_nearby_turn", 0) -- Last turn that panzers_nearby was changed
+    SetNarrativeVariable("skr003_state.xtrooper_fuelmissed", false) -- Either when the fuel was missed or the player doesn't know about it
+    SetNarrativeVariable("skr003_state.xtrooper_fuelmissed_turn", 0) -- Last turn that xtrooper_fuelmissed was changed
+    SetNarrativeVariable("skr003_state.xtrooper_fuelretrieved", false) -- When the player picks up the fuel
+    SetNarrativeVariable("skr003_state.xtrooper_fuelretrieved_turn", 0) -- Last turn that xtrooper_fuelretrieved was changed
+    SetNarrativeVariable("skr003_state.xtrooper_fuelstart", false) -- When the second set of letters have appeared
+    SetNarrativeVariable("skr003_state.xtrooper_fuelstart_turn", 0) -- Last turn that xtrooper_fuelstart was changed
+    SetNarrativeVariable("soldier_story_state.cpy001_chapter", 1) -- Current chapter for First Company Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy001_chapter_turn", 0) -- Last turn that cpy001_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy002_chapter", 1) -- Current chapter for Company Block In 2 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy002_chapter_turn", 0) -- Last turn that cpy002_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy003_chapter", 1) -- Current chapter for Company Block In 3 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy003_chapter_turn", 0) -- Last turn that cpy003_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy004_chapter", 1) -- Current chapter for Company Block In 4 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy004_chapter_turn", 0) -- Last turn that cpy004_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy005_chapter", 1) -- Current chapter for Company Block In 5 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy005_chapter_turn", 0) -- Last turn that cpy005_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy006_chapter", 1) -- Current chapter for Company Block In 6 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy006_chapter_turn", 0) -- Last turn that cpy006_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy007_chapter", 1) -- Current chapter for Company Block In 7 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy007_chapter_turn", 0) -- Last turn that cpy007_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy008_chapter", 1) -- Current chapter for Company Block In 8 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy008_chapter_turn", 0) -- Last turn that cpy008_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy009_chapter", 1) -- Current chapter for Company Block In 9 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy009_chapter_turn", 0) -- Last turn that cpy009_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy010_chapter", 1) -- Current chapter for Company Block In 10 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy010_chapter_turn", 0) -- Last turn that cpy010_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy011_chapter", 1) -- Current chapter for Company Block In 11 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy011_chapter_turn", 0) -- Last turn that cpy011_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy012_chapter", 1) -- Current chapter for Company Block In 12 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy012_chapter_turn", 0) -- Last turn that cpy012_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy013_chapter", 1) -- Current chapter for Company Block In 13 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy013_chapter_turn", 0) -- Last turn that cpy013_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy014_chapter", 1) -- Current chapter for Company Block In 14 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy014_chapter_turn", 0) -- Last turn that cpy014_chapter was changed
+    SetNarrativeVariable("soldier_story_state.cpy015_chapter", 1) -- Current chapter for Company Block In 15 Soldier Story
+    SetNarrativeVariable("soldier_story_state.cpy015_chapter_turn", 0) -- Last turn that cpy015_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh001_chapter", 1) -- Current chapter for Pomigliano Goggles Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh001_chapter_turn", 0) -- Last turn that msh001_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh002_chapter", 1) -- Current chapter for Gela Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh002_chapter_turn", 0) -- Last turn that msh002_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh003_chapter", 1) -- Current chapter for Potenza Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh003_chapter_turn", 0) -- Last turn that msh003_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh004_chapter", 1) -- Current chapter for Salerno Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh004_chapter_turn", 0) -- Last turn that msh004_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh005_chapter", 1) -- Current chapter for Termoli Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh005_chapter_turn", 0) -- Last turn that msh005_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh006_chapter", 1) -- Current chapter for Anzio Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh006_chapter_turn", 0) -- Last turn that msh006_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh007_chapter", 1) -- Current chapter for Ortona Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh007_chapter_turn", 0) -- Last turn that msh007_chapter was changed
+    SetNarrativeVariable("soldier_story_state.msh008_chapter", 1) -- Current chapter for Gaeta Mission Soldier Story
+    SetNarrativeVariable("soldier_story_state.msh008_chapter_turn", 0) -- Last turn that msh008_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr001_chapter", 1) -- Current chapter for WASP Soldier Story
+    SetNarrativeVariable("soldier_story_state.skr001_chapter_turn", 0) -- Last turn that skr001_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr002_chapter", 1) -- Current chapter for The Medic Soldier Story
+    SetNarrativeVariable("soldier_story_state.skr002_chapter_turn", 0) -- Last turn that skr002_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr003_chapter", 1) -- Current chapter for Xtrooper Soldier Story
+    SetNarrativeVariable("soldier_story_state.skr003_chapter_turn", 0) -- Last turn that skr003_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr004_chapter", 1) -- Current chapter for The Chaplian Soldier Story
+    SetNarrativeVariable("soldier_story_state.skr004_chapter_turn", 0) -- Last turn that skr004_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_salerno", 1) -- Current chapter for The Travel Writer Soldier Story - Salerno
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_salerno_turn", 0) -- Last turn that skr005_chapter_salerno was changed
+    SetNarrativeVariable("soldier_story_state.skr006_chapter", 1) -- Current chapter for Terry the Postman Soldeir Story
+    SetNarrativeVariable("soldier_story_state.skr006_chapter_turn", 0) -- Last turn that skr006_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr007_chapter", 1) -- Current chapter for Nikola the Infiltrator Soldier Story
+    SetNarrativeVariable("soldier_story_state.skr007_chapter_turn", 0) -- Last turn that skr007_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr008_chapter", 1) -- Current chapter for Joe the Family Man Soldier Soldier Story
+    SetNarrativeVariable("soldier_story_state.skr008_chapter_turn", 0) -- Last turn that skr008_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr009_chapter", 1) -- Current Chapter for the Polish Soldier
+    SetNarrativeVariable("soldier_story_state.skr009_chapter_turn", 0) -- Last turn that skr009_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr010_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr010_chapter_turn", 0) -- Last turn that skr010_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr011_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr011_chapter_turn", 0) -- Last turn that skr011_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr012_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr012_chapter_turn", 0) -- Last turn that skr012_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr013_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr013_chapter_turn", 0) -- Last turn that skr013_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr014_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr014_chapter_turn", 0) -- Last turn that skr014_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr015_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr015_chapter_turn", 0) -- Last turn that skr015_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr016_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr016_chapter_turn", 0) -- Last turn that skr016_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr017_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr017_chapter_turn", 0) -- Last turn that skr017_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr018_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr018_chapter_turn", 0) -- Last turn that skr018_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr019_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr019_chapter_turn", 0) -- Last turn that skr019_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr020_chapter", 1) -- 
+    SetNarrativeVariable("soldier_story_state.skr020_chapter_turn", 0) -- Last turn that skr020_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr201_chapter", 1) -- Current chapter for The Artist Sildier Story
+    SetNarrativeVariable("soldier_story_state.skr201_chapter_turn", 0) -- Last turn that skr201_chapter was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_naples", 1) -- Current chapter for The Travel Writer Soldier Story - Naples
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_naples_turn", 0) -- Last turn that skr005_chapter_naples was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_potenza", 1) -- Current chapter for The Travel Writer Soldier Story - Potenza
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_potenza_turn", 0) -- Last turn that skr005_chapter_potenza was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_bari", 1) -- Current chapter for The Travel Writer Soldier Story - Bari
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_bari_turn", 0) -- Last turn that skr005_chapter_bari was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_taranto", 1) -- Current chapter for The Travel Writer Soldier Story - Taranto
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_taranto_turn", 0) -- Last turn that skr005_chapter_taranto was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_gaeta", 1) -- Current chapter for The Travel Writer Soldier Story - Gaeta
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_gaeta_turn", 0) -- Last turn that skr005_chapter_gaeta was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_avellino", 1) -- Current chapter for The Travel Writer Soldier Story - Avellino
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_avellino_turn", 0) -- Last turn that skr005_chapter_avellino was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_foggia", 1) -- Current chapter for The Travel Writer Soldier Story - Foggia
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_foggia_turn", 0) -- Last turn that skr005_chapter_foggia was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_termoli", 1) -- Current chapter for The Travel Writer Soldier Story - Termoli
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_termoli_turn", 0) -- Last turn that skr005_chapter_termoli was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_sanpancrazio", 1) -- Current chapter for The Travel Writer Soldier Story - San Pancrazio Salentino
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_sanpancrazio_turn", 0) -- Last turn that skr005_chapter_sanpancrazio was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_casteldisangro", 1) -- Current chapter for The Travel Writer Soldier Story - Castel Di Sangro
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_casteldisangro_turn", 0) -- Last turn that skr005_chapter_casteldisangro was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_calitri", 1) -- Current chapter for The Travel Writer Soldier Story - Calitri
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_calitri_turn", 0) -- Last turn that skr005_chapter_calitri was changed
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_benevento", 1) -- Current chapter for The Travel Writer Soldier Story - Benevento
+    SetNarrativeVariable("soldier_story_state.skr005_chapter_benevento_turn", 0) -- Last turn that skr005_chapter_benevento was changed
+    SetNarrativeVariable("event_beachhead.complete", false) -- TRUE if the Establish a Beachhead objective has been completed
+    SetNarrativeVariable("event_beachhead.complete_turn", 0) -- Last turn that complete was changed
+    SetNarrativeVariable("event_beachhead.emplacements_destroyed", false) -- TRUE if the player has destroyed nearby emplacements
+    SetNarrativeVariable("event_beachhead.emplacements_destroyed_turn", 0) -- Last turn that emplacements_destroyed was changed
+    SetNarrativeVariable("event_beachhead.towns_captured", false) -- TRUE if the player has captured nearby towns
+    SetNarrativeVariable("event_beachhead.towns_captured_turn", 0) -- Last turn that towns_captured was changed
+    SetNarrativeVariable("event_beachhead.salerno_captured", false) -- TRUE if the player has captured Salerno
+    SetNarrativeVariable("event_beachhead.salerno_captured_turn", 0) -- Last turn that salerno_captured was changed
+    SetNarrativeVariable("event_beachhead.naval_bombardment", false) -- TRUE if the player agrees to bomb
+    SetNarrativeVariable("event_beachhead.naval_bombardment_turn", 0) -- Last turn that naval_bombardment was changed
+    SetNarrativeVariable("event_beachhead.emplacement", 1) -- Number wills determine which line in random will be played
+    SetNarrativeVariable("event_beachhead.emplacement_turn", 0) -- Last turn that emplacement was changed
+    SetNarrativeVariable("event_beachhead.german_counterattack", false) -- TRUE if the Germans have counterattacked Salerno
+    SetNarrativeVariable("event_beachhead.german_counterattack_turn", 0) -- Last turn that german_counterattack was changed
+    SetNarrativeVariable("gustav_line.montecassino_captured", false) -- TRUE if the player has captured Monte Cassino
+    SetNarrativeVariable("gustav_line.montecassino_captured_turn", 0) -- Last turn that montecassino_captured was changed
+    SetNarrativeVariable("gustav_line.montecassino_bombed", false) -- TRUE if the player has bombed Monte Cassino
+    SetNarrativeVariable("gustav_line.montecassino_bombed_turn", 0) -- Last turn that montecassino_bombed was changed
+    SetNarrativeVariable("gustav_line.montecassino_partisans", false) -- TRUE if the player has started partisan recon
+    SetNarrativeVariable("gustav_line.montecassino_partisans_turn", 0) -- Last turn that montecassino_partisans was changed
+    SetNarrativeVariable("gustav_line.anzio_annie", 1) -- Number for current line in random
+    SetNarrativeVariable("gustav_line.anzio_annie_turn", 0) -- Last turn that anzio_annie was changed
+    SetNarrativeVariable("na002_termoli.foggia_intel_destroyed", false) -- TRUE if the player failed to collect the intel
+    SetNarrativeVariable("na002_termoli.foggia_intel_destroyed_turn", 0) -- Last turn that foggia_intel_destroyed was changed
+    SetNarrativeVariable("na002_termoli.foggia_intel_gathered", false) -- TRUE if the player has collected intel
+    SetNarrativeVariable("na002_termoli.foggia_intel_gathered_turn", 0) -- Last turn that foggia_intel_gathered was changed
+    SetNarrativeVariable("na002_termoli.foggia_partisans_failed", false) -- TRUE if the partisan group isn't saved
+    SetNarrativeVariable("na002_termoli.foggia_partisans_failed_turn", 0) -- Last turn that foggia_partisans_failed was changed
+    SetNarrativeVariable("na002_termoli.foggia_partisans_saved", false) -- TRUE if the partisan group saved
+    SetNarrativeVariable("na002_termoli.foggia_partisans_saved_turn", 0) -- Last turn that foggia_partisans_saved was changed
+    SetNarrativeVariable("na003_potenza.potenza_snipers_killed", false) -- TRUE if all the snipers have been killed
+    SetNarrativeVariable("na003_potenza.potenza_snipers_killed_turn", 0) -- Last turn that potenza_snipers_killed was changed
+    SetNarrativeVariable("na003_potenza.potenza_snipers_not_killed", false) -- TRUE if all the snipers aren't killed
+    SetNarrativeVariable("na003_potenza.potenza_snipers_not_killed_turn", 0) -- Last turn that potenza_snipers_not_killed was changed
+    SetNarrativeVariable("na003_potenza.potenza_supply_lines", false) -- TURE if the player has heard about supply lines
+    SetNarrativeVariable("na003_potenza.potenza_supply_lines_turn", 0) -- Last turn that potenza_supply_lines was changed
+    SetNarrativeVariable("na003_potenza.potenza_solid_front", false) -- TRUE if the player has heard about creating a solid front
+    SetNarrativeVariable("na003_potenza.potenza_solid_front_turn", 0) -- Last turn that potenza_solid_front was changed
+    SetNarrativeVariable("na003_potenza.potenza_track_meet", false) -- TRUE if the player does the track meet
+    SetNarrativeVariable("na003_potenza.potenza_track_meet_turn", 0) -- Last turn that potenza_track_meet was changed
+    SetNarrativeVariable("na003_potenza.potenza_sniper_cleanup", false) -- TRUE if the player has to clear out snipers
+    SetNarrativeVariable("na003_potenza.potenza_sniper_cleanup_turn", 0) -- Last turn that potenza_sniper_cleanup was changed
+    SetNarrativeVariable("na003_potenza.potenza_track_meet_denied", false) -- TRUE if the track meet was denied
+    SetNarrativeVariable("na003_potenza.potenza_track_meet_denied_turn", 0) -- Last turn that potenza_track_meet_denied was changed
+    SetNarrativeVariable("na005_beer_run.beer_allowed", false) -- TRUE if the player ALLOWED beer deliveries to be made
+    SetNarrativeVariable("na005_beer_run.beer_allowed_turn", 0) -- Last turn that beer_allowed was changed
+    SetNarrativeVariable("na005_beer_run.beer_disallowed", false) -- TRUE if the player DID NOT ALLOW beer deliveries to be made
+    SetNarrativeVariable("na005_beer_run.beer_disallowed_turn", 0) -- Last turn that beer_disallowed was changed
+    SetNarrativeVariable("winter_line.winter_line_reminder", 1) -- To pick from a group of lines
+    SetNarrativeVariable("winter_line.winter_line_reminder_turn", 0) -- Last turn that winter_line_reminder was changed
+    SetNarrativeVariable("winter_line.geisler_killed", false) -- TRUE if the player completed the Geisler Hunt mission
+    SetNarrativeVariable("winter_line.geisler_killed_turn", 0) -- Last turn that geisler_killed was changed
+    SetNarrativeVariable("winter_line.pilot_rescued", false) -- TRUE if the player rescued the downed pilot
+    SetNarrativeVariable("winter_line.pilot_rescued_turn", 0) -- Last turn that pilot_rescued was changed
+    SetNarrativeVariable("winter_line.enigma_machine", false) -- TRUE if player has the Enigma machine
+    SetNarrativeVariable("winter_line.enigma_machine_turn", 0) -- Last turn that enigma_machine was changed
+    SetNarrativeVariable("random.current", 0) -- 
+    SetNarrativeVariable("random.current_turn", 0) -- Last turn that current was changed
+    SetNarrativeVariable("na006_foggia.planes_left", false) -- If all of the planes from Foggia have left
+    SetNarrativeVariable("na006_foggia.planes_left_turn", 0) -- Last turn that planes_left was changed
+    SetNarrativeVariable("na006_foggia.planes_bombed2", false) -- True if the player has been bombed 2 times
+    SetNarrativeVariable("na006_foggia.planes_bombed2_turn", 0) -- Last turn that planes_bombed2 was changed
+    SetNarrativeVariable("na006_foggia.planes_bombed4", false) -- True if the player has been bombed 4 times
+    SetNarrativeVariable("na006_foggia.planes_bombed4_turn", 0) -- Last turn that planes_bombed4 was changed
+    SetNarrativeVariable("na006_foggia.valenti_warning", false) -- True if the player has already heard the warning
+    SetNarrativeVariable("na006_foggia.valenti_warning_turn", 0) -- Last turn that valenti_warning was changed
+    SetNarrativeVariable("na006_foggia.depot_bombed", false) -- Ture if a depo has already been bombed from Foggia
+    SetNarrativeVariable("na006_foggia.depot_bombed_turn", 0) -- Last turn that depot_bombed was changed
+    SetNarrativeVariable("na008_riverairfield.gustav_line_active", false) -- TRUE if the Gustav line is active 
+    SetNarrativeVariable("na008_riverairfield.gustav_line_active_turn", 0) -- Last turn that gustav_line_active was changed
+    SetNarrativeVariable("na008_riverairfield.volturno_line_active", false) -- TRUE if the Volturno line is active
+    SetNarrativeVariable("na008_riverairfield.volturno_line_active_turn", 0) -- Last turn that volturno_line_active was changed
+    SetNarrativeVariable("na008_riverairfield.volturno_line_completed", false) -- TRUE if the player has completed the Volturno Line
+    SetNarrativeVariable("na008_riverairfield.volturno_line_completed_turn", 0) -- Last turn that volturno_line_completed was changed
+    SetNarrativeVariable("na008_riverairfield.bomb_ortona", false) -- TRUE if the player has heard the line about bombing Ortona
+    SetNarrativeVariable("na008_riverairfield.bomb_ortona_turn", 0) -- Last turn that bomb_ortona was changed
+    SetNarrativeVariable("na008_riverairfield.aquino_aquired", false) -- TRUE if the player owns Aquino
+    SetNarrativeVariable("na008_riverairfield.aquino_aquired_turn", 0) -- Last turn that aquino_aquired was changed
+    SetNarrativeVariable("na008_riverairfield.ortona_player", false) -- TRUE if the player owns Ortona
+    SetNarrativeVariable("na008_riverairfield.ortona_player_turn", 0) -- Last turn that ortona_player was changed
+    SetNarrativeVariable("na009_riverrescue.lucera_captured", false) -- TRUE if Lucera is captured before Benevento
+    SetNarrativeVariable("na009_riverrescue.lucera_captured_turn", 0) -- Last turn that lucera_captured was changed
+    SetNarrativeVariable("na009_riverrescue.benevento_started", false) -- TRUE if the player has started Benevento arc without captureing Lucera
+    SetNarrativeVariable("na009_riverrescue.benevento_started_turn", 0) -- Last turn that benevento_started was changed
+    SetNarrativeVariable("na009_riverrescue.river_rescue_started", false) -- TRUE when the player has started the first obejctive of the mission
+    SetNarrativeVariable("na009_riverrescue.river_rescue_started_turn", 0) -- Last turn that river_rescue_started was changed
+    SetNarrativeVariable("na009_riverrescue.river_rescue_completed", false) -- TRUE if the player has completed the mission successfully
+    SetNarrativeVariable("na009_riverrescue.river_rescue_completed_turn", 0) -- Last turn that river_rescue_completed was changed
+    SetNarrativeVariable("na009_riverrescue.benevento_reminder", false) -- TRUE if the player has seen the reminder
+    SetNarrativeVariable("na009_riverrescue.benevento_reminder_turn", 0) -- Last turn that benevento_reminder was changed
+    SetNarrativeVariable("na010_caminocapture.intel_rumour", false) -- TRUE if the player has heard the rumour about a POW camp
+    SetNarrativeVariable("na010_caminocapture.intel_rumour_turn", 0) -- Last turn that intel_rumour was changed
+    SetNarrativeVariable("na010_caminocapture.norton_route_to_rome", false) -- TRUE if Norton talked about the route to Rome
+    SetNarrativeVariable("na010_caminocapture.norton_route_to_rome_turn", 0) -- Last turn that norton_route_to_rome was changed
+    SetNarrativeVariable("na010_caminocapture.buckram_route_to_rome", false) -- TRUE if Buckram talked about the route to Rome
+    SetNarrativeVariable("na010_caminocapture.buckram_route_to_rome_turn", 0) -- Last turn that buckram_route_to_rome was changed
+    SetNarrativeVariable("na012_vehiclerecovery.tank_recovered", false) -- TRUE if the player has restored the tank
+    SetNarrativeVariable("na012_vehiclerecovery.tank_recovered_turn", 0) -- Last turn that tank_recovered was changed
+    SetNarrativeVariable("na012_vehiclerecovery.tank_valenti", false) -- TRUE if the player gives the tank to Valenti
+    SetNarrativeVariable("na012_vehiclerecovery.tank_valenti_turn", 0) -- Last turn that tank_valenti was changed
+    SetNarrativeVariable("na012_vehiclerecovery.past_gustav", false) -- TRUE if all locations near Agone have been captured
+    SetNarrativeVariable("na012_vehiclerecovery.past_gustav_turn", 0) -- Last turn that past_gustav was changed
+    SetNarrativeVariable("state_campaign_narrative.propaganda_radio_enabled", false) -- TRUE if propaganda radio is enabled
+    SetNarrativeVariable("state_campaign_narrative.propaganda_radio_enabled_turn", 0) -- Last turn that propaganda_radio_enabled was changed
+    SetNarrativeVariable("state_campaign_narrative.naples_uprising_failed", false) -- TRUE if the uprising event at Naples was failed
+    SetNarrativeVariable("state_campaign_narrative.naples_uprising_failed_turn", 0) -- Last turn that naples_uprising_failed was changed
+    SetNarrativeVariable("state_campaign_narrative.naples_uprising_destroyed", false) -- TRUE if Naples was destroyed during the uprising
+    SetNarrativeVariable("state_campaign_narrative.naples_uprising_destroyed_turn", 0) -- Last turn that naples_uprising_destroyed was changed
+    SetNarrativeVariable("state_campaign_narrative.propaganda_radio_trigger", false) -- TRUE if radio should trigger this turn
+    SetNarrativeVariable("state_campaign_narrative.propaganda_radio_trigger_turn", 0) -- Last turn that propaganda_radio_trigger was changed
+    SetNarrativeVariable("state_campaign_narrative.naples_uprising_started", false) -- TRUE is Naples uprising event started
+    SetNarrativeVariable("state_campaign_narrative.naples_uprising_started_turn", 0) -- Last turn that naples_uprising_started was changed
+    SetNarrativeVariable("state_campaign_narrative.dellucci_killed", false) -- TRUE if Giorgio Dellucci has been killed
+    SetNarrativeVariable("state_campaign_narrative.dellucci_killed_turn", 0) -- Last turn that dellucci_killed was changed
+    SetNarrativeVariable("state_campaign_narrative.dellucci_met", false) -- TRUE if Giorgio Dellucci has been met
+    SetNarrativeVariable("state_campaign_narrative.dellucci_met_turn", 0) -- Last turn that dellucci_met was changed
+    SetNarrativeVariable("state_campaign_narrative.dellucci_injured", false) -- TRUE if Giorgio Dellucci has been injured
+    SetNarrativeVariable("state_campaign_narrative.dellucci_injured_turn", 0) -- Last turn that dellucci_injured was changed
+    SetNarrativeVariable("state_campaign_narrative.anzio_expired", false) -- TRUE if the player didn't complete Anzio in time
+    SetNarrativeVariable("state_campaign_narrative.anzio_expired_turn", 0) -- Last turn that anzio_expired was changed
+    SetNarrativeVariable("state_campaign_narrative.anzio_neglected", false) -- TRUE if Norton was really angry about Anzio
+    SetNarrativeVariable("state_campaign_narrative.anzio_neglected_turn", 0) -- Last turn that anzio_neglected was changed
+    SetNarrativeVariable("na017_valenti_intro.requests", 0) -- Number of requests for help made by Valenti
+    SetNarrativeVariable("na017_valenti_intro.requests_turn", 0) -- Last turn that requests was changed
+    SetNarrativeVariable("na017_valenti_intro.partisans_rescued", false) -- TRUE if the Partisans have been rescued
+    SetNarrativeVariable("na017_valenti_intro.partisans_rescued_turn", 0) -- Last turn that partisans_rescued was changed
+    SetNarrativeVariable("na017_valenti_intro.distress_call_answered", false) -- TRUE if the initial distress call is answered
+    SetNarrativeVariable("na017_valenti_intro.distress_call_answered_turn", 0) -- Last turn that distress_call_answered was changed
+    SetNarrativeVariable("na017_valenti_intro.help_given", false) -- 
+    SetNarrativeVariable("na017_valenti_intro.help_given_turn", 0) -- Last turn that help_given was changed
+    SetNarrativeVariable("na017_valenti_intro.help_refused", false) -- 
+    SetNarrativeVariable("na017_valenti_intro.help_refused_turn", 0) -- Last turn that help_refused was changed
+    SetNarrativeVariable("na017_valenti_intro.mission_completed", false) -- TRUE if the player has completed the mission
+    SetNarrativeVariable("na017_valenti_intro.mission_completed_turn", 0) -- Last turn that mission_completed was changed
+    SetNarrativeVariable("na017_valenti_intro.mission_started", false) -- TRUE if the player has seen the intro camera
+    SetNarrativeVariable("na017_valenti_intro.mission_started_turn", 0) -- Last turn that mission_started was changed
+    SetNarrativeVariable("na018_valenti_rumour.buckram_response", false) -- TRUE if Buckram responded to the rumour
+    SetNarrativeVariable("na018_valenti_rumour.buckram_response_turn", 0) -- Last turn that buckram_response was changed
+    SetNarrativeVariable("na018_valenti_rumour.norton_response", false) -- TRUE if Norton responded to the rumour
+    SetNarrativeVariable("na018_valenti_rumour.norton_response_turn", 0) -- Last turn that norton_response was changed
+    SetNarrativeVariable("na018_valenti_rumour.rumour_heard", false) -- TRUE if Axis Sofia has spread the rumour
+    SetNarrativeVariable("na018_valenti_rumour.rumour_heard_turn", 0) -- Last turn that rumour_heard was changed
+    SetNarrativeVariable("na018_valenti_rumour.rumour_investigated", false) -- TRUE if the Valenti rumour was investigated
+    SetNarrativeVariable("na018_valenti_rumour.rumour_investigated_turn", 0) -- Last turn that rumour_investigated was changed
+    SetNarrativeVariable("state_mission.us_company", false) -- TRUE if the company in the mission is US
+    SetNarrativeVariable("state_mission.us_company_turn", 0) -- Last turn that us_company was changed
+    SetNarrativeVariable("state_mission.british_company", false) -- TRUE if the company in the mission is British
+    SetNarrativeVariable("state_mission.british_company_turn", 0) -- Last turn that british_company was changed
+    SetNarrativeVariable("na020_devils_brigade.active", false) -- TRUE if The Devil's Brigade company is active
+    SetNarrativeVariable("na020_devils_brigade.active_turn", 0) -- Last turn that active was changed
+    SetNarrativeVariable("na020_devils_brigade.killed", false) -- TRUE if The Devil's Brigade company has been killed
+    SetNarrativeVariable("na020_devils_brigade.killed_turn", 0) -- Last turn that killed was changed
+    SetNarrativeVariable("na020_devils_brigade.break_contact_success", false) -- TRUE is Break Contact mission was successful
+    SetNarrativeVariable("na020_devils_brigade.break_contact_success_turn", 0) -- Last turn that break_contact_success was changed
+    SetNarrativeVariable("na020_devils_brigade.break_contact_failure", false) -- TRUE if Break Contact mission was failed
+    SetNarrativeVariable("na020_devils_brigade.break_contact_failure_turn", 0) -- Last turn that break_contact_failure was changed
+    SetNarrativeVariable("na020_devils_brigade.recon_success", false) -- TRUE if recon objective was completed
+    SetNarrativeVariable("na020_devils_brigade.recon_success_turn", 0) -- Last turn that recon_success was changed
+    SetNarrativeVariable("na020_devils_brigade.recon_failure", false) -- TRUE if recon objective was failed
+    SetNarrativeVariable("na020_devils_brigade.recon_failure_turn", 0) -- Last turn that recon_failure was changed
+    SetNarrativeVariable("na020_devils_brigade.geisler_spooked", false) -- TRUE if another company spooked Geisler
+    SetNarrativeVariable("na020_devils_brigade.geisler_spooked_turn", 0) -- Last turn that geisler_spooked was changed
+    SetNarrativeVariable("na020_devils_brigade.assassination_success", false) -- TRUE is Assassination mission was complete
+    SetNarrativeVariable("na020_devils_brigade.assassination_success_turn", 0) -- Last turn that assassination_success was changed
+    SetNarrativeVariable("na020_devils_brigade.assassination_failed", false) -- TRUE is Assassination mission was failed
+    SetNarrativeVariable("na020_devils_brigade.assassination_failed_turn", 0) -- Last turn that assassination_failed was changed
+    SetNarrativeVariable("na020_devils_brigade.geislers_alive", false) -- TRUE if Brigade know The Devil's Brigade is alive
+    SetNarrativeVariable("na020_devils_brigade.geislers_alive_turn", 0) -- Last turn that geislers_alive was changed
+    SetNarrativeVariable("na020_devils_brigade.geisler_taunt", false) -- TRUE if Geisler has taunted The Devil's Brigade
+    SetNarrativeVariable("na020_devils_brigade.geisler_taunt_turn", 0) -- Last turn that geisler_taunt was changed
+    SetNarrativeVariable("na020_devils_brigade.recon_ignored", false) -- TRUE if the player ignored the Recon event
+    SetNarrativeVariable("na020_devils_brigade.recon_ignored_turn", 0) -- Last turn that recon_ignored was changed
+    SetNarrativeVariable("state_intel.in001_reported", false) -- TRUE is in001 has been seen by the player
+    SetNarrativeVariable("state_intel.in001_reported_turn", 0) -- Last turn that in001_reported was changed
+    SetNarrativeVariable("state_intel.in002_reported", false) -- TRUE if in002 as been seen by the player
+    SetNarrativeVariable("state_intel.in002_reported_turn", 0) -- Last turn that in002_reported was changed
+    SetNarrativeVariable("state_intel.in003_reported", false) -- TRUE is in003 has been seen by the player
+    SetNarrativeVariable("state_intel.in003_reported_turn", 0) -- Last turn that in003_reported was changed
+    SetNarrativeVariable("state_intel.in004_reported", false) -- TRUE is in004 has been seen by the player
+    SetNarrativeVariable("state_intel.in004_reported_turn", 0) -- Last turn that in004_reported was changed
+    SetNarrativeVariable("pb001_salerno_start.supported_buckram", false) -- TRUE if the player chose Buckram's landing option
+    SetNarrativeVariable("pb001_salerno_start.supported_buckram_turn", 0) -- Last turn that supported_buckram was changed
+    SetNarrativeVariable("pb001_salerno_start.supported_norton", false) -- TRUE is the player chose Norton's landing option
+    SetNarrativeVariable("pb001_salerno_start.supported_norton_turn", 0) -- Last turn that supported_norton was changed
+    SetNarrativeVariable("pb001_salerno_start.landing_completed", false) -- TRUE if the player has landed the troops
+    SetNarrativeVariable("pb001_salerno_start.landing_completed_turn", 0) -- Last turn that landing_completed was changed
+    SetNarrativeVariable("pb001_salerno_start.bombing_completed", false) -- TRUE if the player has bombarded
+    SetNarrativeVariable("pb001_salerno_start.bombing_completed_turn", 0) -- Last turn that bombing_completed was changed
+    SetNarrativeVariable("pb001_salerno_start.salerno_foothold_complete", false) -- TRUE if the player got a foothold in Salerno
+    SetNarrativeVariable("pb001_salerno_start.salerno_foothold_complete_turn", 0) -- Last turn that salerno_foothold_complete was changed
+    SetNarrativeVariable("game_options.profanity_filter", true) -- TRUE if the game's profanity filter is turned on.
+    SetNarrativeVariable("game_options.profanity_filter_turn", 0) -- Last turn that profanity_filter was changed
+    SetNarrativeVariable("na025_enigma.mission_attempted", false) -- TRUE if the player as attemped the Enigma mission
+    SetNarrativeVariable("na025_enigma.mission_attempted_turn", 0) -- Last turn that mission_attempted was changed
+    SetNarrativeVariable("na025_enigma.enigma_rumour", false) -- TRUE if player has heard the Engima Machine rumour
+    SetNarrativeVariable("na025_enigma.enigma_rumour_turn", 0) -- Last turn that enigma_rumour was changed
+    SetNarrativeVariable("na025_enigma.mission_success", false) -- TRUE if the player succeeded at the Enigma Machine mission
+    SetNarrativeVariable("na025_enigma.mission_success_turn", 0) -- Last turn that mission_success was changed
+    SetNarrativeVariable("na025_enigma.mission_ignored", false) -- TRUE if the player ignored the Enigma Machine mission
+    SetNarrativeVariable("na025_enigma.mission_ignored_turn", 0) -- Last turn that mission_ignored was changed
+    SetNarrativeVariable("na025_enigma.mission_failed", false) -- TRUE if the player failed the Enigma Machine mission
+    SetNarrativeVariable("na025_enigma.mission_failed_turn", 0) -- Last turn that mission_failed was changed
+    SetNarrativeVariable("na025_enigma.partisan_recover", false) -- TRUE if the Partisans recovered the Enigma Machine
+    SetNarrativeVariable("na025_enigma.partisan_recover_turn", 0) -- Last turn that partisan_recover was changed
+    SetNarrativeVariable("na025_enigma.start_decision", 0) -- Which start dialogue should we play?
+    SetNarrativeVariable("na025_enigma.start_decision_turn", 0) -- Last turn that start_decision was changed
+    SetNarrativeVariable("na025_enigma.mission_started", false) -- TRUE if the player has seen the intro camera
+    SetNarrativeVariable("na025_enigma.mission_started_turn", 0) -- Last turn that mission_started was changed
+    SetNarrativeVariable("na027_extraction.intro_complete", false) -- TRUE once the intro dialogue has been played
+    SetNarrativeVariable("na027_extraction.intro_complete_turn", 0) -- Last turn that intro_complete was changed
+    SetNarrativeVariable("na027_extraction.started", false) -- TRUE if the player has started the distraction event
+    SetNarrativeVariable("na027_extraction.started_turn", 0) -- Last turn that started was changed
+    SetNarrativeVariable("na027_extraction.ignored", false) -- TRUE if the player ignored the objective
+    SetNarrativeVariable("na027_extraction.ignored_turn", 0) -- Last turn that ignored was changed
+    SetNarrativeVariable("na027_extraction.failed", false) -- TRUE if the player failed the objective
+    SetNarrativeVariable("na027_extraction.failed_turn", 0) -- Last turn that failed was changed
+    SetNarrativeVariable("na027_extraction.success", false) -- TRUE if the player successfully completed the extraction objective
+    SetNarrativeVariable("na027_extraction.success_turn", 0) -- Last turn that success was changed
+    SetNarrativeVariable("na027_extraction.valenti_deployed", false) -- TRUE when Valenti has started deploying her own Partisans
+    SetNarrativeVariable("na027_extraction.valenti_deployed_turn", 0) -- Last turn that valenti_deployed was changed
+    SetNarrativeVariable("na027_extraction.assist_started", false) -- TRUE if the player started the reminder objective
+    SetNarrativeVariable("na027_extraction.assist_started_turn", 0) -- Last turn that assist_started was changed
+    SetNarrativeVariable("na027_extraction.assist_ignored", false) -- TRIE of the player ignored the reminder objective
+    SetNarrativeVariable("na027_extraction.assist_ignored_turn", 0) -- Last turn that assist_ignored was changed
+    SetNarrativeVariable("na027_extraction.assist_success", false) -- TRUE if the player successfully completed the reminder
+    SetNarrativeVariable("na027_extraction.assist_success_turn", 0) -- Last turn that assist_success was changed
+    SetNarrativeVariable("na027_extraction.assist_failed", false) -- TRUE if the player failed the reminder objective
+    SetNarrativeVariable("na027_extraction.assist_failed_turn", 0) -- Last turn that assist_failed was changed
+    SetNarrativeVariable("na027_extraction.deploy_reminded", false) -- TRUE if the player has been reminded about deploying the Partisans
+    SetNarrativeVariable("na027_extraction.deploy_reminded_turn", 0) -- Last turn that deploy_reminded was changed
+    SetNarrativeVariable("na027_extraction.partisans_deployed", false) -- TRUE if the player has deployed partisan units
+    SetNarrativeVariable("na027_extraction.partisans_deployed_turn", 0) -- Last turn that partisans_deployed was changed
+    SetNarrativeVariable("na027_extraction.slow_response", false) -- TRUE if Partisans may react to player requests more slowly
+    SetNarrativeVariable("na027_extraction.slow_response_turn", 0) -- Last turn that slow_response was changed
+    SetNarrativeVariable("na027_extraction.forces_promise", false) -- TRUE if the player promised to keep forces away from the operation
+    SetNarrativeVariable("na027_extraction.forces_promise_turn", 0) -- Last turn that forces_promise was changed
+    SetNarrativeVariable("na004_geislerhunt.ch1_post_battle", false) -- TRUE when skirmish is completed
+    SetNarrativeVariable("na004_geislerhunt.ch1_post_battle_turn", 0) -- Last turn that ch1_post_battle was changed
+    SetNarrativeVariable("na004_geislerhunt.ch2_post_battle", false) -- TRUE when skirmish is completed
+    SetNarrativeVariable("na004_geislerhunt.ch2_post_battle_turn", 0) -- Last turn that ch2_post_battle was changed
+    SetNarrativeVariable("na004_geislerhunt.ch1_ignored", false) -- TRUE if the player ignores going to Vinchiaturo
+    SetNarrativeVariable("na004_geislerhunt.ch1_ignored_turn", 0) -- Last turn that ch1_ignored was changed
+    SetNarrativeVariable("na004_geislerhunt.ch1_arrived", false) -- TRUE if the player gets to Vinchiaturo 
+    SetNarrativeVariable("na004_geislerhunt.ch1_arrived_turn", 0) -- Last turn that ch1_arrived was changed
+    SetNarrativeVariable("na004_geislerhunt.ch3_geisler_attacked", false) -- TRUE if Geisler attacked Foggia
+    SetNarrativeVariable("na004_geislerhunt.ch3_geisler_attacked_turn", 0) -- Last turn that ch3_geisler_attacked was changed
+    SetNarrativeVariable("na004_geislerhunt.ch3_geisler_defeated", false) -- TRUE if the player beat Geisler
+    SetNarrativeVariable("na004_geislerhunt.ch3_geisler_defeated_turn", 0) -- Last turn that ch3_geisler_defeated was changed
+    SetNarrativeVariable("na004_geislerhunt.ch3_geisler_won", false) -- TRUE if Geisler captured Foggia
+    SetNarrativeVariable("na004_geislerhunt.ch3_geisler_won_turn", 0) -- Last turn that ch3_geisler_won was changed
+    SetNarrativeVariable("na004_geislerhunt.finally_completed", false) -- TRUE if the player has finished the objective to hunt for Geisler
+    SetNarrativeVariable("na004_geislerhunt.finally_completed_turn", 0) -- Last turn that finally_completed was changed
+    SetNarrativeVariable("na004_geislerhunt.geislerhunt_active", false) -- TRUE if an event is activate
+    SetNarrativeVariable("na004_geislerhunt.geislerhunt_active_turn", 0) -- Last turn that geislerhunt_active was changed
+    SetNarrativeVariable("pb003_potenza_retreat.escaped", false) -- TRUE if the Germans successfully retreated
+    SetNarrativeVariable("pb003_potenza_retreat.escaped_turn", 0) -- Last turn that escaped was changed
+    SetNarrativeVariable("pb003_potenza_retreat.stopped", false) -- TRUE if the player stopped the German retreat
+    SetNarrativeVariable("pb003_potenza_retreat.stopped_turn", 0) -- Last turn that stopped was changed
+    SetNarrativeVariable("pb003_potenza_retreat.started", false) -- TRUE if the player was told the retreat has started
+    SetNarrativeVariable("pb003_potenza_retreat.started_turn", 0) -- Last turn that started was changed
+    SetNarrativeVariable("pb003_potenza_retreat.close", false) -- TRUE if the Germans got close to Potenza
+    SetNarrativeVariable("pb003_potenza_retreat.close_turn", 0) -- Last turn that close was changed
+    SetNarrativeVariable("pb004_foggia_retreat.escaped", false) -- TRUE if the Germans successfully retreated
+    SetNarrativeVariable("pb004_foggia_retreat.escaped_turn", 0) -- Last turn that escaped was changed
+    SetNarrativeVariable("pb004_foggia_retreat.stopped", false) -- TRUE if the player stopped the German retreat
+    SetNarrativeVariable("pb004_foggia_retreat.stopped_turn", 0) -- Last turn that stopped was changed
+    SetNarrativeVariable("pb004_foggia_retreat.started", false) -- TRUE if the player was told the retreat has started
+    SetNarrativeVariable("pb004_foggia_retreat.started_turn", 0) -- Last turn that started was changed
+    SetNarrativeVariable("calabria_tutorial.tropea_agreed", false) -- TRUE when player agrees to go after Tropea first
+    SetNarrativeVariable("calabria_tutorial.tropea_agreed_turn", 0) -- Last turn that tropea_agreed was changed
+    SetNarrativeVariable("calabria_tutorial.cittanova_agreed", false) -- TRUE when player agrees to go after Cittanova first
+    SetNarrativeVariable("calabria_tutorial.cittanova_agreed_turn", 0) -- Last turn that cittanova_agreed was changed
+    SetNarrativeVariable("calabria_tutorial.changed", false) -- TRUE when the player changes their mind on which town to go after first
+    SetNarrativeVariable("calabria_tutorial.changed_turn", 0) -- Last turn that changed was changed
+    SetNarrativeVariable("calabria_tutorial.cittanova_captured", false) -- TRUE Cittanova was captured
+    SetNarrativeVariable("calabria_tutorial.cittanova_captured_turn", 0) -- Last turn that cittanova_captured was changed
+    SetNarrativeVariable("calabria_tutorial.tropea_captured", false) -- TRUE Tropea was captured
+    SetNarrativeVariable("calabria_tutorial.tropea_captured_turn", 0) -- Last turn that tropea_captured was changed
+    SetNarrativeVariable("calabria_tutorial.beach_agreed", false) -- TRUE if the player has agreed to do a ship landing
+    SetNarrativeVariable("calabria_tutorial.beach_agreed_turn", 0) -- Last turn that beach_agreed was changed
+    SetNarrativeVariable("calabria_tutorial.towns_agreed", false) -- TRUE if the player has agreed to go after additional towns
+    SetNarrativeVariable("calabria_tutorial.towns_agreed_turn", 0) -- Last turn that towns_agreed was changed
+    SetNarrativeVariable("na015_montecassino.bombing_warning", false) -- TRUE if bombing warning has been given
+    SetNarrativeVariable("na015_montecassino.bombing_warning_turn", 0) -- Last turn that bombing_warning was changed
+    SetNarrativeVariable("na015_montecassino.buckram_loyalty_high", false) -- TRUE if bombing event was triggered when Buckram's loyalty was high
+    SetNarrativeVariable("na015_montecassino.buckram_loyalty_high_turn", 0) -- Last turn that buckram_loyalty_high was changed
+    SetNarrativeVariable("na015_montecassino.buckram_loyalty_neutral", false) -- TRUE if bombing was triggered when Buckram's loyalty was neutral
+    SetNarrativeVariable("na015_montecassino.buckram_loyalty_neutral_turn", 0) -- Last turn that buckram_loyalty_neutral was changed
+    SetNarrativeVariable("na015_montecassino.buckram_loyalty_low", false) -- TRUE if bombing was triggered when Buckram's loyalty was low
+    SetNarrativeVariable("na015_montecassino.buckram_loyalty_low_turn", 0) -- Last turn that buckram_loyalty_low was changed
+    SetNarrativeVariable("na015_montecassino.valenti_knows", false) -- TRUE if Valenti knows about the bombing
+    SetNarrativeVariable("na015_montecassino.valenti_knows_turn", 0) -- Last turn that valenti_knows was changed
+    SetNarrativeVariable("ly002_nephew.norton_nephew_rumour", false) -- TRUE if the Norton discussed intel on his nephew
+    SetNarrativeVariable("ly002_nephew.norton_nephew_rumour_turn", 0) -- Last turn that norton_nephew_rumour was changed
+    SetNarrativeVariable("ly002_nephew.norton_mission_rejected", false) -- TRUE if the player refused to go after Norton's nephew
+    SetNarrativeVariable("ly002_nephew.norton_mission_rejected_turn", 0) -- Last turn that norton_mission_rejected was changed
+    SetNarrativeVariable("ly002_nephew.norton_mission_accepted", false) -- TRUE if the player agreed to go after Norton's nephew
+    SetNarrativeVariable("ly002_nephew.norton_mission_accepted_turn", 0) -- Last turn that norton_mission_accepted was changed
+    SetNarrativeVariable("ly002_nephew.norton_mission_failed", false) -- TRUE if the player failed the Norton mission
+    SetNarrativeVariable("ly002_nephew.norton_mission_failed_turn", 0) -- Last turn that norton_mission_failed was changed
+    SetNarrativeVariable("ly002_nephew.nephew_dead", false) -- TRUE if Norton's nephew was killed
+    SetNarrativeVariable("ly002_nephew.nephew_dead_turn", 0) -- Last turn that nephew_dead was changed
+    SetNarrativeVariable("ly002_nephew.special_treatment", false) -- TRUE if Buckram comments on Norton getting special treatment
+    SetNarrativeVariable("ly002_nephew.special_treatment_turn", 0) -- Last turn that special_treatment was changed
+    SetNarrativeVariable("ly002_nephew.norton_mission_completed", false) -- TRUE if the player has completed the mission successfully
+    SetNarrativeVariable("ly002_nephew.norton_mission_completed_turn", 0) -- Last turn that norton_mission_completed was changed
+    SetNarrativeVariable("ly002_nephew.mission_started", false) -- TRUE if the player has seen the intro cam
+    SetNarrativeVariable("ly002_nephew.mission_started_turn", 0) -- Last turn that mission_started was changed
+    SetNarrativeVariable("na028_foggia_intel.buckram_low", false) -- Arc starts with Buckram low loyalty
+    SetNarrativeVariable("na028_foggia_intel.buckram_low_turn", 0) -- Last turn that buckram_low was changed
+    SetNarrativeVariable("na028_foggia_intel.buckram_mid", false) -- Arc starts with Buckram mid or higher loyalty
+    SetNarrativeVariable("na028_foggia_intel.buckram_mid_turn", 0) -- Last turn that buckram_mid was changed
+    SetNarrativeVariable("na028_foggia_intel.mid_choices", 0) -- number indicates the option picked
+    SetNarrativeVariable("na028_foggia_intel.mid_choices_turn", 0) -- Last turn that mid_choices was changed
+    SetNarrativeVariable("na028_foggia_intel.low_choices", 0) -- number indicates the option picked
+    SetNarrativeVariable("na028_foggia_intel.low_choices_turn", 0) -- Last turn that low_choices was changed
+    SetNarrativeVariable("na028_foggia_intel.valenti_warning", 1) -- number indicates the number seen by the player
+    SetNarrativeVariable("na028_foggia_intel.valenti_warning_turn", 0) -- Last turn that valenti_warning was changed
+    SetNarrativeVariable("na028_foggia_intel.devils_active", false) -- Devil's active when AI spanwed
+    SetNarrativeVariable("na028_foggia_intel.devils_active_turn", 0) -- Last turn that devils_active was changed
+    SetNarrativeVariable("na028_foggia_intel.choice_ignored", false) -- True if the player has gone against their choice
+    SetNarrativeVariable("na028_foggia_intel.choice_ignored_turn", 0) -- Last turn that choice_ignored was changed
+    SetNarrativeVariable("na028_foggia_intel.mid_choices1", false) -- True if the player selects the 1st choice
+    SetNarrativeVariable("na028_foggia_intel.mid_choices1_turn", 0) -- Last turn that mid_choices1 was changed
+    SetNarrativeVariable("na028_foggia_intel.mid_choices2", false) -- True if the player selects the 2nd choice
+    SetNarrativeVariable("na028_foggia_intel.mid_choices2_turn", 0) -- Last turn that mid_choices2 was changed
+    SetNarrativeVariable("na028_foggia_intel.mid_choices3", false) -- True if the player selects the 3rd choice
+    SetNarrativeVariable("na028_foggia_intel.mid_choices3_turn", 0) -- Last turn that mid_choices3 was changed
+    SetNarrativeVariable("na028_foggia_intel.mid_choices4", false) -- True if the player selects the 4th choice
+    SetNarrativeVariable("na028_foggia_intel.mid_choices4_turn", 0) -- Last turn that mid_choices4 was changed
+    SetNarrativeVariable("na028_foggia_intel.low_choices1", false) -- True if the player selects the 1st choice
+    SetNarrativeVariable("na028_foggia_intel.low_choices1_turn", 0) -- Last turn that low_choices1 was changed
+    SetNarrativeVariable("na028_foggia_intel.low_choices2", false) -- True if the player selects the 2nd choice
+    SetNarrativeVariable("na028_foggia_intel.low_choices2_turn", 0) -- Last turn that low_choices2 was changed
+    SetNarrativeVariable("na028_foggia_intel.low_choices3", false) -- True if the player selects the 3rd choice
+    SetNarrativeVariable("na028_foggia_intel.low_choices3_turn", 0) -- Last turn that low_choices3 was changed
+    SetNarrativeVariable("ly003_captain.norton_breach", false) -- TRUE if it was Norton that brought up the breach
+    SetNarrativeVariable("ly003_captain.norton_breach_turn", 0) -- Last turn that norton_breach was changed
+    SetNarrativeVariable("ly003_captain.aircraft_commandeered", false) -- TRUE if the plane has been taken 
+    SetNarrativeVariable("ly003_captain.aircraft_commandeered_turn", 0) -- Last turn that aircraft_commandeered was changed
+    SetNarrativeVariable("ly003_captain.captain_saved", false) -- TRUE if the Captain survives the mission
+    SetNarrativeVariable("ly003_captain.captain_saved_turn", 0) -- Last turn that captain_saved was changed
+    SetNarrativeVariable("ly003_captain.buckram_mission_accepted", false) -- TRUE if the player agrees to the mission
+    SetNarrativeVariable("ly003_captain.buckram_mission_accepted_turn", 0) -- Last turn that buckram_mission_accepted was changed
+    SetNarrativeVariable("ly003_captain.buckram_mission_rejected", false) -- TRUE if the player rejects the mission
+    SetNarrativeVariable("ly003_captain.buckram_mission_rejected_turn", 0) -- Last turn that buckram_mission_rejected was changed
+    SetNarrativeVariable("ly003_captain.buckram_mission_completed", false) -- TRUE if the player completes the mission
+    SetNarrativeVariable("ly003_captain.buckram_mission_completed_turn", 0) -- Last turn that buckram_mission_completed was changed
+    SetNarrativeVariable("ly003_captain.buckram_mission_failed", false) -- TRUE if the player fails the mission
+    SetNarrativeVariable("ly003_captain.buckram_mission_failed_turn", 0) -- Last turn that buckram_mission_failed was changed
+    SetNarrativeVariable("ly003_captain.mission_started", false) -- TRUE if the player has seen the intro cam
+    SetNarrativeVariable("ly003_captain.mission_started_turn", 0) -- Last turn that mission_started was changed
+    SetNarrativeVariable("pb014_increase_foothold.naples_picked", false) -- TRUE if the player intends to capture Naples First
+    SetNarrativeVariable("pb014_increase_foothold.naples_picked_turn", 0) -- Last turn that naples_picked was changed
+    SetNarrativeVariable("pb014_increase_foothold.potenza_picked", false) -- TRUE if the player intends to capture Potenza First
+    SetNarrativeVariable("pb014_increase_foothold.potenza_picked_turn", 0) -- Last turn that potenza_picked was changed
+    SetNarrativeVariable("pb014_increase_foothold.foggia_picked", false) -- TRUE if the player intends to capture Foggia First
+    SetNarrativeVariable("pb014_increase_foothold.foggia_picked_turn", 0) -- Last turn that foggia_picked was changed
+    SetNarrativeVariable("pb014_increase_foothold.naples_captured", false) -- TRUE if the player captures Naples
+    SetNarrativeVariable("pb014_increase_foothold.naples_captured_turn", 0) -- Last turn that naples_captured was changed
+    SetNarrativeVariable("pb014_increase_foothold.potenza_captured", false) -- TRUE if the player captures potenza
+    SetNarrativeVariable("pb014_increase_foothold.potenza_captured_turn", 0) -- Last turn that potenza_captured was changed
+    SetNarrativeVariable("pb014_increase_foothold.increase_foothold", false) -- TRUE if the player agrees to increase the foothold further over going North
+    SetNarrativeVariable("pb014_increase_foothold.increase_foothold_turn", 0) -- Last turn that increase_foothold was changed
+    SetNarrativeVariable("ly004_turnabout.context_buckram", false) -- TRUE if Buckram brought up the trapped allies
+    SetNarrativeVariable("ly004_turnabout.context_buckram_turn", 0) -- Last turn that context_buckram was changed
+    SetNarrativeVariable("ly004_turnabout.mission_declined", false) -- TRUE if the player declined the mission
+    SetNarrativeVariable("ly004_turnabout.mission_declined_turn", 0) -- Last turn that mission_declined was changed
+    SetNarrativeVariable("ly004_turnabout.mission_ignored", false) -- TRUE if player ignored the mission
+    SetNarrativeVariable("ly004_turnabout.mission_ignored_turn", 0) -- Last turn that mission_ignored was changed
+    SetNarrativeVariable("ly004_turnabout.mission_success", false) -- TRUE if the player successfully completed the mission
+    SetNarrativeVariable("ly004_turnabout.mission_success_turn", 0) -- Last turn that mission_success was changed
+    SetNarrativeVariable("ly004_turnabout.spy_found", false) -- TRUE if the player found the spy
+    SetNarrativeVariable("ly004_turnabout.spy_found_turn", 0) -- Last turn that spy_found was changed
+    SetNarrativeVariable("ly004_turnabout.buckram_accusation", false) -- TRUE if Buckram accused the Partisans
+    SetNarrativeVariable("ly004_turnabout.buckram_accusation_turn", 0) -- Last turn that buckram_accusation was changed
+    SetNarrativeVariable("ly004_turnabout.norton_accusation", false) -- TRUE if Norton accused the Partisans
+    SetNarrativeVariable("ly004_turnabout.norton_accusation_turn", 0) -- Last turn that norton_accusation was changed
+    SetNarrativeVariable("ly004_turnabout.mission_accepted", false) -- TRUE if the player accepted the mission
+    SetNarrativeVariable("ly004_turnabout.mission_accepted_turn", 0) -- Last turn that mission_accepted was changed
+    SetNarrativeVariable("ly004_turnabout.lost_contact", false) -- TRUE when the first narrative lines are played
+    SetNarrativeVariable("ly004_turnabout.lost_contact_turn", 0) -- Last turn that lost_contact was changed
+    SetNarrativeVariable("ly004_turnabout.mission_started", false) -- TRUE if the player has seen the intro cam
+    SetNarrativeVariable("ly004_turnabout.mission_started_turn", 0) -- Last turn that mission_started was changed
+    SetNarrativeVariable("pb015_supply.introduction", false) -- TRUE if the Introduction has been given
+    SetNarrativeVariable("pb015_supply.introduction_turn", 0) -- Last turn that introduction was changed
+    SetNarrativeVariable("pb015_supply.buckram_airfields", false) -- TRUE if Buckram has talked about airfields
+    SetNarrativeVariable("pb015_supply.buckram_airfields_turn", 0) -- Last turn that buckram_airfields was changed
+    SetNarrativeVariable("pb015_supply.scotch", false) -- TRUE if Buckram has commented on Norton's Scotch
+    SetNarrativeVariable("pb015_supply.scotch_turn", 0) -- Last turn that scotch was changed
+    SetNarrativeVariable("pb015_supply.support_request", false) -- TRUE if Norton asked for support from Buckram
+    SetNarrativeVariable("pb015_supply.support_request_turn", 0) -- Last turn that support_request was changed
+    SetNarrativeVariable("pb015_supply.supply_highpoint", 0) -- Latest highpoint for supply
+    SetNarrativeVariable("pb015_supply.supply_highpoint_turn", 0) -- Last turn that supply_highpoint was changed
+    SetNarrativeVariable("pb015_supply.current_supply", 0) -- Current amount of supply
+    SetNarrativeVariable("pb015_supply.current_supply_turn", 0) -- Last turn that current_supply was changed
+    SetNarrativeVariable("pb015_supply.uncaptured_airfields", true) -- TRUE if there are uncaptured airfields available
+    SetNarrativeVariable("pb015_supply.uncaptured_airfields_turn", 0) -- Last turn that uncaptured_airfields was changed
+    SetNarrativeVariable("na019_ice_cream.request_played", false) -- TRUE if Conti's request for ice cream has played
+    SetNarrativeVariable("na019_ice_cream.request_played_turn", 0) -- Last turn that request_played was changed
+
+end
+
+g_narrative_variable_sets = 
+{
+    "<none>",
+    "state_game",
+    "state_narrative",
+    "state_subcommander",
+    "state_event",
+    "na001_bari",
+    "state_capture",
+    "campaign",
+    "narrative_config",
+    "termoli",
+    "skr003_state",
+    "soldier_story_state",
+    "event_beachhead",
+    "gustav_line",
+    "na002_termoli",
+    "na003_potenza",
+    "na005_beer_run",
+    "winter_line",
+    "random",
+    "na006_foggia",
+    "na008_riverairfield",
+    "na009_riverrescue",
+    "na010_caminocapture",
+    "na012_vehiclerecovery",
+    "state_campaign_narrative",
+    "na017_valenti_intro",
+    "na018_valenti_rumour",
+    "state_mission",
+    "na020_devils_brigade",
+    "state_intel",
+    "pb001_salerno_start",
+    "game_options",
+    "na025_enigma",
+    "na027_extraction",
+    "na004_geislerhunt",
+    "pb003_potenza_retreat",
+    "pb004_foggia_retreat",
+    "calabria_tutorial",
+    "na015_montecassino",
+    "ly002_nephew",
+    "na028_foggia_intel",
+    "ly003_captain",
+    "pb014_increase_foothold",
+    "ly004_turnabout",
+    "pb015_supply",
+    "na019_ice_cream",
+}
+
+g_state_game =
+{
+    "<none>",
+    "battleplan",
+    "battleplan_turn",
+    "turn",
+    "turn_turn",
+    "objective_count",
+    "objective_count_turn",
+}
+
+g_state_narrative =
+{
+    "<none>",
+    "narrative_beat",
+    "narrative_beat_turn",
+    "narrative_cooldown",
+    "narrative_cooldown_turn",
+    "check_satisfaction",
+    "check_satisfaction_turn",
+    "version",
+    "version_turn",
+}
+
+g_state_subcommander =
+{
+    "<none>",
+    "valenti_override",
+    "valenti_override_turn",
+    "norton_override",
+    "norton_override_turn",
+    "buckram_override",
+    "buckram_override_turn",
+    "buckram_satisfied",
+    "buckram_satisfied_turn",
+    "norton_satisfied",
+    "norton_satisfied_turn",
+    "valenti_satisfied",
+    "valenti_satisfied_turn",
+    "valenti_dissatisfied",
+    "valenti_dissatisfied_turn",
+    "buckram_dissatisfied",
+    "buckram_dissatisfied_turn",
+    "norton_dissatisfied",
+    "norton_dissatisfied_turn",
+    "norton_neutral",
+    "norton_neutral_turn",
+    "buckram_neutral",
+    "buckram_neutral_turn",
+    "valenti_neutral",
+    "valenti_neutral_turn",
+    "norton_override_satisfied",
+    "norton_override_satisfied_turn",
+    "buckram_override_satisfied",
+    "buckram_override_satisfied_turn",
+    "valenti_override_satisfied",
+    "valenti_override_satisfied_turn",
+    "valenti_override_dissatisfied",
+    "valenti_override_dissatisfied_turn",
+    "norton_override_dissatisfied",
+    "norton_override_dissatisfied_turn",
+    "buckram_override_dissatisfied",
+    "buckram_override_dissatisfied_turn",
+    "valenti_override_neutral",
+    "valenti_override_neutral_turn",
+    "buckram_override_neutral",
+    "buckram_override_neutral_turn",
+    "norton_override_neutral",
+    "norton_override_neutral_turn",
+    "valenti_abandoned",
+    "valenti_abandoned_turn",
+    "valenti_contacted",
+    "valenti_contacted_turn",
+    "buckram_loyalty",
+    "buckram_loyalty_turn",
+    "norton_loyalty",
+    "norton_loyalty_turn",
+    "valenti_loyalty",
+    "valenti_loyalty_turn",
+    "valenti_loyalty_shadow",
+    "valenti_loyalty_shadow_turn",
+    "valenti_loyalty_locked",
+    "valenti_loyalty_locked_turn",
+    "valenti_lock_limit",
+    "valenti_lock_limit_turn",
+    "valenti_enigma_narrative",
+    "valenti_enigma_narrative_turn",
+}
+
+g_state_event =
+{
+    "<none>",
+    "partisan_resources_success",
+    "partisan_resources_success_turn",
+    "partisan_resources_failure",
+    "partisan_resources_failure_turn",
+    "partisan_supplyline_failure",
+    "partisan_supplyline_failure_turn",
+    "partisan_supplyline_success",
+    "partisan_supplyline_success_turn",
+    "partisan_rescue_declined",
+    "partisan_rescue_declined_turn",
+    "partisan_protect_success",
+    "partisan_protect_success_turn",
+}
+
+g_na001_bari =
+{
+    "<none>",
+    "concerns_addressed",
+    "concerns_addressed_turn",
+    "partisan_uncovered_truth",
+    "partisan_uncovered_truth_turn",
+    "covered_up",
+    "covered_up_turn",
+    "revealed",
+    "revealed_turn",
+    "start_turn",
+    "start_turn_turn",
+    "delta",
+    "delta_turn",
+    "bombing_failed",
+    "bombing_failed_turn",
+    "bombing_succeeded",
+    "bombing_succeeded_turn",
+    "assistance_not_provided",
+    "assistance_not_provided_turn",
+    "assistance_provided",
+    "assistance_provided_turn",
+    "concerns_ignored",
+    "concerns_ignored_turn",
+}
+
+g_state_capture =
+{
+    "<none>",
+    "avellino_failure",
+    "avellino_failure_turn",
+    "avellino_success",
+    "avellino_success_turn",
+    "diversion_failure",
+    "diversion_failure_turn",
+    "diversion_success",
+    "diversion_success_turn",
+    "partisan_protect_declined",
+    "partisan_protect_declined_turn",
+    "partisan_protect_failure",
+    "partisan_protect_failure_turn",
+    "bari_captured",
+    "bari_captured_turn",
+    "foggia_captured",
+    "foggia_captured_turn",
+}
+
+g_campaign =
+{
+    "<none>",
+    "buckram_bomb_request_accepted",
+    "buckram_bomb_request_accepted_turn",
+    "buckram_bomb_request_ignored",
+    "buckram_bomb_request_ignored_turn",
+    "buckram_bomb_request_declined",
+    "buckram_bomb_request_declined_turn",
+    "battleplan_salerno",
+    "battleplan_salerno_turn",
+    "battleplan_taranto",
+    "battleplan_taranto_turn",
+    "battleplan_combined",
+    "battleplan_combined_turn",
+    "buckram",
+    "buckram_turn",
+    "norton",
+    "norton_turn",
+    "valentia",
+    "valentia_turn",
+    "valentib",
+    "valentib_turn",
+}
+
+g_narrative_config =
+{
+    "<none>",
+    "disable_arcs",
+    "disable_arcs_turn",
+    "disable_core",
+    "disable_core_turn",
+    "fast_core",
+    "fast_core_turn",
+}
+
+g_termoli =
+{
+    "<none>",
+    "fsj_deployable",
+    "fsj_deployable_turn",
+    "panzers_nearby",
+    "panzers_nearby_turn",
+}
+
+g_skr003_state =
+{
+    "<none>",
+    "xtrooper_fuelmissed",
+    "xtrooper_fuelmissed_turn",
+    "xtrooper_fuelretrieved",
+    "xtrooper_fuelretrieved_turn",
+    "xtrooper_fuelstart",
+    "xtrooper_fuelstart_turn",
+}
+
+g_soldier_story_state =
+{
+    "<none>",
+    "cpy001_chapter",
+    "cpy001_chapter_turn",
+    "cpy002_chapter",
+    "cpy002_chapter_turn",
+    "cpy003_chapter",
+    "cpy003_chapter_turn",
+    "cpy004_chapter",
+    "cpy004_chapter_turn",
+    "cpy005_chapter",
+    "cpy005_chapter_turn",
+    "cpy006_chapter",
+    "cpy006_chapter_turn",
+    "cpy007_chapter",
+    "cpy007_chapter_turn",
+    "cpy008_chapter",
+    "cpy008_chapter_turn",
+    "cpy009_chapter",
+    "cpy009_chapter_turn",
+    "cpy010_chapter",
+    "cpy010_chapter_turn",
+    "cpy011_chapter",
+    "cpy011_chapter_turn",
+    "cpy012_chapter",
+    "cpy012_chapter_turn",
+    "cpy013_chapter",
+    "cpy013_chapter_turn",
+    "cpy014_chapter",
+    "cpy014_chapter_turn",
+    "cpy015_chapter",
+    "cpy015_chapter_turn",
+    "msh001_chapter",
+    "msh001_chapter_turn",
+    "msh002_chapter",
+    "msh002_chapter_turn",
+    "msh003_chapter",
+    "msh003_chapter_turn",
+    "msh004_chapter",
+    "msh004_chapter_turn",
+    "msh005_chapter",
+    "msh005_chapter_turn",
+    "msh006_chapter",
+    "msh006_chapter_turn",
+    "msh007_chapter",
+    "msh007_chapter_turn",
+    "msh008_chapter",
+    "msh008_chapter_turn",
+    "skr001_chapter",
+    "skr001_chapter_turn",
+    "skr002_chapter",
+    "skr002_chapter_turn",
+    "skr003_chapter",
+    "skr003_chapter_turn",
+    "skr004_chapter",
+    "skr004_chapter_turn",
+    "skr005_chapter_salerno",
+    "skr005_chapter_salerno_turn",
+    "skr006_chapter",
+    "skr006_chapter_turn",
+    "skr007_chapter",
+    "skr007_chapter_turn",
+    "skr008_chapter",
+    "skr008_chapter_turn",
+    "skr009_chapter",
+    "skr009_chapter_turn",
+    "skr010_chapter",
+    "skr010_chapter_turn",
+    "skr011_chapter",
+    "skr011_chapter_turn",
+    "skr012_chapter",
+    "skr012_chapter_turn",
+    "skr013_chapter",
+    "skr013_chapter_turn",
+    "skr014_chapter",
+    "skr014_chapter_turn",
+    "skr015_chapter",
+    "skr015_chapter_turn",
+    "skr016_chapter",
+    "skr016_chapter_turn",
+    "skr017_chapter",
+    "skr017_chapter_turn",
+    "skr018_chapter",
+    "skr018_chapter_turn",
+    "skr019_chapter",
+    "skr019_chapter_turn",
+    "skr020_chapter",
+    "skr020_chapter_turn",
+    "skr201_chapter",
+    "skr201_chapter_turn",
+    "skr005_chapter_naples",
+    "skr005_chapter_naples_turn",
+    "skr005_chapter_potenza",
+    "skr005_chapter_potenza_turn",
+    "skr005_chapter_bari",
+    "skr005_chapter_bari_turn",
+    "skr005_chapter_taranto",
+    "skr005_chapter_taranto_turn",
+    "skr005_chapter_gaeta",
+    "skr005_chapter_gaeta_turn",
+    "skr005_chapter_avellino",
+    "skr005_chapter_avellino_turn",
+    "skr005_chapter_foggia",
+    "skr005_chapter_foggia_turn",
+    "skr005_chapter_termoli",
+    "skr005_chapter_termoli_turn",
+    "skr005_chapter_sanpancrazio",
+    "skr005_chapter_sanpancrazio_turn",
+    "skr005_chapter_casteldisangro",
+    "skr005_chapter_casteldisangro_turn",
+    "skr005_chapter_calitri",
+    "skr005_chapter_calitri_turn",
+    "skr005_chapter_benevento",
+    "skr005_chapter_benevento_turn",
+}
+
+g_event_beachhead =
+{
+    "<none>",
+    "complete",
+    "complete_turn",
+    "emplacements_destroyed",
+    "emplacements_destroyed_turn",
+    "towns_captured",
+    "towns_captured_turn",
+    "salerno_captured",
+    "salerno_captured_turn",
+    "naval_bombardment",
+    "naval_bombardment_turn",
+    "emplacement",
+    "emplacement_turn",
+    "german_counterattack",
+    "german_counterattack_turn",
+}
+
+g_gustav_line =
+{
+    "<none>",
+    "montecassino_captured",
+    "montecassino_captured_turn",
+    "montecassino_bombed",
+    "montecassino_bombed_turn",
+    "montecassino_partisans",
+    "montecassino_partisans_turn",
+    "anzio_annie",
+    "anzio_annie_turn",
+}
+
+g_na002_termoli =
+{
+    "<none>",
+    "foggia_intel_destroyed",
+    "foggia_intel_destroyed_turn",
+    "foggia_intel_gathered",
+    "foggia_intel_gathered_turn",
+    "foggia_partisans_failed",
+    "foggia_partisans_failed_turn",
+    "foggia_partisans_saved",
+    "foggia_partisans_saved_turn",
+}
+
+g_na003_potenza =
+{
+    "<none>",
+    "potenza_snipers_killed",
+    "potenza_snipers_killed_turn",
+    "potenza_snipers_not_killed",
+    "potenza_snipers_not_killed_turn",
+    "potenza_supply_lines",
+    "potenza_supply_lines_turn",
+    "potenza_solid_front",
+    "potenza_solid_front_turn",
+    "potenza_track_meet",
+    "potenza_track_meet_turn",
+    "potenza_sniper_cleanup",
+    "potenza_sniper_cleanup_turn",
+    "potenza_track_meet_denied",
+    "potenza_track_meet_denied_turn",
+}
+
+g_na005_beer_run =
+{
+    "<none>",
+    "beer_allowed",
+    "beer_allowed_turn",
+    "beer_disallowed",
+    "beer_disallowed_turn",
+}
+
+g_winter_line =
+{
+    "<none>",
+    "winter_line_reminder",
+    "winter_line_reminder_turn",
+    "geisler_killed",
+    "geisler_killed_turn",
+    "pilot_rescued",
+    "pilot_rescued_turn",
+    "enigma_machine",
+    "enigma_machine_turn",
+}
+
+g_random =
+{
+    "<none>",
+    "current",
+    "current_turn",
+}
+
+g_na006_foggia =
+{
+    "<none>",
+    "planes_left",
+    "planes_left_turn",
+    "planes_bombed2",
+    "planes_bombed2_turn",
+    "planes_bombed4",
+    "planes_bombed4_turn",
+    "valenti_warning",
+    "valenti_warning_turn",
+    "depot_bombed",
+    "depot_bombed_turn",
+}
+
+g_na008_riverairfield =
+{
+    "<none>",
+    "gustav_line_active",
+    "gustav_line_active_turn",
+    "volturno_line_active",
+    "volturno_line_active_turn",
+    "volturno_line_completed",
+    "volturno_line_completed_turn",
+    "bomb_ortona",
+    "bomb_ortona_turn",
+    "aquino_aquired",
+    "aquino_aquired_turn",
+    "ortona_player",
+    "ortona_player_turn",
+}
+
+g_na009_riverrescue =
+{
+    "<none>",
+    "lucera_captured",
+    "lucera_captured_turn",
+    "benevento_started",
+    "benevento_started_turn",
+    "river_rescue_started",
+    "river_rescue_started_turn",
+    "river_rescue_completed",
+    "river_rescue_completed_turn",
+    "benevento_reminder",
+    "benevento_reminder_turn",
+}
+
+g_na010_caminocapture =
+{
+    "<none>",
+    "intel_rumour",
+    "intel_rumour_turn",
+    "norton_route_to_rome",
+    "norton_route_to_rome_turn",
+    "buckram_route_to_rome",
+    "buckram_route_to_rome_turn",
+}
+
+g_na012_vehiclerecovery =
+{
+    "<none>",
+    "tank_recovered",
+    "tank_recovered_turn",
+    "tank_valenti",
+    "tank_valenti_turn",
+    "past_gustav",
+    "past_gustav_turn",
+}
+
+g_state_campaign_narrative =
+{
+    "<none>",
+    "propaganda_radio_enabled",
+    "propaganda_radio_enabled_turn",
+    "naples_uprising_failed",
+    "naples_uprising_failed_turn",
+    "naples_uprising_destroyed",
+    "naples_uprising_destroyed_turn",
+    "propaganda_radio_trigger",
+    "propaganda_radio_trigger_turn",
+    "naples_uprising_started",
+    "naples_uprising_started_turn",
+    "dellucci_killed",
+    "dellucci_killed_turn",
+    "dellucci_met",
+    "dellucci_met_turn",
+    "dellucci_injured",
+    "dellucci_injured_turn",
+    "anzio_expired",
+    "anzio_expired_turn",
+    "anzio_neglected",
+    "anzio_neglected_turn",
+}
+
+g_na017_valenti_intro =
+{
+    "<none>",
+    "requests",
+    "requests_turn",
+    "partisans_rescued",
+    "partisans_rescued_turn",
+    "distress_call_answered",
+    "distress_call_answered_turn",
+    "help_given",
+    "help_given_turn",
+    "help_refused",
+    "help_refused_turn",
+    "mission_completed",
+    "mission_completed_turn",
+    "mission_started",
+    "mission_started_turn",
+}
+
+g_na018_valenti_rumour =
+{
+    "<none>",
+    "buckram_response",
+    "buckram_response_turn",
+    "norton_response",
+    "norton_response_turn",
+    "rumour_heard",
+    "rumour_heard_turn",
+    "rumour_investigated",
+    "rumour_investigated_turn",
+}
+
+g_state_mission =
+{
+    "<none>",
+    "us_company",
+    "us_company_turn",
+    "british_company",
+    "british_company_turn",
+}
+
+g_na020_devils_brigade =
+{
+    "<none>",
+    "active",
+    "active_turn",
+    "killed",
+    "killed_turn",
+    "break_contact_success",
+    "break_contact_success_turn",
+    "break_contact_failure",
+    "break_contact_failure_turn",
+    "recon_success",
+    "recon_success_turn",
+    "recon_failure",
+    "recon_failure_turn",
+    "geisler_spooked",
+    "geisler_spooked_turn",
+    "assassination_success",
+    "assassination_success_turn",
+    "assassination_failed",
+    "assassination_failed_turn",
+    "geislers_alive",
+    "geislers_alive_turn",
+    "geisler_taunt",
+    "geisler_taunt_turn",
+    "recon_ignored",
+    "recon_ignored_turn",
+}
+
+g_state_intel =
+{
+    "<none>",
+    "in001_reported",
+    "in001_reported_turn",
+    "in002_reported",
+    "in002_reported_turn",
+    "in003_reported",
+    "in003_reported_turn",
+    "in004_reported",
+    "in004_reported_turn",
+}
+
+g_pb001_salerno_start =
+{
+    "<none>",
+    "supported_buckram",
+    "supported_buckram_turn",
+    "supported_norton",
+    "supported_norton_turn",
+    "landing_completed",
+    "landing_completed_turn",
+    "bombing_completed",
+    "bombing_completed_turn",
+    "salerno_foothold_complete",
+    "salerno_foothold_complete_turn",
+}
+
+g_game_options =
+{
+    "<none>",
+    "profanity_filter",
+    "profanity_filter_turn",
+}
+
+g_na025_enigma =
+{
+    "<none>",
+    "mission_attempted",
+    "mission_attempted_turn",
+    "enigma_rumour",
+    "enigma_rumour_turn",
+    "mission_success",
+    "mission_success_turn",
+    "mission_ignored",
+    "mission_ignored_turn",
+    "mission_failed",
+    "mission_failed_turn",
+    "partisan_recover",
+    "partisan_recover_turn",
+    "start_decision",
+    "start_decision_turn",
+    "mission_started",
+    "mission_started_turn",
+}
+
+g_na027_extraction =
+{
+    "<none>",
+    "intro_complete",
+    "intro_complete_turn",
+    "started",
+    "started_turn",
+    "ignored",
+    "ignored_turn",
+    "failed",
+    "failed_turn",
+    "success",
+    "success_turn",
+    "valenti_deployed",
+    "valenti_deployed_turn",
+    "assist_started",
+    "assist_started_turn",
+    "assist_ignored",
+    "assist_ignored_turn",
+    "assist_success",
+    "assist_success_turn",
+    "assist_failed",
+    "assist_failed_turn",
+    "deploy_reminded",
+    "deploy_reminded_turn",
+    "partisans_deployed",
+    "partisans_deployed_turn",
+    "slow_response",
+    "slow_response_turn",
+    "forces_promise",
+    "forces_promise_turn",
+}
+
+g_na004_geislerhunt =
+{
+    "<none>",
+    "ch1_post_battle",
+    "ch1_post_battle_turn",
+    "ch2_post_battle",
+    "ch2_post_battle_turn",
+    "ch1_ignored",
+    "ch1_ignored_turn",
+    "ch1_arrived",
+    "ch1_arrived_turn",
+    "ch3_geisler_attacked",
+    "ch3_geisler_attacked_turn",
+    "ch3_geisler_defeated",
+    "ch3_geisler_defeated_turn",
+    "ch3_geisler_won",
+    "ch3_geisler_won_turn",
+    "finally_completed",
+    "finally_completed_turn",
+    "geislerhunt_active",
+    "geislerhunt_active_turn",
+}
+
+g_pb003_potenza_retreat =
+{
+    "<none>",
+    "escaped",
+    "escaped_turn",
+    "stopped",
+    "stopped_turn",
+    "started",
+    "started_turn",
+    "close",
+    "close_turn",
+}
+
+g_pb004_foggia_retreat =
+{
+    "<none>",
+    "escaped",
+    "escaped_turn",
+    "stopped",
+    "stopped_turn",
+    "started",
+    "started_turn",
+}
+
+g_calabria_tutorial =
+{
+    "<none>",
+    "tropea_agreed",
+    "tropea_agreed_turn",
+    "cittanova_agreed",
+    "cittanova_agreed_turn",
+    "changed",
+    "changed_turn",
+    "cittanova_captured",
+    "cittanova_captured_turn",
+    "tropea_captured",
+    "tropea_captured_turn",
+    "beach_agreed",
+    "beach_agreed_turn",
+    "towns_agreed",
+    "towns_agreed_turn",
+}
+
+g_na015_montecassino =
+{
+    "<none>",
+    "bombing_warning",
+    "bombing_warning_turn",
+    "buckram_loyalty_high",
+    "buckram_loyalty_high_turn",
+    "buckram_loyalty_neutral",
+    "buckram_loyalty_neutral_turn",
+    "buckram_loyalty_low",
+    "buckram_loyalty_low_turn",
+    "valenti_knows",
+    "valenti_knows_turn",
+}
+
+g_ly002_nephew =
+{
+    "<none>",
+    "norton_nephew_rumour",
+    "norton_nephew_rumour_turn",
+    "norton_mission_rejected",
+    "norton_mission_rejected_turn",
+    "norton_mission_accepted",
+    "norton_mission_accepted_turn",
+    "norton_mission_failed",
+    "norton_mission_failed_turn",
+    "nephew_dead",
+    "nephew_dead_turn",
+    "special_treatment",
+    "special_treatment_turn",
+    "norton_mission_completed",
+    "norton_mission_completed_turn",
+    "mission_started",
+    "mission_started_turn",
+}
+
+g_na028_foggia_intel =
+{
+    "<none>",
+    "buckram_low",
+    "buckram_low_turn",
+    "buckram_mid",
+    "buckram_mid_turn",
+    "mid_choices",
+    "mid_choices_turn",
+    "low_choices",
+    "low_choices_turn",
+    "valenti_warning",
+    "valenti_warning_turn",
+    "devils_active",
+    "devils_active_turn",
+    "choice_ignored",
+    "choice_ignored_turn",
+    "mid_choices1",
+    "mid_choices1_turn",
+    "mid_choices2",
+    "mid_choices2_turn",
+    "mid_choices3",
+    "mid_choices3_turn",
+    "mid_choices4",
+    "mid_choices4_turn",
+    "low_choices1",
+    "low_choices1_turn",
+    "low_choices2",
+    "low_choices2_turn",
+    "low_choices3",
+    "low_choices3_turn",
+}
+
+g_ly003_captain =
+{
+    "<none>",
+    "norton_breach",
+    "norton_breach_turn",
+    "aircraft_commandeered",
+    "aircraft_commandeered_turn",
+    "captain_saved",
+    "captain_saved_turn",
+    "buckram_mission_accepted",
+    "buckram_mission_accepted_turn",
+    "buckram_mission_rejected",
+    "buckram_mission_rejected_turn",
+    "buckram_mission_completed",
+    "buckram_mission_completed_turn",
+    "buckram_mission_failed",
+    "buckram_mission_failed_turn",
+    "mission_started",
+    "mission_started_turn",
+}
+
+g_pb014_increase_foothold =
+{
+    "<none>",
+    "naples_picked",
+    "naples_picked_turn",
+    "potenza_picked",
+    "potenza_picked_turn",
+    "foggia_picked",
+    "foggia_picked_turn",
+    "naples_captured",
+    "naples_captured_turn",
+    "potenza_captured",
+    "potenza_captured_turn",
+    "increase_foothold",
+    "increase_foothold_turn",
+}
+
+g_ly004_turnabout =
+{
+    "<none>",
+    "context_buckram",
+    "context_buckram_turn",
+    "mission_declined",
+    "mission_declined_turn",
+    "mission_ignored",
+    "mission_ignored_turn",
+    "mission_success",
+    "mission_success_turn",
+    "spy_found",
+    "spy_found_turn",
+    "buckram_accusation",
+    "buckram_accusation_turn",
+    "norton_accusation",
+    "norton_accusation_turn",
+    "mission_accepted",
+    "mission_accepted_turn",
+    "lost_contact",
+    "lost_contact_turn",
+    "mission_started",
+    "mission_started_turn",
+}
+
+g_pb015_supply =
+{
+    "<none>",
+    "introduction",
+    "introduction_turn",
+    "buckram_airfields",
+    "buckram_airfields_turn",
+    "scotch",
+    "scotch_turn",
+    "support_request",
+    "support_request_turn",
+    "supply_highpoint",
+    "supply_highpoint_turn",
+    "current_supply",
+    "current_supply_turn",
+    "uncaptured_airfields",
+    "uncaptured_airfields_turn",
+}
+
+g_na019_ice_cream =
+{
+    "<none>",
+    "request_played",
+    "request_played_turn",
+}
+
+g_narrative_variable_template = 
+{
+    -- state_game variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_game",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_game" },
+        options = g_state_game,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_narrative variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_narrative",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_narrative" },
+        options = g_state_narrative,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_subcommander variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_subcommander",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_subcommander" },
+        options = g_state_subcommander,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_event variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_event",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_event" },
+        options = g_state_event,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na001_bari variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na001_bari",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na001_bari" },
+        options = g_na001_bari,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_capture variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_capture",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_capture" },
+        options = g_state_capture,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- campaign variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_campaign",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "campaign" },
+        options = g_campaign,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- narrative_config variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_narrative_config",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "narrative_config" },
+        options = g_narrative_config,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- termoli variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_termoli",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "termoli" },
+        options = g_termoli,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- skr003_state variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_skr003_state",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "skr003_state" },
+        options = g_skr003_state,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- soldier_story_state variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_soldier_story_state",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "soldier_story_state" },
+        options = g_soldier_story_state,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- event_beachhead variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_event_beachhead",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "event_beachhead" },
+        options = g_event_beachhead,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- gustav_line variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_gustav_line",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "gustav_line" },
+        options = g_gustav_line,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na002_termoli variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na002_termoli",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na002_termoli" },
+        options = g_na002_termoli,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na003_potenza variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na003_potenza",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na003_potenza" },
+        options = g_na003_potenza,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na005_beer_run variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na005_beer_run",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na005_beer_run" },
+        options = g_na005_beer_run,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- winter_line variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_winter_line",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "winter_line" },
+        options = g_winter_line,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- random variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_random",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "random" },
+        options = g_random,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na006_foggia variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na006_foggia",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na006_foggia" },
+        options = g_na006_foggia,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na008_riverairfield variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na008_riverairfield",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na008_riverairfield" },
+        options = g_na008_riverairfield,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na009_riverrescue variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na009_riverrescue",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na009_riverrescue" },
+        options = g_na009_riverrescue,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na010_caminocapture variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na010_caminocapture",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na010_caminocapture" },
+        options = g_na010_caminocapture,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na012_vehiclerecovery variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na012_vehiclerecovery",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na012_vehiclerecovery" },
+        options = g_na012_vehiclerecovery,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_campaign_narrative variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_campaign_narrative",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_campaign_narrative" },
+        options = g_state_campaign_narrative,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na017_valenti_intro variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na017_valenti_intro",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na017_valenti_intro" },
+        options = g_na017_valenti_intro,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na018_valenti_rumour variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na018_valenti_rumour",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na018_valenti_rumour" },
+        options = g_na018_valenti_rumour,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_mission variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_mission",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_mission" },
+        options = g_state_mission,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na020_devils_brigade variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na020_devils_brigade",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na020_devils_brigade" },
+        options = g_na020_devils_brigade,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- state_intel variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_state_intel",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "state_intel" },
+        options = g_state_intel,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- pb001_salerno_start variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_pb001_salerno_start",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "pb001_salerno_start" },
+        options = g_pb001_salerno_start,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- game_options variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_game_options",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "game_options" },
+        options = g_game_options,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na025_enigma variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na025_enigma",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na025_enigma" },
+        options = g_na025_enigma,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na027_extraction variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na027_extraction",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na027_extraction" },
+        options = g_na027_extraction,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na004_geislerhunt variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na004_geislerhunt",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na004_geislerhunt" },
+        options = g_na004_geislerhunt,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- pb003_potenza_retreat variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_pb003_potenza_retreat",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "pb003_potenza_retreat" },
+        options = g_pb003_potenza_retreat,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- pb004_foggia_retreat variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_pb004_foggia_retreat",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "pb004_foggia_retreat" },
+        options = g_pb004_foggia_retreat,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- calabria_tutorial variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_calabria_tutorial",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "calabria_tutorial" },
+        options = g_calabria_tutorial,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na015_montecassino variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na015_montecassino",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na015_montecassino" },
+        options = g_na015_montecassino,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- ly002_nephew variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_ly002_nephew",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "ly002_nephew" },
+        options = g_ly002_nephew,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na028_foggia_intel variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na028_foggia_intel",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na028_foggia_intel" },
+        options = g_na028_foggia_intel,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- ly003_captain variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_ly003_captain",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "ly003_captain" },
+        options = g_ly003_captain,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- pb014_increase_foothold variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_pb014_increase_foothold",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "pb014_increase_foothold" },
+        options = g_pb014_increase_foothold,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- ly004_turnabout variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_ly004_turnabout",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "ly004_turnabout" },
+        options = g_ly004_turnabout,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- pb015_supply variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_pb015_supply",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "pb015_supply" },
+        options = g_pb015_supply,
+        category = "Variables",
+        default = "<none>",
+    },
+    -- na019_ice_cream variables
+    {
+        type = ST_STRING,
+        name = "narrative_variable_na019_ice_cream",
+        displayName = "Variable",
+        description = "Name of the variable to change",
+        requirement = { "narrative_variableset", "na019_ice_cream" },
+        options = g_na019_ice_cream,
+        category = "Variables",
+        default = "<none>",
+    },
+}
+
+g_narrative_variable_action_template =
+{
+    {
+        type = ST_STRING,
+        name = "narrative_value",
+        displayName = "Value",
+        description = "New value for the selected variable",
+        requirement = { "action", "SetNarrativeVariable" },
+        category = "Variables",
+        default = "",
+    },
+}
+
+g_narrative_variable_condition_template =
+{
+    {
+        type = ST_STRING,
+        name = "narrative_comparison",
+        displayName = "Comparison",
+        description = "How to compare the variable with the value",
+        options = { "IS_EQUAL", "IS_LESS_THAN", "IS_GREATER_THAN", "IS_LESS_THAN_OR_EQUAL", "IS_GREATER_THAN_OR_EQUAL", "IS_NOT_EQUAL" },
+        requirement = { "condition", "CheckNarrativeVariable" },
+        category = "Variables",
+        default = "IS_EQUAL",
+    },
+    {
+        type = ST_STRING,
+        name = "narrative_condition_value",
+        displayName = "Value",
+        description = "Value to compare to",
+        requirement = { "condition", "CheckNarrativeVariable" },
+        category = "Variables",
+        default = "",
+    },
+}

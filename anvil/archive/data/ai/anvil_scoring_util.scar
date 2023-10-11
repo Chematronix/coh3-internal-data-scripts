@@ -1,0 +1,142 @@
+function InstanceUtility(aiPlayer, prodGroupID, pbg, perUnitScale, perUnitScaleProduced, maxCurrent, maxTotalProduced)
+	-- TODO: These should always be passed in and the associated AE tunings nuked
+	local maxNumCurrent = maxCurrent or AI_ProductionGroupMaxNum(aiPlayer, prodGroupID)
+	local maxNumProduced = maxTotalProduced or AI_ProductionGroupMaxNumProduced(aiPlayer, prodGroupID)
+	
+	local numCurrent = AIPlayer_GetNumPBG(aiPlayer, Count_Current, pbg)
+	local numProduced = AIPlayer_GetNumPBG(aiPlayer, Count_Produced, pbg)
+	
+	-- If we are over the limit, just return 0. This is separate from per unit scale so we can have non-linear penalty.
+	-- e.g.
+	--  perUnitScale = 0.1, maxNumCurrent = 5
+	--  1 to 5 units will give: 0.9, 0.8, 0.7, 0.6, 0.0
+	if (((maxNumCurrent >= 0) and (numCurrent >= maxNumCurrent)) or ((maxNumProduced >= 0) and (numProduced >= maxNumProduced))) then
+		return 0
+	end
+	
+	local currUnitScale = perUnitScale * numCurrent
+	local permUnitScale = perUnitScaleProduced * numProduced
+	
+	local utility = math.max(1 - math.max(currUnitScale, permUnitScale), 0)
+	return utility
+end
+
+-- Use this to control PBG distribution within a production group.
+-- maxPBGsFromGroupCurrent: This controls the maximum number of unique PBGs we can deploy currently from this group (-1 means no limit).
+-- perPBGCurrentScale: This is the scale pernalty per PBG that is currently present on the field.
+-- perPBGEverScale: This is the scale pernalty per PBG ever produced from this group.
+function GroupUtility(aiPlayer, prodGroupID, pbg, maxPBGsFromGroupCurrent, perPBGCurrentScale, perPBGEverScale)
+	local productionGroup = AI_ProductionGroupPBGs(aiPlayer, prodGroupID)
+	local numPBGsFromGroupCurrent = 0
+	local numPBGsFromGroupEver = 0
+	
+	for _, groupPBG in ipairs(productionGroup) do 
+		numPBGsFromGroupCurrent = numPBGsFromGroupCurrent + math.min(AIPlayer_GetNumPBG(aiPlayer, Count_Current, groupPBG), 1)
+		numPBGsFromGroupEver = numPBGsFromGroupEver + math.min(AIPlayer_GetNumPBG(aiPlayer, Count_Produced, groupPBG), 1)
+	end
+	
+	if (maxPBGsFromGroupCurrent >= 0) and (numPBGsFromGroupCurrent >= maxPBGsFromGroupCurrent) then
+		return 0
+	end
+	
+	local scaleCurrent = perPBGCurrentScale * numPBGsFromGroupCurrent
+	local scaleEver = perPBGEverScale * numPBGsFromGroupEver
+	
+	local utility = math.max(1 - math.max(scaleCurrent, scaleEver), 0)
+	return utility
+end
+
+function TechFocusUtility(aiPlayer, prodGroupID, pbg)
+	local techFocusIntention = AIPlayer_GetStrategicIntention(aiPlayer, "production_tech_focus")
+	
+	function GetSquadTier(pbg)
+		local tier = 1
+		if Squad_IsSBPOfType(pbg, "tier2") then
+			tier = 2
+		elseif Squad_IsSBPOfType(pbg, "tier3") then
+			tier = 3
+		elseif Squad_IsSBPOfType(pbg, "tier4") then
+			tier = 4
+		end
+		return tier
+	end
+	
+	-- If the unit's tier is higher than the intention, then no penalty
+	local unitTier = GetSquadTier(pbg)
+	if (unitTier >= techFocusIntention) then
+		return 1
+	end
+	
+	-- Otherwise, the further away we are, the less we care about building this unit
+	local utility = 1 / (techFocusIntention - unitTier + 1)
+	return utility
+end
+
+function InfantryFocusUtility(aiPlayer, prodGroupID, pbg)
+	local infantryFocusIntention = AIPlayer_GetStrategicIntention(aiPlayer, "production_infantry_focus")
+	
+	function IsCombatVehicle(pbg)
+		if Squad_IsSBPOfType(pbg, "vehicle") then
+			local ebp = Squad_SBPEntityAt(pbg, 0)
+			if not Entity_IsEBPOfType(ebp, "ultra_light") then
+				return true
+			end
+		end
+		return false
+	end
+	
+	-- If the unit is a combat vehicle and we are focusing on infantry, then return 0
+	if (infantryFocusIntention > 0) and IsCombatVehicle(pbg) then
+		return 0
+	end
+	
+	return 1
+end
+
+function GetProductionVariantInt(aiPlayer, max)
+	local productionVariantIntention = AIPlayer_GetStrategicIntention(aiPlayer, "production_variant")
+	local variantInt = productionVariantIntention % max
+	return variantInt
+end
+
+function SquadTypeUtility(squadPBG, scale, typeList)
+	local matchCount = 0
+	for _, type in ipairs(typeList) do
+		if Squad_IsSBPOfType(squadPBG, type) then
+			matchCount = matchCount + 1
+		end
+	end
+	return (matchCount * scale) + 1
+end
+
+-- Calculates production cap based on spotted enemy squads and front line capture points
+function CalculateUnitCap(aiPlayer, squadScale, capturePointScale)
+	local ignore_self = false;
+	local enemySquads = AIPlayer_GetSquadsInRange(aiPlayer, World_Pos(0, 0, 0), -1, R_ENEMY, ignore_self)
+	
+	local capturePoints = AIPlayer_GetAllCapturePoints(aiPlayer, R_ENEMY)
+	local capturePointCount = 0
+	EGroup_ForEach(capturePoints, function(egroup, i, entity)
+			if AIPlayer_IsPositionInFrontLine(aiPlayer, Entity_GetPosition(entity)) then
+				capturePointCount = capturePointCount + 1
+			end
+		end)
+	EGroup_Destroy(capturePoints)
+
+	return #enemySquads * squadScale + capturePointCount * capturePointScale
+end
+
+function AddedWeaponUtility(aiPlayer, pbg, perWeaponScore)
+	local addedWeaponCount = AI_GetNumAddedWeaponsFromUpgrade(aiPlayer, pbg)
+	return addedWeaponCount * perWeaponScore
+end
+
+-- Apply the provided scale if the pbg is at the selectedIndex of the production group, otherwise the defaultScale is used
+function SelectedPBGUtility(aiPlayer, prodGroupID, pbg, selectedIndex, selectedScale, defaultScale)
+	local scale = defaultScale
+	local pbgIndexInGroup = AI_ProductionGroupPBGIndex(aiPlayer, prodGroupID, pbg)
+	if pbgIndexInGroup == selectedIndex then
+		scale = selectedScale
+	end
+	return scale
+end

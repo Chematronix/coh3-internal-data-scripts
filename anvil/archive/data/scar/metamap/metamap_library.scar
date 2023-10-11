@@ -1,0 +1,3199 @@
+-----------------------------------------------------------------------
+--
+--  Meta Map Library 
+--
+-- (c) Relic Entertainment 2018
+--
+-----------------------------------------------------------------------
+
+import("gamescarutil.scar")
+import("scarutil.scar")
+
+import("ai/campaign_map_ai.scar")
+import("narrative/narrative_variables.scar")
+
+import("metamap/actiondirector.scar")
+import("metamap/auto_resolve.scar")
+import("metamap/metamap_tuning.scar")
+import("metamap/officer_unlock.scar")
+import("metamap/scriptedturnevents.scar")
+import("metamap/campaign_map_tbs_library.scar")
+import("metamap/metamap_save.scar")
+-----------------------------------------------------------------------
+-----------------------------------------------------------------------
+local CANCEL_MISSION_DAMAGE = 0.10
+local CANCEL_MISSION_RETREAT_DISTANCE = 6
+
+local FORCE_WIN_DAMAGE_PERCENT = 0.40
+
+local MISSION_DEFEAT_RETREAT_DISTANCE_DAYS = 1
+local MISSION_DEFEAT_RETREAT_EXTRA_DISTANCE = 0 --zero'd out so we don't see super long retreats
+
+local LOCAL_PLAYER_DATA_INDEX = 1
+local AI_PLAYER_DATA_INDEX = 2
+local ALLY_PLAYER_DATA_INDEX = 3
+
+local ASSAULT_ZOOM_VALUE = 15
+
+local ATTRITION_WARNING_THRESHOLD = 10
+
+local SAVE_ATTEMPT_TIMEOUT_SECONDS = 20
+
+-- The percent/100 health below which the capture points will be set to invulnerable
+CAPTURE_POINT_INVULNERABILITY_THRESHOLD = 0.1
+
+local TURN_MISSION_START_LOC_STRING_ID = 11246820 -- Turn %1TURN% Mission Start
+local TURN_POST_MISSION_LOC_STRING_ID = 11246821 -- Turn %1TURN% Post Mission
+
+local campaign_difficulty_modifier = 1
+metamap_save_requested = false
+local localPlayerRetreatingSquad = nil
+local squadAttackingLocalPlayerRetreatingSquad = nil
+local retreatAttackSquad = nil
+local retreatDefendSquad = nil
+
+local waiting_for_animation = false
+local combat_in_progress = false
+
+local pre_assault_zoom = nil
+
+local queued_event_cues = {}
+
+local controlled_territories = {}
+local supply_blocked_territories = {}
+
+local save_begin_game_time = nil
+
+local delayed_end_turn_queued = false
+
+g_final_mission_won = false
+
+local localDeathTracking = 
+{
+	-- Units whose death event has already been handled this frame. Prevents double event cues.
+	handledEntities = {},
+	handledSquads = {}
+}
+
+--? @shortdesc Focuses the camera on the mission space at the specified position.
+--? @args pos  A Scar position to move the camera to
+--? @extdesc
+--? Note: This is call by the CampaignBattleModel (on the C++ side) when the summary is shown.
+function MetaMap_FocusCameraOnPosition(pos)
+	if not World_IsCurrentInteractionStageActive(World_GetInteractionStageAtPoint(pos)) then
+		return
+	end
+	
+	-- Note: camera pan currently doesn't work properly, in that the camera resets to a 
+	-- default position and then pans to the supplied position.
+	Camera_MoveTo(pos, false, 0, false, false)
+end
+
+function Metamap_IsSaving()
+	return Game_IsSavingOrPendingSave() or metamap_save_requested == true
+end
+
+function MetaMap_IsCurrentPlayerLocalPlayer()
+	return World_GetCurrentTurnPlayerID() == Game_GetLocalPlayerID()
+end
+
+function MetaMap_HandleEventCue(callback)
+	if not MetaMap_IsCurrentPlayerLocalPlayer() then
+		MetaMap_QueueEventCue(callback)
+	else
+		callback()
+	end
+end
+
+function MetaMap_QueueEventCue(callback)
+	table.insert(queued_event_cues, callback)
+end
+
+function MetaMap_CallQueuedEventCues(clear_queue)
+	for index, callback in ipairs(queued_event_cues) do
+		callback()
+	end
+	
+	clear_queue = clear_queue or true
+	if clear_queue then
+		queued_event_cues = {}
+	end
+end
+
+local function IsLocalPlayer(player)
+	local localPlayer = Game_GetLocalPlayer()
+	return player == localPlayer
+end
+
+local function SquadOwnedByLocalPlayer(squad)
+	local squadOwner = nil
+	if (not World_OwnsSquad(squad)) then
+		squadOwner = Squad_GetPlayerOwner(squad)
+	end
+	
+	return IsLocalPlayer(squadOwner)
+end
+
+-- Can return nil
+local function GetEntityOwnerPlayer(entity)
+	local entityOwner = nil
+	if (not World_OwnsEntity(entity)) then
+		entityOwner = Entity_GetPlayerOwner(entity)
+	end
+	
+	return entityOwner
+end
+
+function MetaMap_KillSquadAndRaiseEvent(victimSquad)
+	-- Send unit-loss events if needed.
+	if (ShouldHandleSquadDeath(victimSquad)) then
+		StopTrackingSquadDeath(victimSquad)
+		EventCues_CampaignSquadWasDestroyed(victimSquad)
+	end
+	
+	Squad_Kill(victimSquad)
+end
+
+function MetaMap_KillSquadAndRaiseEventWithAttacker(victimSquad, attackerUnit)
+	-- Send unit-loss events if needed.
+	if (ShouldHandleSquadDeath(victimSquad)) then
+		StopTrackingSquadDeath(victimSquad)
+		EventCues_CampaignSquadWasDestroyedByAttacker(victimSquad, attackerUnit)
+	end
+	
+	Squad_Kill(victimSquad)
+end
+
+function MetaMap_KillEntityAndRaiseEvent(victimEntity)
+	-- Send unit-loss events if needed.
+	if (ShouldHandleEntityDeath(victimEntity, GetEntityOwnerPlayer(victimEntity))) then
+		StopTrackingEntityDeath(victimEntity)
+		EventCues_CampaignEntityWasDestroyed(victimEntity)
+	end
+	Entity_Kill(victimEntity)
+end
+
+function MetaMap_KillEntityAndRaiseEventWithAttacker(victimEntity, attackerUnit)
+	
+	-- Send unit-loss events if needed.
+	if (ShouldHandleEntityDeath(victimEntity, GetEntityOwnerPlayer(victimEntity))) then
+		StopTrackingEntityDeath(victimEntity)
+		EventCues_CampaignEntityWasDestroyedByAttacker(victimEntity, attackerUnit)
+	end
+	Entity_Kill(victimEntity)
+end
+
+function MetaMap_ProcessResult()
+	
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	if g_final_mission_won then
+		return		
+	end
+	
+	print("MetaMap_ProcessResult")
+	if campaign ~= nil then
+		MetaMap_ProcessDetachmentLoss(campaign)
+		
+		if campaign.metamap_save_path ~= nil then
+			print("Metamap save path was " .. campaign.metamap_save_path)
+		end
+		
+		if campaign.mission_save_path ~= nil then
+			print("Mission save path was " .. campaign.mission_save_path)
+		end
+		
+		if campaign.current_scenario ~= nil then
+			print("Current Scenario was " .. campaign.current_scenario)
+		end
+		
+		if campaign.process_mission_result == true then
+			local entry_point_entity = nil
+			local attacker = Squad_IsValid(campaign.attacker.SquadID) and Squad_FromID(campaign.attacker.SquadID) or nil
+			local defender = nil
+			
+			if campaign.entry_point_entity ~= nil then
+				local entry_point_entity_valid = Entity_IsValid(campaign.entry_point_entity.EntityID)
+				
+				if not entry_point_entity_valid then
+					print("Invalid entry point entity detected in MetaMap_ProcessResult")
+				end
+				
+				entry_point_entity = Entity_FromID(campaign.entry_point_entity.EntityID)
+			end
+			
+			if campaign.defender ~= nil and Squad_IsValid(campaign.defender.SquadID) then
+				defender = Squad_FromID(campaign.defender.SquadID)
+			end
+				
+			if campaign.report ~= nil then
+				-- Show Result
+				local skirmish_node_id = -1
+				local auto_resolve_battle_result = campaign.report.auto_resolved or false
+				local is_local_player_winner = campaign.report.is_local_player_winner ~= nil and campaign.report.is_local_player_winner
+				local mission_data = auto_resolve_battle_result and campaign.auto_resolve_data or campaign.mission_data
+				local is_skirmish = mission_data.mission_type == "skirmish"
+				
+				local has_human_player = true
+				if attacker ~= nil and defender ~= nil then 
+					local attacker_player = Squad_GetPlayerOwner(attacker)
+					local defender_player = Squad_GetPlayerOwner(defender)
+					has_human_player = not AI_IsAIPlayer(attacker_player) or not AI_IsAIPlayer(defender_player)
+				end
+			
+				if has_human_player then
+					MetaMap_ProcessRewards(campaign, attacker, defender, is_local_player_winner, auto_resolve_battle_result)
+				end
+				
+				skirmish_node_id = campaign.mission_node_id or 0
+				if defender ~= nil and is_skirmish then
+					skirmish_node_id = Squad_GetCurrentMovementNodeID(defender)
+				end
+					
+				if has_human_player then
+					if is_skirmish then
+						World_LogSkirmishAttempt(is_local_player_winner)
+					elseif entry_point_entity ~= nil then
+						World_LogMissionAttempt(entry_point_entity, is_local_player_winner)
+						
+						local pos = Entity_GetPosition(entry_point_entity)
+						
+						if auto_resolve_battle_result == false then
+							-- Restore Camera State
+							MetaMapInput_AddUILimits({IEF_Camera, IEF_Selection, IEF_Command}, {VF_ComponentTaskbar}, true, "MetaMapProcessResult")
+							Camera_MoveTo(Util_ScarPos(pos.x, pos.z, pos.y))
+						end
+						
+						-- If mission_area_owner is nil then it means this is popup mission if not, this is standard mission
+						local missionArea = World_GetMetadataLayerPBG("TownArea", pos.x, pos.z)
+						
+						--Debriefing Preset upon returning to campaign map
+						if missionArea ~= nil then
+							local missionAreaName = BP_GetName(missionArea)
+							if scartype(missionAreaName) == ST_STRING then
+								local func = _G[missionAreaName.."_DebriefPreset"]
+								if scartype(func) == ST_FUNCTION then
+									func(campaign)
+								end
+							end
+						end
+					end
+				end
+				
+				local attackerDetachmentLoss = nil	
+				
+				if campaign.report.attacker_detachment_loss ~= nil then
+					attackerDetachmentLoss = Squad_FromID(campaign.report.attacker_detachment_loss.SquadID)
+				end
+				
+				local defenderDetachmentLoss = nil
+					
+				if campaign.report.defender_detachment_loss ~= nil then
+					defenderDetachmentLoss = Squad_FromID(campaign.report.defender_detachment_loss.SquadID)
+				end
+				
+				-- Block turn advancement while resolving meta map action
+				-- Note: Be very careful that this gets cleaned up in all following flow
+				-- or the turn will get blocked
+				if attacker ~= nil then
+					World_AddSquadToTurnActionQueue(attacker)
+				end
+				if defender ~= nil then
+					World_AddSquadToTurnActionQueue(defender)
+				end
+				
+				if Misc_IsCommandLineOptionSet("PressAnyKey") then
+					-- Don't show the UI but resolve as if the exit button was pressed
+					MetaMap_ResolveResult()
+				elseif Misc_IsCommandLineOptionSet("autoresolve_all") or not has_human_player then
+					MetaMap_ResolveResult(true)
+				else
+					AI_PauseAll(true)
+					if is_skirmish then
+						UI_ShowCampaignSkirmishDebriefing(skirmish_node_id, auto_resolve_battle_result, is_local_player_winner, attacker, defender, attackerDetachmentLoss, defenderDetachmentLoss)
+					elseif defender ~= nil then
+						UI_ShowCampaignMissionDebriefing(entry_point_entity, auto_resolve_battle_result, is_local_player_winner, attacker, defender, attackerDetachmentLoss, defenderDetachmentLoss)
+					elseif attacker ~= nil then
+						UI_ShowCampaignMissionDebriefingNoDefender(entry_point_entity, auto_resolve_battle_result, is_local_player_winner, attacker)
+					else
+						MetaMap_ResolveResult()
+					end
+
+				end
+
+			end
+			
+			function UnpauseAI()
+				if not UI_IsCampaignBattleDebriefingShowing() then
+					-- AI paused until the debriefing is closed (paused from campaign_map_tbs as well as above)
+					AI_PauseAll(false)
+					Rule_RemoveMe()
+				end
+			end
+			Rule_Add(UnpauseAI)
+		end
+	end
+	
+end
+
+function MetaMap_DamageUnit(victimUnit, damage, attackerUnit)
+	if scartype(victimUnit) == ST_SQUAD and Squad_IsValid(victimUnit.SquadID) then
+		local currentHealth = Squad_GetHealth(victimUnit)
+		local maxHealth = Squad_GetHealthMax(victimUnit)
+		local newHealth = currentHealth - damage
+		local healthPercent = newHealth / maxHealth
+		
+		-- Adding check so damage doesn't go below the invulnerability minimum if it exists
+		local primary_victim_entity = Squad_GetPrimaryEntity(victimUnit)
+		local victim_invulnerable_min_cap = Entity_GetInvulnerableMinCap(primary_victim_entity)
+		if healthPercent < victim_invulnerable_min_cap then
+			healthPercent = victim_invulnerable_min_cap
+		end
+		
+		if healthPercent <= 0 then
+			MetaMap_KillSquadAndRaiseEventWithAttacker(victimUnit, attackerUnit)
+		else
+			Squad_SetHealth(victimUnit, healthPercent)
+			UI_CreateSquadKickerMessage(World_GetPlayerAt(1), Squad_FromID(victimUnit.SquadID), Loc_FormatText(11169793, damage)) -- Damage Received: %1VALUE%
+		end	
+	elseif scartype(victimUnit) == ST_ENTITY and Entity_IsValid(victimUnit.EntityID) then
+		local currentHealth = Entity_GetHealth(victimUnit)
+		local maxHealth = Entity_GetHealthMax(victimUnit)
+		local newHealth = currentHealth - damage
+		local healthPercent = newHealth / maxHealth
+		
+		-- Adding check so damage doesn't go below the invulnerability minimum if it exists
+		if healthPercent < Entity_GetInvulnerableMinCap(victimUnit) then
+			healthPercent = Entity_GetInvulnerableMinCap(victimUnit)
+		end
+		
+		if healthPercent <= 0 then
+			MetaMap_KillEntityAndRaiseEventWithAttacker(victimUnit, attackerUnit)
+		else
+			Entity_SetHealth(victimUnit, healthPercent)
+			UI_CreateEntityKickerMessage(World_GetPlayerAt(1), Entity_FromID(victimUnit.EntityID), Loc_FormatText(11169793, damage)) -- Damage Received: %1VALUE%
+		end	
+	end
+end
+
+--? @shortdesc Determines the detachment lost (if any) for the losing player in a Skirmish/Mission
+--? @args RefTable campaign
+--? @result Nil
+function MetaMap_ProcessDetachmentLoss(campaign)
+	if campaign == nil then
+		return
+	end
+	
+	if campaign.report == nil or campaign.attacker == nil or campaign.defender == nil then
+		return
+	end
+	
+	if (not Squad_IsValid(campaign.attacker.SquadID)) or (not Squad_IsValid(campaign.defender.SquadID)) then
+		return
+	end
+	
+	if campaign.mission_data ~= nil and campaign.mission_data.is_narrative_mission == true then
+		-- Squads will simply be destroyed in this case as they were only used to enter the
+		-- mission and are not visible to the play elsewhere, so there is no need to destroy
+		-- any detachments for narrative-launched missions.
+		return
+	end
+	
+	local isWinningPlayerHuman = campaign.report.is_local_player_winner
+	local chanceOfDetachmentLossTable = nil
+	
+	if isWinningPlayerHuman then
+		chanceOfDetachmentLossTable = t_detachment_loss_tuning.t_ai_chance_of_detachment_loss
+	else
+		chanceOfDetachmentLossTable =  t_detachment_loss_tuning.t_player_chance_of_detachment_loss
+	end	
+	
+	local defender_detachment_loss = nil
+	local attacker_detachment_loss = nil
+	
+	local detachmentLosingOdds = Util_DifVar(chanceOfDetachmentLossTable)	
+	local isDetachmentLost = Util_GetCompareRandomNumberGenerated(0, 99, detachmentLosingOdds, IS_LESS_THAN)
+	
+	if not isDetachmentLost then
+		return
+	end
+		
+	local attacker = Squad_FromID(campaign.attacker.SquadID)
+	local defender = Squad_FromID(campaign.defender.SquadID)
+	
+	local function DoGet_SquadDetachmentLoss(squad)
+		local squadDetachments = Anvil_GetSquadDetachments(squad)
+		local squadDetachmentsCount = SGroup_Count(squadDetachments)
+		
+		if squadDetachmentsCount <= 0 then
+			return nil
+		end
+		
+		-- SGroup_GetSquadAt is one-based index
+		local squadDetachmentToLose = SGroup_GetSquadAt(squadDetachments, World_GetRand(1, squadDetachmentsCount))
+		SGroup_Destroy(squadDetachments)
+		return squadDetachmentToLose
+	end
+	
+	-- Only losing side can lose a detachments
+	if Player_GetID(Squad_GetPlayerOwner(attacker)) ~= campaign.report.winning_player.PlayerID then
+		attacker_detachment_loss = DoGet_SquadDetachmentLoss(attacker)	
+	elseif Player_GetID(Squad_GetPlayerOwner(defender)) ~= campaign.report.winning_player.PlayerID then
+		attacker_detachment_loss = DoGet_SquadDetachmentLoss(defender)	
+	end
+	
+	campaign.report.attacker_detachment_loss = attacker_detachment_loss
+	campaign.report.defender_detachment_loss = defender_detachment_loss
+	
+	Game_StoreTableData("campaign", campaign)
+end
+
+--? @shortdesc Kill the squad detachments that have been lost the Mission/Skirmish
+--? @args Table(Squad) attacker_detachment_loss, Table(Squad) defender_detachment_loss
+--? @result Nil
+function MetaMap_ApplyMissionResultDetachmentLoss(attacker_detachment_loss, defender_detachment_loss)
+	
+	local function DoKillSquad(squad)
+		-- If an ability or script or cheat damages the company during the retreat sequence the detachments
+		-- may have already been killed, so don't kill them twice.
+		if Squad_IsValid(squad.SquadID) then
+			MetaMap_KillSquadAndRaiseEvent(Squad_FromID(squad.SquadID))
+		end
+	end
+	
+	if attacker_detachment_loss ~= nil then
+		DoKillSquad(attacker_detachment_loss)
+	end
+	
+	if defender_detachment_loss ~= nil then
+		DoKillSquad(defender_detachment_loss)
+	end
+	
+end
+
+-- Damages the squads in the input table based on the mission report, if defeated_squad
+-- is a squad in a hold then it will defer killing that squad and return true if it receives
+-- lethal damage.
+function MetaMap_ApplyMissionResultDamage(squads, report, defeated_squad)
+	local kill_deferred = false
+	for _,squad in pairs(squads) do
+		local damage = 0
+		local opponent = nil
+		if report.auto_resolved then
+			if _ == 1 then
+				damage = report.attackerDamageTaken
+				opponent = squads[2]
+			elseif _ == 2 then
+				damage = report.defenderDamageTaken
+				opponent = squads[1]
+			end
+		else
+			damage = MetaMap_GetMissionResultDamage(squad, report)
+			
+			-- Assume that index 1 and 2 still refer to the attacker and defender, if they exist
+			if ((_ == 1) and (squads[2] ~= nil)) then
+				opponent = squads[2]
+			elseif ((_ == 2) and (squads[1] ~= nil)) then
+				opponent = squads[1]
+			end
+		end
+		local current_health = Squad_GetHealth(squad)
+		local max_health = Squad_GetHealthMax(squad)
+		current_health = current_health - damage
+		local health_percentage = current_health / Squad_GetHealthMax(squad)
+		
+		-- Apply damage up to the point to the invulnerability minimum
+		local primary_squad_entity = Squad_GetPrimaryEntity(squad)
+		local entity_invulnerable_min_cap = Entity_GetInvulnerableMinCap(primary_squad_entity)
+		if health_percentage < entity_invulnerable_min_cap then
+			health_percentage = entity_invulnerable_min_cap
+		end
+		
+				if health_percentage <= 0 then
+			if defeated_squad ~= nil and defeated_squad == squad and Squad_IsInHoldEntity(squad) then
+				-- Defer killing the defeated squad since it's inside a building
+				kill_deferred = true
+			else
+				MetaMap_KillSquadAndRaiseEventWithAttacker(squad, opponent)
+			end
+		else
+			Squad_SetHealth(squad, health_percentage)
+			UI_CreateSquadKickerMessage(World_GetPlayerAt(1), Squad_FromID(squad.SquadID), Loc_FormatText(11169793, damage)) -- Damage Received: %1VALUE%
+		end		
+	end
+	
+	return kill_deferred
+end
+
+function MetaMap_GetMissionResultDamage(squad, report)
+	local total_damage = MetaMap_GetMissionPerformanceResultDamage(squad, report) + MetaMap_GetMissionOutcomeResultDamage(squad, report)
+	if Squad_GetPlayerOwner(squad) == report.winning_player and total_damage > Squad_GetHealth(squad) then
+		-- Entities belonging to players who won the mission shouldn't die
+		return Squad_GetHealth(squad) - 1
+	end
+	
+	return total_damage
+end
+
+function MetaMap_GetMissionPerformanceResultDamage(squad, report)
+	if Squad_GetPlayerOwner(squad) ~= Game_GetLocalPlayer() then
+		-- We don't judge the AI performance. They have fixed values to lose based on win/loss
+		return 0
+	end
+	
+	local damage_units = t_mission_result_tuning.performance_damage_units
+	local max_damage_value = t_mission_result_tuning.performance_max_damage_value
+	local performance_metric = t_mission_result_tuning.performance_metric
+	local worst_case = t_mission_result_tuning.performance_worst_case
+	
+	local damage_modifier = 0
+	
+	if performance_metric == PERFORMANCE_METRIC.entities_lost_per_minute then
+		local losses = report.player_entity_losses or 0
+		local length = report.gameLength
+		if length == 0 or worst_case == 0 then
+			damage_modifier = 0
+		else
+			local losses_per_minute =  losses / (length / 60)
+			damage_modifier = math.min(losses_per_minute / worst_case, 1.0)
+		end
+	else
+		error("Unsupported performance metric has been specified for calculating damage. " ..
+			"Value must be specified in the metamap_tuning PERFORMANCE_METRIC enum")
+	end
+	
+	local damage_to_deal = 0
+	
+	if damage_units == DAMAGE_UNITS.percent_of_max then
+		damage_to_deal = max_damage_value * damage_modifier * Squad_GetHealthMax(squad)
+	elseif damage_units == DAMAGE_UNITS.percent_of_current then
+		damage_to_deal = max_damage_value * damage_modifier * Squad_GetHealth(squad)
+	elseif damage_units == DAMAGE_UNITS.hit_points then
+		damage_to_deal = max_damage_value * damage_modifier
+	else
+		error("Invalid damage units selected in MetaMap_GetMissionResultDamage. " ..
+			"t_mission_result_tuning.units must be a value from the DAMAGE_UNITS enum.")
+	end
+	
+	return damage_to_deal
+end
+
+function MetaMap_GetMissionOutcomeResultDamage(squad, report)
+	local damage_units = 0
+	local damage_value = 0
+	
+	if Squad_GetPlayerOwner(squad) == Game_GetLocalPlayer() then
+		if report.winning_player.PlayerID == Player_GetID(Squad_GetPlayerOwner(squad)) then
+			-- The human player will only take damage based on performance if they won
+			return 0
+		else
+			damage_units = t_mission_result_tuning.failure_damage_units
+			damage_value = t_mission_result_tuning.failure_damage_value
+		end
+	else
+		if Player_GetID(Squad_GetPlayerOwner(squad)) == report.winning_player.PlayerID then
+			damage_units = t_mission_result_tuning.ai_success_damage_units
+			damage_value = t_mission_result_tuning.ai_success_damage_value
+		else
+			damage_units = t_mission_result_tuning.ai_failure_damage_units
+			damage_value = t_mission_result_tuning.ai_failure_damage_value
+			if t_mission_result_tuning.ai_failure_chance_to_kill > World_GetRand(0,100) then
+				damage_value = Squad_GetHealth(squad)
+			end
+		end
+	end
+	
+	local damage_to_deal = 0
+	
+	if damage_units == DAMAGE_UNITS.percent_of_max then
+		damage_to_deal = damage_value * Squad_GetHealthMax(squad)
+	elseif damage_units == DAMAGE_UNITS.percent_of_current then
+		damage_to_deal = damage_value * Squad_GetHealth(squad)
+	elseif damage_units == DAMAGE_UNITS.hit_points then
+		damage_to_deal = damage_value
+	else
+		error("Invalid damage units selected in MetaMap_GetMissionResultDamage. " ..
+			"t_mission_result_tuning.units must be a value from the DAMAGE_UNITS enum.")
+	end
+	
+	return damage_to_deal
+end
+
+function MetaMap_ResolveResult(auto)
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	if campaign == nil then
+		return
+	end
+	
+	local missionData = campaign.mission_data or campaign.auto_resolve_data
+	local missionType = missionData.mission_type
+	local is_narrative_mission = missionData.is_narrative_mission
+	
+	MetaMap_MakeAttackerAndDefenderVulnerable(campaign.attacker, campaign.defender)
+	
+	local data = {}
+	data.should_save = not auto
+	data.attacker = campaign.attacker
+	data.defender = campaign.defender
+	data.report = campaign.report
+	data.veterancy_gained = campaign.veterancy_gained
+	data.mission_affector_sources = campaign.mission_affector_sources
+	data.entry_point_entity = campaign.entry_point_entity
+	data.entry_point_id = campaign.entry_point_id
+
+	if campaign.process_mission_result == true then
+		if missionType == "skirmish" then
+			if campaign.attacker ~= nil and campaign.defender ~= nil and Squad_IsValid(campaign.defender.SquadID) and Squad_IsValid(campaign.attacker.SquadID) then
+				MetaMap_PlayCombatAnimation(campaign.attacker, campaign.defender, true, MetaMap_ApplySkirmishResult, data)
+			else
+				MetaMap_ApplySkirmishResult(data)
+			end
+		elseif missionType == "mission" then
+			if is_narrative_mission then
+				MetaMap_ApplyNarrativeMissionResult()
+			elseif campaign.attacker ~= nil and campaign.defender ~= nil and Squad_IsValid(campaign.defender.SquadID) and Squad_IsValid(campaign.attacker.SquadID) then
+				MetaMap_PlayCombatAnimation(campaign.attacker, campaign.defender, true, MetaMap_ApplyMissionResult, data)
+			else
+				MetaMap_ApplyMissionResult(data)
+			end
+		end
+	end
+	
+end
+
+function MetaMap_RemoveProcessResultUILimits()
+	MetaMapInput_RemoveUILimits("MetaMapProcessResult")
+end
+
+function MetaMap_ApplyNarrativeMissionResult()
+	-- Simplified version of ApplyMissionResult specific to the narrative mission case.
+	-- Here we just want to destroy the entry squads that were not visible to the player, and
+	-- do the essential housekeeping from ApplyMissionResult
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	local DestroyIfValid = function(squad)
+		if squad ~= nil and Squad_IsValid(squad.SquadID) then
+			Squad_Destroy(Squad_FromID(squad.SquadID))
+		end
+	end
+	
+	DestroyIfValid(campaign.defender)
+	DestroyIfValid(campaign.attacker)
+	
+	Rule_AddOneShot(MetaMap_RemoveProcessResultUILimits, 2)
+	
+	local save_name = GenerateAutoSaveName(TURN_POST_MISSION_LOC_STRING_ID)
+	MetaMap_Save(nil, nil, save_name)
+
+	MetaMap_ClearMissionData(campaign)
+	Game_StoreTableData("campaign", campaign)
+	World_SetStateModelBool("assault_in_progress", false)
+end
+
+function MetaMap_ApplyMissionResult(data)
+	
+	Rule_AddOneShot(MetaMap_RemoveProcessResultUILimits, 2)
+	
+	if data.attacker == nil then
+		return
+	end
+		
+	local attacker = Squad_FromID(data.attacker.SquadID)
+	local defender = nil
+	local mission_initiator = nil
+	local companyToRetreat = nil
+	local capturingCompany = nil
+	local entry_point_entity = nil
+	local switch_entry_point_owner = false
+	
+	if data.defender ~= nil and Squad_IsValid(data.defender.SquadID) then
+		defender = Squad_FromID(data.defender.SquadID)
+	end
+	
+	if attacker ~= nil then
+		World_RemoveSquadFromTurnActionQueue(attacker)
+	end
+	if defender ~= nil then
+		World_RemoveSquadFromTurnActionQueue(defender)
+	end
+	
+	local entry_point_id = (data.entry_point_entity and data.entry_point_entity.EntityID) or -1
+	if entry_point_id > 0 then
+		entry_point_entity = Entity_FromID(data.entry_point_entity.EntityID)
+	end
+	
+	local is_popup = entry_point_entity ~= nil and Entity_IsPopupMissionEntryPoint(entry_point_entity)
+	mission_initiator = Squad_GetPlayerOwner(attacker)
+	local is_local_player_winner = data.report.is_local_player_winner
+	
+	if data.report.winning_player.PlayerID == mission_initiator.PlayerID then
+		-- attacker won so switch mission area owner
+		
+		Squad_ClearStateModelTarget(attacker, "retreat_from_target")
+		if is_popup then
+			local winning_player = Player_FromId(mission_initiator.PlayerID)
+			Entity_ClearMissionNodeData(entry_point_entity)
+			if Entity_GetPopupMissionEntityKillOnEndStatus(entry_point_entity) == true then
+				-- Make entity vulnerable in case they were set to be invulnerable so they couldn't be killed
+				-- by anything other then completing the mission
+				Entity_SetInvulnerableMinCap(entry_point_entity, 0, 0)
+				Entity_Kill(entry_point_entity)
+				-- If the enemy company itself is the mission entry point
+			elseif Entity_IsOfType(entry_point_entity, "campaign_company") then
+				companyToRetreat = Entity_GetSquad(entry_point_entity)
+			end
+		else
+			UI_CreateSquadKickerMessage(World_GetPlayerAt(1), Squad_FromID(data.attacker.SquadID), 11169795) -- Territory Won! 
+			
+			-- Regular mission area mission
+			if defender ~= nil then
+				companyToRetreat = defender
+			end
+			
+			if entry_point_entity ~= nil then
+				switch_entry_point_owner = true
+				capturingCompany = attacker
+				Entity_AdvanceMissionPhase(entry_point_entity, true, true)
+			end
+		end
+		
+	else
+		-- defender won
+		if defender ~= nil then
+			Squad_ClearStateModelTarget(defender, "retreat_from_target")
+		end
+		
+		if is_popup and entry_point_entity ~= nil then
+			local winning_player = Player_FromId(data.report.winning_player.PlayerID)
+			Entity_ClearMissionNodeData(entry_point_entity)
+		end
+
+		companyToRetreat = attacker
+		if not is_popup and entry_point_entity ~= nil then
+			Entity_AdvanceMissionPhase(entry_point_entity, false, false)
+		end
+	end
+	
+	-- Track mission completion for each entry point in a global table for objectives to
+	-- check against.
+	local missionResultEntry = {
+		is_local_player_winner = is_local_player_winner,
+		entry_point_id = entry_point_id,
+	}
+	g_missionResults = g_missionResults or {}
+	g_missionResults[#g_missionResults + 1] = missionResultEntry
+	
+	
+	MetaMap_ApplyMissionResultDetachmentLoss(data.report.attacker_detachment_loss, data.report.defender_detachment_loss)
+	local kill_deferred = MetaMap_ApplyMissionResultDamage({attacker, defender}, data.report, companyToRetreat)
+	MetaMap_AwardVeterancyFromMission(attacker, defender, data)
+	
+
+	-- We add turn action queue here because it can take a frame for retreat command to be picked up by statetree
+	if companyToRetreat ~= nil then
+		World_AddSquadToTurnActionQueue(companyToRetreat)
+	end
+	Rule_AddOneShot(MetaMap_Retreat_MissionDefeat, 0,
+		{
+			retreating_company = companyToRetreat,
+			capturing_company = capturingCompany,
+			save_datastore = true,
+			entry_point_entity = entry_point_entity,
+			mission_initiator = mission_initiator,
+			switch_entry_point_owner = switch_entry_point_owner,
+			should_save = data.should_save,
+			wait_for_unload_and_kill = kill_deferred,
+		})
+	
+	if attacker ~= nil and defender ~= nil then
+		-- TODO seems like on assault statetree is not being used anywhere. Remove maybe?
+		-- If it is still being used, we may want to delay MetaMap_Save until it is resolved
+		Squad_PlayOnAssaultStatetree(attacker, defender)
+	end
+	local campaign = Game_RetrieveTableData("campaign", false)
+	MetaMap_ClearMissionData(campaign)
+	Game_StoreTableData("campaign", campaign)
+	World_SetStateModelBool("assault_in_progress", false)
+end
+
+function MetaMap_ApplySkirmishResult(data)
+	
+	Rule_AddOneShot(MetaMap_RemoveProcessResultUILimits, 2)
+
+	local attacker = data.attacker and Squad_IsValid(data.attacker.SquadID) and Squad_FromID(data.attacker.SquadID) or nil
+	local defender = data.defender and Squad_IsValid(data.defender.SquadID) and Squad_FromID(data.defender.SquadID) or nil
+	if attacker ~= nil then
+		World_RemoveSquadFromTurnActionQueue(attacker)
+	end
+	if defender ~= nil then
+		World_RemoveSquadFromTurnActionQueue(defender)
+	end
+	
+	if attacker == nil or defender == nil then
+		return
+	end
+	
+	local mission_initiator = Squad_GetPlayerOwner(attacker)
+	local companyToRetreat = nil
+	
+	if attacker ~= nil then
+		World_RemoveSquadFromTurnActionQueue(attacker)
+	end
+	if defender ~= nil then
+		World_RemoveSquadFromTurnActionQueue(defender)
+	end
+	
+	if data.report.winning_player.PlayerID == mission_initiator.PlayerID then
+		-- attacker won
+		companyToRetreat = defender
+		MetaMap_CaptureNearbyEmptyPoint(defender, attacker)
+		Squad_ClearStateModelTarget(attacker, "retreat_from_target") 
+		StartPrimaryObjectiveOrPlaybill("debriefing_win")
+	else
+		-- defender won
+		companyToRetreat = attacker
+		MetaMap_CaptureNearbyEmptyPoint(attacker, defender)
+		Squad_ClearStateModelTarget(defender, "retreat_from_target")
+		StartPrimaryObjectiveOrPlaybill("debriefing_lose")
+	end
+	
+	MetaMap_ApplyMissionResultDetachmentLoss(data.report.attacker_detachment_loss, data.report.defender_detachment_loss)
+	MetaMap_ApplyMissionResultDamage({attacker, defender}, data.report)
+	MetaMap_AwardVeterancyFromMission(attacker, defender, data) -- todo put vet info in data
+	
+	-- If no one needs to retreat, save immediately, other wise save after retreat is complete
+	if companyToRetreat ~= nil then
+		-- We add turn action queue here because it can take a frame for retreat command to be picked up by statetree
+		World_AddSquadToTurnActionQueue(companyToRetreat)
+		Rule_AddOneShot(MetaMap_Retreat_MissionDefeat, 0, {retreating_company = companyToRetreat, save_datastore = true, entry_point_entity = entry_point_entity, mission_initiator = mission_initiator, switch_entry_point_owner = switch_entry_point_owner, should_save = data.should_save})
+	elseif data.should_save == true then
+		-- TODO do we need to delay this until Squad_PlayOnAssaultStatetree is done?
+		local save_name = GenerateAutoSaveName(TURN_POST_MISSION_LOC_STRING_ID)
+		MetaMap_Save(nil, nil, save_name)
+	end
+	
+	Squad_PlayOnAssaultStatetree(attacker, defender)
+	local campaign = Game_RetrieveTableData("campaign", false)
+	MetaMap_ClearMissionData(campaign)
+	Game_StoreTableData("campaign", campaign)
+	World_SetStateModelBool("assault_in_progress", false)
+end
+
+function MetaMap_ClearMissionData(campaign)
+	campaign.attacker = nil
+	campaign.defender = nil
+	campaign.reinforcing_company = nil
+	campaign.entry_point_entity = nil
+	campaign.report = nil
+	campaign.mission_data = nil
+	campaign.map_pool_id = nil
+	campaign.map_entry_index = nil
+	campaign.process_mission_result = nil
+	campaign.rewarded_abilities = nil
+	campaign.rewarded_upgrades = nil
+	campaign.rewarded_resources= nil
+	campaign.narrative_variables = nil
+	campaign.narrative_variables_out = nil
+	campaign.next_soldier_story_data = nil
+	campaign.next_soldier_story_data_out = nil
+	-- At this stage we're done with the RTS, just apply any campaign
+	-- data it has specified via MetaMap_FinishRTS()'s deferred data
+	-- here before clearing it.
+	local deferred_campaign_data = campaign.deferred_campaign_data
+	if deferred_campaign_data ~= nil then
+		for k,v in pairs(deferred_campaign_data) do
+			campaign[k] = v
+		end
+	end
+	campaign.deferred_campaign_data = nil
+end
+
+function MetaMap_WatchForEvents()
+	-- We only handle this for the local player
+	HandleDeathTracking()
+	
+	for index = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(index)
+		
+		if not g_briefingInfo then
+			MetaMap_HandleMissionStart(player)
+		end
+		
+		if not g_briefingInfo then
+			MetaMap_HandleSkirmishStart(player)
+		end
+		
+		MetaMap_HandleAttack(player)
+		MetaMap_HandleOverwatch(player)
+		-- MetaMap_HandleOfficers(player)
+		MetaMap_HandleDisabledPoints(player)
+		
+		-- if AI player is disabled, end turn right away
+		if World_IsPlayersTurn(player) and AI_IsAIPlayer(player) and not AI_IsEnabled(player) and delayed_end_turn_queued == false then
+			-- Since this can happen on the same frame as another EndTurn, make sure the
+			-- tbs logic has a chance to see it (the rule might have happened before the button was clicked
+			-- this frame, and this rule might have happened after.)
+			delayed_end_turn_queued = true
+			Rule_AddOneShot(MetaMap_DelayedEndTurn, 1)
+		end
+	end
+end
+
+function MetaMap_DelayedEndTurn()
+	UpdateTurnState()
+	World_EndTurn()
+	delayed_end_turn_queued = false
+end
+
+function MetaMap_HandleAttack(player)
+	local mission = Player_GetStateModelBool(player, "start_mission")
+	local skirmish = Player_GetStateModelBool(player, "start_skirmish")
+	if mission == true or skirmish == true then
+		return
+	end
+	
+	local attacker = Player_GetStateModelSquadTarget(player, "meta_attacker")
+	local defender = Player_GetStateModelSquadTarget(player, "meta_defender")
+	
+	if attacker == nil then
+		attacker = Player_GetStateModelEntityTarget(player, "meta_attacker")
+	end
+	if defender == nil then
+		defender = Player_GetStateModelEntityTarget(player, "meta_defender")
+	end
+	
+	if attacker ~= nil and defender ~= nil then
+		local attackerID = Squad_GetID(attacker)
+		local function resolveAttack(data)
+			-- keep the "pinned" combat preview UI for a little while
+			-- save squad id in case the attacker/defender is destroyed
+			Rule_AddInterval(ClearCombatPreview, t_combat_preview_tuning.post_combat_keep_alive_duration, {squadID = attackerID})
+			MetaMap_DamageUnit(data.defender, data.report.defenderDamageTaken, data.attacker)
+			World_SetStateModelBool("assault_in_progress", false)
+		end
+		MetaMap_PlayCombatAnimation(attacker, defender, false, resolveAttack, {report = MetaMap_AutoResolve(attacker, defender), defender = defender})
+		Player_ClearStateModelTarget(player, "meta_attacker")
+		Player_ClearStateModelTarget(player, "meta_defender")
+	end
+end
+
+function MetaMap_HandleMissionStart(player)
+	if Player_GetStateModelBool(player, "start_mission") ~= true then
+		return
+	end
+
+	MetaMap_StartBriefingSequence(player, MetaMap_MissionBriefing)
+
+end
+
+function MetaMap_MissionBriefing(player)
+	local attacker = Player_GetStateModelSquadTarget(player, "meta_attacker")
+	if attacker == nil or (not Squad_IsAlive(attacker)) then
+		-- If the attacker is killed after an ability/command statetree triggers a mission
+		-- with it, then we should abandon the attempt to trigger the mission.
+		print("MetaMap_MissionBriefing skipping due to killed attacker")
+		ClearMissionAndSkirmishStateModel()
+		World_SetStateModelBool("assault_in_progress", false)
+		return
+	end
+	
+	local defender = nil
+	
+	-- Statetree may fill out meta_defender, but if not then we calculate what the
+	-- defender should be based on the mission entry point
+	if Player_HasStateModelTarget(player, "meta_defender") then
+		defender = Player_GetStateModelSquadTarget(player, "meta_defender")
+	end
+	
+	if defender == nil then
+		if Player_HasStateModelTarget(player, "meta_mission_entry_entity") then
+			local entryPoint = Player_GetStateModelEntityTarget(player, "meta_mission_entry_entity")
+			local temp = sg_temp
+			SGroup_Clear(temp)
+			Entity_GetSquadsHeld(entryPoint, temp)
+			SGroup_Filter(temp, "company", FILTER_KEEP)
+			if SGroup_Count(temp) > 0 then
+				defender = SGroup_GetSquadAt(temp, 1)
+			end
+			
+			if defender == nil then
+				-- Defender not found in the entry point, grab the nearest defender to the entry point
+				temp = Player_GetSquads(Entity_GetPlayerOwner(entryPoint))
+				SGroup_Filter(temp, "company", FILTER_KEEP)
+				local remove_if_in_hold = function(group_id, _, squad)
+					-- This is to prevent company in ships from being a defender
+					-- As if they are chosen as defender and lose
+					-- They could end up trying to retreat while in middle of the ocean
+					-- Also, there exists an issue where defender from very far away could be chosen
+					-- Resulting in them taking damage and retreating while being very far away from the actuual
+					-- mission but Cam believes it is ok for now, but to keep an eye out for feedback
+					if Squad_IsInHoldSquad(squad) then
+						SGroup_Remove(temp, squad)
+					end
+				end
+				SGroup_ForEach(temp, remove_if_in_hold)
+				defender = World_GetClosest(entryPoint, temp)
+			end
+			
+			if defender == nil then
+				-- If there is still no defender, then instantly capture the point for the attacker.
+				-- This can happen if there are no valid squads to trigger the mission, we want to
+				-- skip regular mission flow.
+				Entity_AdvanceMissionPhase(entryPoint, true, false)
+				Entity_SetPlayerOwner(entryPoint, player)
+				ClearMissionAndSkirmishStateModel(player)
+				return
+			end
+		else
+			error("Attempting to start a mission with no defender AND no entry point")
+		end
+	end
+	
+	Player_SetStateModelTarget(player, "meta_defender", defender)
+	Squad_SetStateModelTarget(defender, "retreat_from_target", attacker)
+	
+	local localPlayer = Game_GetLocalPlayer()
+	if Util_GetPlayerOwner(attacker) ~= localPlayer and Util_GetPlayerOwner(defender) ~= localPlayer then
+		MetaMap_MetaAttackAutoResolveSimulate()
+		return
+	end
+	
+	if UI_IsCampaignBattleBriefingShowing() then
+		return
+	end
+	
+	local attackerAffectors = MetaMap_GetAutoResolveSelectedAffectorsAndScore(attacker, Squad_GetCurrentMovementNodeID(attacker)).affectors
+	local defenderAffectors = MetaMap_GetAutoResolveSelectedAffectorsAndScore(defender, Squad_GetCurrentMovementNodeID(defender)).affectors
+	
+	MetaMap_MakeAttackerAndDefenderInvulnerable(attacker, defender)
+	
+	if Squad_IsAlive(attacker) then
+		if Squad_IsAlive(defender) then
+			UI_ShowCampaignMissionBriefing(attacker, defender, "", attackerAffectors, defenderAffectors)
+		elseif defender == nil then
+			UI_ShowCampaignMissionBriefingNoDefender(attacker, "")	
+		end
+	end
+	
+end
+
+function MetaMap_HandleSkirmishStart(player)
+	if Player_GetStateModelBool(player, "start_skirmish") ~= true then
+		return
+	end
+	MetaMap_StartBriefingSequence(player, MetaMap_SkirmishBriefing)
+end
+
+function MetaMap_SkirmishBriefing(player)
+	
+	local attacker = Player_GetStateModelSquadTarget(player, "meta_attacker")
+	if attacker == nil or (not Squad_IsAlive(attacker)) then
+		-- If the attacker is killed after an ability/command statetree triggers a skirmish
+		-- with it, then we should abandon the attempt to trigger the skirmish.
+		print("MetaMap_SkirmishBriefing skipping due to killed attacker")
+		ClearMissionAndSkirmishStateModel()
+		World_SetStateModelBool("assault_in_progress", false)
+		return
+	end
+	
+	local defender = Player_GetStateModelSquadTarget(player, "meta_defender")
+	local localPlayerSquad = nil
+	local enemySquad = nil
+	
+	local localPlayer = Game_GetLocalPlayer()
+	if Util_GetPlayerOwner(attacker) == localPlayer then
+		localPlayerSquad = attacker
+		enemySquad = defender
+	elseif Util_GetPlayerOwner(defender) == localPlayer then
+		localPlayerSquad = defender
+		enemySquad = attacker
+	end
+	
+	if localPlayerSquad == nil then
+		MetaMap_MetaAttackAutoResolveSimulate()
+		return
+	end
+	
+	if Squad_IsAlive(attacker) and Squad_IsAlive(attacker) and Squad_CanProceedToSkirmish(attacker, defender) then
+		local scores = MetaMap_GetAutoResolveScores(attacker, defender)
+		local predicatedAttackResult = GetPredictedAttackResult(attacker, defender)
+		
+		local strengthInfo =
+		{
+			localPlayerSquadStrength = (localPlayerSquad == attacker) and scores.attacker.total or scores.defender.total,
+			
+			localPlayerSquadNewRemainingHealth = (localPlayerSquad == attacker) and predicatedAttackResult.attackerNewHealthPercent or predicatedAttackResult.defenderNewHealthPercent,
+			
+			localPlayerSquadOldRemainingHealth = (localPlayerSquad == attacker) and predicatedAttackResult.attackerCurrentHealthPercent or predicatedAttackResult.defenderCurrentHealthPercent,
+			
+			enemySquadStrength = (enemySquad == attacker) and scores.attacker.total or scores.defender.total,
+			
+			enemySquadNewRemainingHealth = (enemySquad == attacker) and predicatedAttackResult.attackerNewHealthPercent or predicatedAttackResult.defenderNewHealthPercent,
+			
+			enemySquadOldRemainingHealth = (enemySquad == attacker) and predicatedAttackResult.attackerCurrentHealthPercent or predicatedAttackResult.defenderCurrentHealthPercent
+		}
+		
+		UI_SetSquadDataContext(localPlayerSquad, strengthInfo)
+		UI_SetSquadDataContext(enemySquad, strengthInfo)
+		
+		if Misc_IsCommandLineOptionSet("autoresolve_all") then
+			MetaMap_MetaAttackAutoResolveSimulate()
+		elseif not UI_IsCampaignBattleBriefingShowing() then
+			local movementNodeID = Squad_GetCurrentMovementNodeID(defender)
+		
+			local attackerAffectors = MetaMap_GetAutoResolveSelectedAffectorsAndScore(attacker, Squad_GetCurrentMovementNodeID(attacker)).affectors
+			local defenderAffectors = MetaMap_GetAutoResolveSelectedAffectorsAndScore(defender, movementNodeID).affectors
+			
+			MetaMap_MakeAttackerAndDefenderInvulnerable(attacker, defender)
+			
+			UI_ShowCampaignSkirmishBriefing(movementNodeID, movementNodeID , attacker, defender, attackerAffectors, defenderAffectors)
+		end
+	end
+end
+
+function MetaMap_StartBriefingSequence(player, launch_briefing)
+	
+	
+
+	
+	-- Block commands and further actiondirector updates from occurring but allow
+	-- ongoing narrative & playbills to settle before opening the briefing
+	g_briefingInfo = {
+		player = player,
+		command_blocker = World_AddScriptedCommandBlocker(),
+		launch_briefing = launch_briefing,
+		attacker = Player_GetStateModelSquadTarget(player, "meta_attacker")
+	}
+	ActionDirector_Pause()
+	Rule_Add(MetaMap_WaitForMissionBriefing, g_briefingInfo)
+end
+function MetaMap_WaitForMissionBriefing(context, briefingInfo)
+	
+	if briefingInfo.cancelled == true then
+		-- We've been interrupted by a narrative mission starting while we were waiting
+		-- for narrative events to resolve, abandon this attempt at starting the mission.
+		-- The global briefing & mission statemodel data have already been cleared.
+		
+		-- Refund action point for the initial attack
+		local attacker = briefingInfo.attacker
+		if attacker ~= nil and Squad_IsAlive(attacker) then
+			Squad_SetActionPoint(attacker, 1)
+		end
+
+		Rule_RemoveMe()
+		return
+	end
+
+	if IsDynamicNarrativePlaying() or DynamicNarrative_HasQueue() then
+		return
+	end
+	
+	if ActionList_IsAnyRunning() then
+		return
+	end
+	
+	if Objective_AnyUpdatesBeingProcessed() then
+		return
+	end
+	
+	-- Pause objectives & playbills now that ongoing events have been settled
+	Objective_PauseObjectiveManager()
+	Playbill_PauseAllPlaybills()
+	Rule_RemoveMe()
+	
+	-- Open the briefing window
+	g_briefingInfo.launch_briefing(briefingInfo.player)
+
+end
+
+function MetaMap_HandleOverwatch(player)
+	local squadAttackers = Player_GetStateModelListSquadTarget(player, "overwatch_attackers")
+	local entityAttackers = Player_GetStateModelListEntityTarget(player, "overwatch_attackers")
+	
+	if squadAttackers == nil and entityAttackers == nil then
+		return
+	end
+	
+	for _,attacker in pairs(squadAttackers) do
+		local defender = Squad_GetStateModelSquadTarget(attacker, "overwatch_target")
+		if defender == nil then
+			defender = Squad_GetStateModelEntityTarget(attacker, "overwatch_target")
+		end
+		
+		if defender ~= nil then
+			local function resolveOverwatch(report)
+				-- for overwatch, set squad state model bool to false right away
+				if scartype(attacker) == ST_SQUAD then
+					Squad_SetStateModelBool(attacker, "cmap_assault_being_processed", false)
+				end
+				MetaMap_DamageUnit(report.defender, report.defenderDamageTaken, report.attacker)
+				Squad_PlayOnAssaultStatetree(report.attacker, report.defender)
+				World_SetStateModelBool("assault_in_progress", false)
+			end
+			MetaMap_PlayCombatAnimation(attacker, defender, false, resolveOverwatch, MetaMap_ResolveOverwatch(attacker, defender))
+		end
+		Squad_ClearStateModelTarget(attacker, "overwatch_target")
+		Player_RemoveStateModelListSquadTarget(player, "overwatch_attackers", attacker)
+	end
+
+	for _,attacker in pairs(entityAttackers) do
+		local defender = Entity_GetStateModelSquadTarget(attacker, "overwatch_target")
+		if defender == nil then
+			defender = Entity_GetStateModelEntityTarget(attacker, "overwatch_target")
+		end
+		
+		if defender ~= nil then
+			local function resolveOverwatch(report)
+				-- for overwatch, set squad state model bool to false right away
+				if scartype(attacker) == ST_SQUAD then
+					Squad_SetStateModelBool(attacker, "cmap_assault_being_processed", false)
+				end
+				MetaMap_DamageUnit(report.defender, report.defenderDamageTaken, report.attacker)
+				World_SetStateModelBool("assault_in_progress", false)
+			end
+			MetaMap_PlayCombatAnimation(attacker, defender, false, resolveOverwatch, MetaMap_ResolveOverwatch(attacker, defender))
+		end
+		Entity_ClearStateModelTarget(attacker, "overwatch_target")
+		Player_RemoveStateModelListEntityTarget(player, "overwatch_attackers", attacker)
+	end
+	
+end
+
+-- Perform the disable effects that aren't done in statetree
+function MetaMap_HandleDisabledPoints(player)
+	
+	-- This is set by the entity_hold_campaign_root statetree where capture
+	-- points on the map will add themselves to their player's statemodel list.
+	local disabled_capture_points = Player_GetStateModelListEntityTarget(player, "campaign_disabled_points")
+
+	for _,point in pairs(disabled_capture_points) do
+		
+		-- Destroy aircraft, evict companies held in this point. 
+		
+		local sg_held_squads = SGroup_CreateIfNotFound("disabled_held_squads")
+		SGroup_Clear(sg_held_squads)
+		Entity_GetSquadsHeld(point, sg_held_squads)
+		
+		local company_to_unload = nil
+		local EvictOrDestroySquad = function(gid, idx, sid)
+			if company_to_unload == nil and Squad_IsOfType(sid, "company") then
+				company_to_unload = sid
+			elseif Squad_IsOfType(sid, "airplane") then
+				Squad_Destroy(sid)
+			end
+		end
+		SGroup_ForEach(sg_held_squads, EvictOrDestroySquad)
+		
+		-- Convert after the unload is complete or else you will convert the squads
+		-- that are held when you convert the point.
+		if company_to_unload ~= nil then
+			Rule_AddOneShot(
+				MetaMap_Unload,
+				0,
+				{
+					unloading_company = company_to_unload,
+					unload_hold = point,
+				})
+		else
+			Entity_SetWorldOwned(point)
+		end
+		
+		SGroup_Clear(sg_held_squads)
+		Player_RemoveStateModelListEntityTarget(player, "campaign_disabled_points", point)
+	end
+	
+end
+
+function MetaMap_MakeCapturePointsInvulnerable()
+
+	local sector_creator_entities = EGroup_CreateIfNotFound("sector_creators")
+	EGroup_Clear(sector_creator_entities)
+	Territory_GetAllSectorCreatorEntities(sector_creator_entities)
+	
+	local MakeEntityInvulnerable = function(gid, idx, eid)
+		Entity_SetInvulnerableMinCap(
+			eid,
+			CAPTURE_POINT_INVULNERABILITY_THRESHOLD,
+			0)
+	end
+	
+	EGroup_ForEach(sector_creator_entities, MakeEntityInvulnerable)
+	EGroup_Clear(sector_creator_entities)
+end
+
+function MetaMap_HandleOfficers(player)
+	local officerRecipient = Player_GetStateModelSquadTarget(player, "officer_recipient")
+	if officerRecipient == nil then
+		return 
+	end
+	
+	if Game_GetLocalPlayerID() == player.PlayerID then
+		Rule_Add(OfficerUnlock_OfficerSelection, {player = player, squad = officerRecipient})
+	else 
+		local officers = Squad_GetOfficerCandidates(officerRecipient, 1)
+		if officers[1] ~= nil then
+			Squad_AddOfficer(officerRecipient, officers[1].id)
+		end
+	end
+	Player_ClearStateModelTarget(player, "officer_recipient")
+end
+
+function HandleDeathTracking()
+	if (not Rule_Exists(HandleEntityDeath)) then
+		Rule_AddGlobalEvent(HandleEntityDeath, GE_EntityKilled)
+	end
+	
+	if (not Rule_Exists(HandleSquadDeath)) then
+		Rule_AddGlobalEvent(HandleSquadDeath, GE_SquadKilled)
+	end
+	
+	-- Reset handled deaths.
+	localDeathTracking.handledEntities = {}
+	localDeathTracking.handledSquads = {}
+end
+
+function HandleEntityDeath(context)
+	if (not ShouldHandleEntityDeath(context.victim, context.victimOwner)) then
+		return
+	end
+	
+	-- The entity would have been removed from its squad, so check if it originally
+	-- came from a squad.
+	if (context.victimSquad ~= nil) then
+		return
+	end
+	
+	-- Find the killer.
+	local killer = nil
+	
+	if (context.killer ~= nil) and Entity_IsAlive(context.killer) then
+		local killerSquad = Entity_GetSquad(context.killer)
+		if (killerSquad ~= nil) then
+			killer = killerSquad
+		else
+			killer = context.killer
+		end
+	end
+	
+	if (killer == nil) then
+		EventCues_CampaignEntityWasDestroyed(context.victim)
+	else
+		EventCues_CampaignEntityWasDestroyedByAttacker(context.victim, killer)
+	end
+	
+	StopTrackingEntityDeath(context.victim)
+end
+
+function HandleSquadDeath(context)
+	if (not ShouldHandleSquadDeath(context.victim)) then
+		return
+	end
+	
+	-- Find the killer.
+	local killer = nil
+	
+	if (context.killer ~= nil) and Entity_IsAlive(context.killer) then
+		local killerSquad = Entity_GetSquad(context.killer)
+		if (killerSquad ~= nil) then
+			killer = killerSquad
+		else
+			killer = context.killer
+		end
+	end
+	
+	if (killer == nil) then
+		EventCues_CampaignSquadWasDestroyed(context.victim)
+	else
+		EventCues_CampaignSquadWasDestroyedByAttacker(context.victim, killer)
+	end
+	
+	StopTrackingSquadDeath(context.victim)
+end
+
+function ShouldHandleEntityDeath(entity, ownerPlayer)
+	-- Don't send unit-loss events if we have already done so for this entity.
+	local eid = Entity_GetID(entity)
+	for i, handledID in pairs(localDeathTracking.handledEntities) do
+		if (handledID == eid) then
+			return false
+		end
+	end
+	
+	-- Don't send unit-loss events for enemy entities
+	if (not IsLocalPlayer(ownerPlayer)) then
+		return false
+	end
+	
+	-- Don't send unit-loss events for entities that are part of a squad.
+	if (Entity_IsPartOfSquad(entity)) then
+		return false
+	end
+	
+	-- Don't send unit-loss events for entities that are not cmap units.
+	if (not Entity_UsesBoardTurn(entity)) then
+		return false
+	end
+	
+	return true
+end
+
+function ShouldHandleSquadDeath(squad)
+	-- Don't send unit-loss events if we have already done so for this squad.
+	local sid = Squad_GetID(squad)
+	for i, handledID in pairs(localDeathTracking.handledSquads) do
+		if (handledID == sid) then
+			return false
+		end
+	end
+	
+	-- Don't send unit-loss events for enemy squads.
+	if (not SquadOwnedByLocalPlayer(squad)) then
+		return false
+	end
+	
+	-- Don't send unit-loss events for squads that aren't cmap units.
+	if (not Squad_UsesBoardTurn(squad)) then
+		return false
+	end
+	
+	return true
+end
+
+function StopTrackingEntityDeath(entity)
+	table.insert(localDeathTracking.handledEntities, Entity_GetID(entity))
+end
+
+function StopTrackingSquadDeath(squad)
+	table.insert(localDeathTracking.handledSquads, Squad_GetID(squad))
+end
+
+function ClearMissionAndSkirmishStateModel(refundActionPoint)
+	for index = 1, World_GetPlayerCount() do 
+		local player = World_GetPlayerAt(index)
+		Player_ClearStateModelTarget(player, "meta_attacker")
+		Player_ClearStateModelTarget(player, "meta_defender")
+		Player_ClearStateModelTarget(player, "meta_mission_entry_entity")
+		Player_SetStateModelBool(player, "start_skirmish", false)
+		Player_SetStateModelBool(player, "start_mission", false)
+	end
+	
+	if g_briefingInfo then
+		ActionDirector_Unpause()
+		Objective_UnpauseObjectiveManager()
+		Playbill_UnpauseAllPlaybills()
+		World_RemoveScriptedCommandBlocker(g_briefingInfo.command_blocker)
+		g_briefingInfo.cancelled = true
+		g_briefingInfo = nil
+	end
+end
+
+function MetaAttackCancel(retreatLocalPlayer)
+	for index = 1, World_GetPlayerCount() do 
+		-- get the info from the player's state model
+		local player = World_GetPlayerAt(index)
+		local attacker = Player_GetStateModelSquadTarget(player, "meta_attacker")
+		local defender = Player_GetStateModelSquadTarget(player, "meta_defender")
+		local isSkirmish = Player_GetStateModelBool(player, "start_skirmish")
+		
+		if not UI_IsCampaignBattleRetreatConfirmationShowing() and retreatLocalPlayer then
+			retreatAttackSquad = attacker
+			retreatDefendSquad = defender
+			if attacker ~= nil and Squad_GetPlayerOwner(attacker) == Game_GetLocalPlayer() then
+				localPlayerRetreatingSquad = attacker
+				if (defender ~= nil) then
+					squadAttackingLocalPlayerRetreatingSquad = defender
+				end
+			elseif defender ~= nil and Squad_GetPlayerOwner(defender) == Game_GetLocalPlayer() then
+				localPlayerRetreatingSquad = defender
+				if (attacker ~= nil) then
+					squadAttackingLocalPlayerRetreatingSquad = attacker
+				end
+			end
+			
+			if localPlayerRetreatingSquad ~= nil then
+				UI_ShowCampaignBattleRetreatConfirmation(CANCEL_MISSION_DAMAGE)
+			end
+		end
+	end
+	
+	if not UI_IsCampaignBattleRetreatConfirmationShowing() then
+		ClearMissionAndSkirmishStateModel()
+		World_SetStateModelBool("assault_in_progress", false)
+	end
+end
+
+function RetreatConfirmationAcceptClicked()
+	MetaMap_MakeAttackerAndDefenderVulnerable(retreatAttackSquad, retreatDefendSquad)
+
+	ApplyDamageToRetreatingSquad(localPlayerRetreatingSquad, squadAttackingLocalPlayerRetreatingSquad, CANCEL_MISSION_DAMAGE)
+	
+	if localPlayerRetreatingSquad ~= nil then
+		
+		local switch_entry_point_owner = false
+		local capturing_company = nil
+		local entry_point_entity = nil
+		if localPlayerRetreatingSquad == retreatDefendSquad and retreatAttackSquad ~= nil and Squad_IsValid(retreatAttackSquad.SquadID) then			
+			entry_point_entity = Player_GetStateModelEntityTarget(Squad_GetPlayerOwner(retreatAttackSquad), "meta_mission_entry_entity")
+			capturing_company = retreatAttackSquad
+			if entry_point_entity ~= nil then
+				switch_entry_point_owner = true
+				Entity_AdvanceMissionPhase(entry_point_entity, true, true)
+			end
+		end
+		
+		Rule_AddOneShot(MetaMap_Retreat_CancelMission, 0, {retreating_company = localPlayerRetreatingSquad, save_datastore = false, entry_point_entity = entry_point_entity, capturing_company = capturing_company, switch_entry_point_owner = switch_entry_point_owner})
+		localPlayerRetreatingSquad = nil
+		squadAttackingLocalPlayerRetreatingSquad = nil
+	end
+	
+	ClearMissionAndSkirmishStateModel()
+	
+	World_SetStateModelBool("assault_in_progress", false)
+end
+
+function ApplyDamageToRetreatingSquad(retreatingSquad, squadAttackingRetreatingSquad, damage)
+	if retreatingSquad ~= nil then
+		local maxSquadHealth = Squad_GetHealthMax(retreatingSquad)
+		local retreatDamage = maxSquadHealth * damage
+		local retreatingSquadCurrentHealth = Squad_GetHealth(retreatingSquad)
+		retreatingSquadCurrentHealth = retreatingSquadCurrentHealth - retreatDamage
+		local retreatingSquadCurrentHealthPercent = 0.0
+		
+		if (maxSquadHealth > 0) then
+			retreatingSquadCurrentHealthPercent = retreatingSquadCurrentHealth / maxSquadHealth
+		end
+		
+		--Adding check so damage does not go below any invulnerability minimums if they exist.
+		local primary_retreat_entity = Squad_GetPrimaryEntity(retreatingSquad)
+		local retreat_invulnerable_min_cap = Entity_GetInvulnerableMinCap(primary_retreat_entity)
+		if retreatingSquadCurrentHealthPercent < retreat_invulnerable_min_cap then
+			retreatingSquadCurrentHealthPercent = retreat_invulnerable_min_cap
+		end
+		
+		--Damage or kill company on disengage. 
+		--TODO Ben: In the future we probably want to lock the disengage button if their health is too low and force them into the skirmish.
+		if Squad_GetHealth(retreatingSquad) <= retreatDamage then
+			--Kill the Company if the health will be 0
+			MetaMap_KillSquadAndRaiseEventWithAttacker(retreatingSquad, squadAttackingRetreatingSquad)
+		else
+			Squad_SetHealth(retreatingSquad, retreatingSquadCurrentHealthPercent) --Set new Company health if it isn't 0
+			UI_CreateSquadKickerMessage(Game_GetLocalPlayer(), retreatingSquad, Loc_FormatText(11169793, retreatDamage)) -- Damage Received: %1VALUE% 
+		end
+	end
+end
+
+function MetaMap_SetRaceOverrideData(campaign, attacker, defender, reinforcing_company)
+	local attacker_race = Anvil_GetRtsRaceFromMetamapRace(Squad_GetRace(attacker))
+
+	local defender_race;
+	if defender ~= nil then
+		defender_race = Anvil_GetRtsRaceFromMetamapRace(Squad_GetRace(defender))
+	else
+		local enemy = Core_GetTeamsEntryFromIndex(2).players[1].id
+		defender_race = Anvil_GetRtsRaceFromMetamapRace(Player_GetRace(enemy))
+	end
+	
+	if Player_IsHuman(Squad_GetPlayerOwner(attacker)) then
+		if campaign.override_player_race ~= nil then
+			attacker_race = campaign.override_player_race
+			campaign.override_player_race = nil
+		end
+		
+		if campaign.override_enemy_race ~= nil then
+			defender_race = campaign.override_enemy_race
+			campaign.override_enemy_race = nil
+		end
+		
+		if scartype(reinforcing_company) == ST_SQUAD then
+			campaign.mission_data.ally_race_override = Anvil_GetRtsRaceFromMetamapRace(Squad_GetRace(reinforcing_company))
+		end
+		
+		campaign.mission_data.player_race_override = attacker_race
+		campaign.mission_data.ai_race_override = defender_race
+	else
+		if campaign.override_player_race ~= nil then
+			defender_race = campaign.override_player_race
+			campaign.override_player_race = nil
+		end
+		
+		if campaign.override_enemy_race ~= nil then
+			attacker_race = campaign.override_enemy_race
+			campaign.override_enemy_race = nil
+		end
+
+		campaign.mission_data.player_race_override = defender_race
+		campaign.mission_data.ai_race_override = attacker_race
+	end
+
+	campaign.mission_data.attacker_race = attacker_race
+end
+
+function MetaMap_LaunchCustomMissionNoEntryPoint(attacker, defender, mapPoolPbg, mapPoolMapEntryIndex)
+	
+	local indexToUse = mapPoolMapEntryIndex or 0
+	local scenarioName = World_GetMapEntryMapNameFromMapPool(mapPoolPbg, indexToUse)
+	
+	MetaMap_MakeAttackerAndDefenderInvulnerable(attacker, defender)
+	
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	campaign.mission_data =
+	{
+		scenario = scenarioName,
+		difficulty = Game_GetSPDifficulty(),
+		mission_type = "mission",
+		processed_by_statetree = false,
+		disable_battlegroups = true,
+		is_narrative_mission = true,
+	}
+	
+	local player_data, _ = MetaMap_MakePlayerDataTable(
+		true, --is_mission
+		false, -- not popup
+		attacker,
+		defender,
+		nil, -- reinforcing_company
+		{}, -- local_player_selected_modifiers
+		{}, -- local_player_ability_modifiers
+		{}, -- local_player_upgrade_modifiers
+		{}, -- ai_ability_modifiers		
+		{}, -- ai_upgrade_modifiers
+		{}, -- reinforcing_player_ability_modifiers,
+		{}, -- reinforcing_player_upgrade_modifiers
+		nil -- entry_point_entity
+		)
+	
+	campaign.mission_affectors = {}
+	campaign.attacker = attacker
+	campaign.defender = defender
+	campaign.player_data = player_data
+	campaign.map_pool_id = mapPoolPbg.PropertyBagGroupID
+	campaign.map_entry_index = indexToUse
+	
+	campaign.next_soldier_story_data = g_next_soldier_story
+	
+	MetaMap_SetRaceOverrideData(campaign, attacker, defender)	
+	MetaMap_SetupCampaignRewardsNoEntryPoint(campaign, mapPoolPbg, indexToUse)
+	
+	Game_StoreTableData("campaign", campaign)
+	
+	-- Reset the soldier story
+	ClearNextMissionSoldierStory()
+	ClearVignetteScreens()
+	
+	-- Save Campaign progress
+	CancelRequestedSave()
+	local save_name = GenerateAutoSaveName(TURN_MISSION_START_LOC_STRING_ID)
+	MetaMap_Save(nil, nil, save_name)
+	
+	ClearMissionAndSkirmishStateModel(true)
+	
+	-- Disable input
+	MetaMap_DisableInput()
+end
+
+function MetaMap_MakePlayerDataTable(is_mission, is_popup, attacker, defender, reinforcing_company,
+		local_player_selected_modifiers, local_player_ability_modifiers, local_player_upgrade_modifiers,
+		ai_ability_modifiers, ai_upgrade_modifiers,
+		reinforcing_player_ability_modifiers, reinforcing_player_upgrade_modifiers,
+		opt_entry_point_entity)
+	
+	local mission_entity_health = 1
+	if is_mission and (not is_popup) and opt_entry_point_entity ~= nil then
+		-- popup can't have town
+		mission_entity_health = Entity_GetHealthPercentage(opt_entry_point_entity)
+	end
+	
+	local attacking_player = Squad_GetPlayerOwner(attacker)
+	local defending_player = nil
+	
+	if defender ~= nil then
+		defending_player = Squad_GetPlayerOwner(defender)
+	end
+	
+	local player_data = {}
+	local garrison_attachment_reinforcement_ability = {}
+	
+	-- Returns a data entry for the given player, modifies garrison_attachment_r_a table
+	function MakePlayerEntry(player, ability_data, upgrade_data)
+		-- get the info from the player's state model
+		
+		-- abilities from nearby buildings
+		local player_entry = {}
+		player_entry.playerID = Player_GetID(player)
+		player_entry.ability_data = ability_data
+		
+		-- set the upgrades from the company squad to be used in the mission
+		if attacking_player.PlayerID == player.PlayerID 
+		    and attacker ~= nil then
+			player_entry.upgrade_data = Squad_GetActiveUpgrades(attacker)
+		elseif defending_player.PlayerID == player.PlayerID 
+			and defender ~= nil then
+			player_entry.upgrade_data = Squad_GetActiveUpgrades(defender)
+		end
+		
+		-- Duplicate check since currently, upgrade can come from both SquadUpgradeExt (requisition) and MovementNodeModifierExt (mission affectors)
+		if player_entry.upgrade_data == nil then
+			player_entry.upgrade_data = {}
+		end
+		
+		for k,v in pairs(upgrade_data) do
+			local added_upgrade = player_entry.upgrade_data[k]
+			
+			if added_upgrade == nil then
+				player_entry.upgrade_data[k] = v
+			end
+		end
+		
+		local company = defender
+		if player.PlayerID == attacking_player.PlayerID then
+			company = attacker
+		end
+		
+		-- effect of company health on mission/skirmish
+		-- for mission, the defender uses the health of the entry point
+		-- for skirmish, both companies use their own health
+		if (not is_mission) or company == attacker then
+			player_entry.hp_percent = Squad_GetHealthPercentage(company, true)
+		elseif is_mission and defending_player ~= nil 
+			and defending_player.PlayerID == player.PlayerID
+			and mission_entity_health > 0 then
+			player_entry.hp_percent = mission_entity_health
+		else
+			player_entry.hp_percent = 1
+		end
+		
+		player_entry.company_veterancy = Squad_GetVeterancy(company)
+		player_entry.company_veterancy_table = Squad_GetVeterancyTable(company)
+		
+		if is_mission then
+			player_entry.starting_squads = BP_GetCompanyStartingSquadsTable(Squad_GetBlueprint(company))
+			local company_garrison_attachment_reinforcement_ability = Squad_GetGarrisonAttachmentReinforcementAbility(company)
+			local bp = Squad_GetBlueprint(company)
+			garrison_attachment_reinforcement_ability[BP_GetName(bp)] = company_garrison_attachment_reinforcement_ability
+		end
+		
+		return player_entry
+	end
+	
+	local local_player = Game_GetLocalPlayer()
+	player_data[LOCAL_PLAYER_DATA_INDEX] = MakePlayerEntry(local_player, local_player_ability_modifiers, local_player_upgrade_modifiers)
+	player_data[AI_PLAYER_DATA_INDEX] = MakePlayerEntry(Player_FindFirstEnemyPlayer(local_player), ai_ability_modifiers, ai_upgrade_modifiers)
+	
+	-- Setup data for reinforcing company
+	if reinforcing_company ~= nil then
+		player_data[ALLY_PLAYER_DATA_INDEX] = Metamap_SetupReinforcingPlayer(reinforcing_company, reinforcing_player_ability_modifiers, reinforcing_player_upgrade_modifiers)
+		if is_mission then
+			player_data[ALLY_PLAYER_DATA_INDEX].starting_squads = BP_GetCompanyStartingSquadsTable(Squad_GetBlueprint(reinforcing_company))
+			local company_garrison_attachment_reinforcement_ability = Squad_GetGarrisonAttachmentReinforcementAbility(reinforcing_company)
+			local bp = Squad_GetBlueprint(reinforcing_company)
+			garrison_attachment_reinforcement_ability[BP_GetName(bp)] = company_garrison_attachment_reinforcement_ability
+		end
+	end
+	
+	return player_data, garrison_attachment_reinforcement_ability
+end
+
+function MetaMap_LaunchCustomMission(
+		attacker, 
+		defender,
+		reinforcing_company,
+		local_player_selected_modifiers, 
+		local_player_ability_modifiers,
+		local_player_upgrade_modifiers,
+		ai_ability_modifiers,
+		ai_upgrade_modifiers,
+		reinforcing_player_ability_modifiers,
+		reinforcing_player_upgrade_modifiers,
+		entry_point_entity,
+		is_popup,
+		modifier_sources,
+		mode,
+		bonus) 
+	
+	local entry_point_id = Player_GetStateModelInt(Squad_GetPlayerOwner(attacker), "mission_entry_point_id")
+	
+	if entry_point_entity == nil then
+		print("mission entry point entity was nil")
+	end
+	
+	local pos = Entity_GetPosition(entry_point_entity)
+
+	local mission_data = Entity_GetMissionMapFromEntryPoint(entry_point_entity)
+	local mission_node_id = Squad_GetCurrentMovementNodeID(attacker)
+	
+	local player_data, garrison_attachment_reinforcement_ability = MetaMap_MakePlayerDataTable(
+		true, --is_mission
+		is_popup,
+		attacker, defender, reinforcing_company,
+		local_player_selected_modifiers, local_player_ability_modifiers, local_player_upgrade_modifiers,
+		ai_ability_modifiers, ai_upgrade_modifiers,
+		reinforcing_player_ability_modifiers, reinforcing_player_upgrade_modifiers,
+		entry_point_entity
+		)
+	
+	-----------------------------------
+	
+	-- set the keys in the Campaign Data Store to return to this metamap save file in the future
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	-- trigger the mission, mission_name takes precedence over phase in state tree
+	if g_skirmish_map_override ~= nil and scartype(g_skirmish_map_override) == ST_STRING then
+		mission_data.scenario_name = g_skirmish_map_override
+	end
+	
+	campaign.mission_data =
+	{
+		scenario = mission_data.scenario_name,
+		difficulty = Game_GetSPDifficulty(),
+		layer_sets = Entity_GetMissionLayerSetTagsByHealthThreshold(entry_point_entity),
+		-- TODO: campaign.rdo state tree needs to be authored
+		-- to handle mission mission_type and do any extra work that needs to be done compared to
+		-- normal skirmish (possibly things such as briefing/debriefing, cutscenes etc)
+		mission_type = "mission",
+		mode = mode,
+		bonus = bonus,
+		processed_by_statetree = false,
+		disable_battlegroups = true
+	}
+	
+	if is_popup then
+		campaign.mission_data.win_condition_override = "no_win_condition"
+	end
+	
+	MetaMap_SetRaceOverrideData(campaign, attacker, defender, reinforcing_company)
+	
+	--mission affectors
+	local affector_data =
+	{
+		entry_point_entity = entry_point_entity,
+		attacker = attacker,
+		defender = defender,
+		reinforcing_company = reinforcing_company,
+		pos = pos,
+	}
+	
+	local affectors = Affectors_CreateAffectors(affector_data, false);
+	
+	if campaign.override_player_company_bp_name ~= nil then
+		affectors.player_company_bp_name = campaign.override_player_company_bp_name
+		campaign.override_player_company_bp_name = nil
+	end
+	
+	if campaign.override_enemy_company_bp_name ~= nil then
+		affectors.enemy_company_bp_name = campaign.override_enemy_company_bp_name
+		campaign.override_enemy_company_bp_name = nil
+	end
+	
+	local reinforcement_abilities = Entity_GetReinforcementAbilitiesOnMovementNode(entry_point_entity)
+	affectors.reinforcement_abilities = reinforcement_abilities
+	local garrison_ability = Entity_GetGarrisonAbilityOnMovementNode(entry_point_entity)
+	affectors.garrison_ability = garrison_ability
+	affectors.garrison_attachment_reinforcement_ability = garrison_attachment_reinforcement_ability
+	campaign.selected_modifiers = local_player_selected_modifiers
+	campaign.mission_affectors = affectors
+	campaign.mission_affector_sources = modifier_sources
+	campaign.attacker = attacker
+	
+	-- Using the following data for telemetry
+	campaign.local_player_ability_modifiers = local_player_ability_modifiers
+	campaign.ai_ability_modifiers = ai_ability_modifiers
+	campaign.local_player_upgrade_modifiers = local_player_upgrade_modifiers
+	campaign.ai_upgrade_modifiers = ai_upgrade_modifiers
+	-----------------------------------------
+	
+	campaign.defender = defender
+	campaign.reinforcing_company = reinforcing_company
+	campaign.entry_point_entity = entry_point_entity
+	campaign.player_data = player_data
+	campaign.entry_point_id = entry_point_id
+	
+	campaign.next_soldier_story_data = g_next_soldier_story
+	
+	MetaMap_SetupCampaignRewards(campaign, entry_point_entity)
+	
+	local report = MetaMap_AutoResolve(attacker, defender)
+	if report ~= nil then
+		campaign.auto_resolve_prediction = report.winning_player.PlayerID == Game_GetLocalPlayerID()
+	end
+	
+	Game_StoreTableData("campaign", campaign)
+	
+	-- Reset the soldier story
+	ClearNextMissionSoldierStory()
+	ClearVignetteScreens()
+	
+	-- Save Campaign progress
+	CancelRequestedSave()
+	local save_name = GenerateAutoSaveName(TURN_MISSION_START_LOC_STRING_ID)
+	MetaMap_Save(nil, nil, save_name)
+	
+	ClearMissionAndSkirmishStateModel()
+end
+
+
+function MetaMap_LaunchSkirmish(attacker, defender, reinforcing_company,
+		local_player_selected_modifiers, local_player_ability_modifiers, local_player_upgrade_modifiers,
+		ai_ability_modifiers, ai_upgrade_modifiers,
+		reinforcing_player_ability_modifiers, reinforcing_player_upgrade_modifiers, modifier_sources, mode, bonus)
+	local skirmish_node_id = Squad_GetCurrentMovementNodeID(defender)
+	local skirmish_data = World_GetMovementNodeMapData(skirmish_node_id)
+	local player_data, _ = MetaMap_MakePlayerDataTable(
+		false, --is_mission
+		false, --is_popup
+		attacker, defender, reinforcing_company,
+		local_player_selected_modifiers, local_player_ability_modifiers, local_player_upgrade_modifiers,
+		ai_ability_modifiers, ai_upgrade_modifiers,
+		reinforcing_player_ability_modifiers, reinforcing_player_upgrade_modifiers
+		)
+	
+	-----------------------------------
+	
+	-- Preskirmish Event Director Phase
+	ActionDirector_ExecuteScriptedPreSkirmishPhase()
+	
+	-- set up Soldier Story content if required
+	if Squad_GetPlayerOwner(attacker).PlayerID == Game_GetLocalPlayerID() then
+		InitializePreRTSSoldierStory(attacker.SquadID)
+	else
+		InitializePreRTSSoldierStory(defender.SquadID)
+	end	
+	
+	-- set the keys in the Campaign Data Store to return to this metamap save file in the future
+	local campaign = Game_RetrieveTableData("campaign", false)
+
+	-- trigger the mission, mission_name takes precedence over phase in state tree
+	campaign.mission_data = 
+	{ 
+		scenario = skirmish_data.scenario_name,
+		difficulty = Game_GetSPDifficulty(),
+		layer_sets = Squad_GetSkirmishLayerSetTagsByHealthThreshold(defender),
+		movement_node_terrain_type = skirmish_data.movement_node_terrain_type,
+		mission_type = "skirmish",
+		win_condition_override = "no_win_condition",
+		mode = mode,			-- Set to "rescue" in the case of a rescue mission
+		bonus = bonus,
+		processed_by_statetree = false,
+		disable_battlegroups = true,
+		auto_resolve = MetaMap_GetAutoResolveScores(attacker, defender),
+	}
+	
+	MetaMap_SetRaceOverrideData(campaign, attacker, defender)
+	
+	-- location of the skirmish
+	local pos = Squad_GetPosition(defender)
+	
+	-- mission affectors
+	local affector_data = 
+	{
+		attacker = attacker,
+		defender = defender,
+		reinforcing_company = reinforcing_company,
+		pos = pos,
+	}
+	
+	local affectors = Affectors_CreateAffectors(affector_data, false);
+	
+	if campaign.override_player_company_bp_name ~= nil then
+		affectors.player_company_bp_name = campaign.override_player_company_bp_name
+		campaign.override_player_company_bp_name = nil
+	end
+	
+	if campaign.override_enemy_company_bp_name ~= nil then
+		affectors.enemy_company_bp_name = campaign.override_enemy_company_bp_name
+		campaign.override_enemy_company_bp_name = nil
+	end
+
+	campaign.selected_modifiers = local_player_selected_modifiers
+	campaign.mission_affectors = affectors
+	campaign.mission_affector_sources = modifier_sources
+	campaign.attacker = attacker
+	campaign.defender = defender
+	campaign.reinforcing_company = reinforcing_company
+	campaign.mission_node_id = skirmish_node_id
+	campaign.player_data = player_data
+	
+	campaign.next_soldier_story_data = g_next_soldier_story
+	
+	MetaMap_SetupCampaignRewardsNoEntryPoint(campaign)
+	Game_StoreTableData("campaign", campaign)
+	
+	World_IncrementCurrentMapEntryIndex(skirmish_node_id)
+	
+	-- Save Campaign progress
+	CancelRequestedSave()
+	local save_name = GenerateAutoSaveName(TURN_MISSION_START_LOC_STRING_ID)
+	MetaMap_Save(nil, nil, save_name)
+	
+	ClearMissionAndSkirmishStateModel()
+end
+
+function Metamap_SetupReinforcingPlayer(reinforcing_company, reinforcing_player_ability_modifiers, reinforcing_player_upgrade_modifiers)
+	-- Setting abilities, hp percent, starting squads
+	local ally_data = {}
+	ally_data.ability_data = reinforcing_player_ability_modifiers
+	ally_data.upgrade_data = Squad_GetActiveUpgrades(reinforcing_company)
+	ally_data.hp_percent = Squad_GetHealthPercentage(reinforcing_company, true)
+	-- Setting upgrades
+	local reinforcing_company_modifier_upgrade_data = reinforcing_player_upgrade_modifiers
+	if ally_data.upgrade_data == nil then
+		ally_data.upgrade_data = {}
+	end
+	for k, v in pairs(reinforcing_company_modifier_upgrade_data) do
+		local added_upgrade = ally_data.upgrade_data[k]
+		if added_upgrade == nil then
+			ally_data.upgrade_data[k] = v
+		end
+	end
+	return ally_data
+end
+
+function MetaMap_MakeAttackerAndDefenderInvulnerable(attacker, defender)
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	-- make attacker invincible until this is over
+	if attacker ~= nil and attacker.SquadID ~= nil and Squad_IsValid(attacker.SquadID) then
+		local attacker_squad = Squad_FromID(attacker.SquadID)
+		local primary_attacker_entity = Squad_GetPrimaryEntity(attacker_squad)
+		local attacker_invulnerable_min_cap = Entity_GetInvulnerableMinCap(primary_attacker_entity)
+		local is_attacker_invulnerable = attacker_invulnerable_min_cap > 0
+		if not is_attacker_invulnerable then
+			Entity_SetInvulnerable(primary_attacker_entity, true, 0)
+			campaign.attacker_made_invulnerable = true
+		end
+	end
+	
+	-- make attacker invincible until this is over
+	if defender ~= nil and defender.SquadID ~= nil and Squad_IsValid(defender.SquadID) then
+		local defender_squad = Squad_FromID(defender.SquadID)
+		local primary_defender_entity = Squad_GetPrimaryEntity(defender_squad)
+		local defender_invulnerable_min_cap = Entity_GetInvulnerableMinCap(primary_defender_entity)
+		local is_defender_invulnerable = defender_invulnerable_min_cap > 0
+		if not is_defender_invulnerable then
+			Entity_SetInvulnerable(primary_defender_entity, true, 0)
+			campaign.defender_made_invulnerable = true
+		end
+	end
+	
+	Game_StoreTableData("campaign", campaign)
+end
+
+function MetaMap_MakeAttackerAndDefenderVulnerable(attacker, defender)
+	local campaign = Game_RetrieveTableData("campaign", false)
+	
+	-- make attacker invincible until this is over
+	if attacker ~= nil and attacker.SquadID ~= nil and Squad_IsValid(attacker.SquadID) and campaign.attacker_made_invulnerable then
+		local attacker_squad = Squad_FromID(attacker.SquadID)
+		local primary_attacker_entity = Squad_GetPrimaryEntity(attacker_squad)
+		Entity_SetInvulnerable(primary_attacker_entity, false, 0)
+	end
+	
+	-- make attacker invincible until this is over
+	if defender ~= nil and defender.SquadID ~= nil and Squad_IsValid(defender.SquadID) and campaign.defender_made_invulnerable then
+		local defender_squad = Squad_FromID(defender.SquadID)
+		local primary_defender_entity = Squad_GetPrimaryEntity(defender_squad)
+		Entity_SetInvulnerable(primary_defender_entity, false, 0)
+	end
+	
+	campaign.attacker_made_invulnerable = false
+	campaign.defender_made_invulnerable = false
+	
+	Game_StoreTableData("campaign", campaign)
+end
+
+function MetaMap_CreateSaveDialog()
+	local xaml =
+	[[<DockPanel
+			xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+		 	xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+			Width="1920" Height="1080">
+		        <Control Style="{StaticResource SaveIndicatorStyle}" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" />
+		</DockPanel>]]
+	UI_Remove("MetaMapSaveDialog")
+	UI_AddChild("", "XamlPresenter", "MetaMapSaveDialog", { Xaml = xaml })
+end
+
+-- Used in case mission/skirmish starts while end turn button was already pressed resulting in end turn autosave being queued up
+-- If the end turn autosave has yet to start, this will cancel it
+function CancelRequestedSave()
+	if(Rule_Exists(MetaMap_SaveStageRequestSave)) then
+		Rule_Remove(MetaMap_SaveStageRequestSave)
+		if g_saveCommandBlocker then
+			World_RemoveScriptedCommandBlocker(g_saveCommandBlocker)
+		end
+	end
+end
+
+function MetaMap_Save(success_callback, fail_callback, save_name)
+	
+	-- if final mission is cleared, don't save as meta map is ending
+	if g_final_mission_won == true then
+		return	
+	end
+	
+	-- Save only if not disabled - only do if not already saving
+	local campaign_temp = Game_RetrieveTableData("campaign_temp",false)
+	if Misc_IsCommandLineOptionSet("disable_campaign_save") == false and UI_GetAllowLoadAndSave() then
+	
+		-- signal state tree that we've requested a save. since the actual save will be delayed by at least a frame 
+		-- due to the Rule_Add call below, Game_IsSaving will not return true immediately and state tree would try to
+		-- advance to the mission before saving had initiated.
+		local gamesave = Game_RetrieveTableData("gamesave", false)
+		gamesave.has_pending_save_request = true
+		if Misc_IsCommandLineOptionSet("campaign_auto_save_load_every_turn") and gamesave.auto_load_turn ~= World_GetCurrentTurn() then
+			gamesave.should_auto_load = true
+			gamesave.auto_load_turn = World_GetCurrentTurn()
+		end
+		Game_StoreTableData("gamesave", gamesave)
+	
+		metamap_save_requested = true
+		save_begin_game_time = World_GetGameTime()
+		
+		-- Disable save/load while an autosave is queued. This prevents the campaign datastore
+		-- from being tampered with while we're making a save.
+		g_save_load_allowed = UI_GetAllowLoadAndSave()
+		UI_SetAllowLoadAndSave(false)
+		
+		g_saveCommandBlocker = World_AddScriptedCommandBlocker() -- Prevent further turn actions from being issued
+		ActionDirector_Pause()
+		Rule_Add(MetaMap_SaveStageRequestSave, {callback = success_callback, fail_callback = fail_callback, save_name = save_name})
+	else
+		if success_callback ~= nil then
+			success_callback()
+		end
+	end
+end
+
+function MetaMap_SaveStageRequestSave(id, data)
+	
+	if Game_IsSavingOrPendingSave() then
+		print("MetaMap_SaveStageRequestSave failing due to game already saving")
+		return
+	end
+	
+	if Event_IsAnyRunning() == true then
+		print("MetaMap_SaveStageRequestSave failing due to running events")
+		return
+	end
+	
+	if not World_CanSaveTurnModule() then
+		print("MetaMap_SaveStageRequestSave failing due to ongoing turn actions")
+		return
+	end
+	
+	if Objective_AnyUpdatesBeingProcessed() then
+		print("MetaMap_SaveStageRequestSave failing due to objective being processed")
+		return
+	end
+	
+	-- The scripted systems are at rest and it's safe to serialize them. We must pause
+	-- them here to ensure that they stay at rest until the save is complete:
+	Objective_PauseObjectiveManager()
+	Playbill_PauseAllPlaybills()
+	
+	-- Show Save Indicator if not already shown
+	-- Delay for one frame so if one already exists, it has chance to despawn in FinishSave()
+	MetaMap_CreateSaveDialog()
+	
+	-- clear save request
+	Rule_RemoveMe()
+	
+	-- Save the narrative variables based on the current state. This can't happen in LaunchSkirmish/Mission
+	-- because the game can still be resolving ongoing narrative when that is called. The final data
+	-- should be available at this point when the game is actually resolved.
+	-- These need to be provided to the mission so they're ferried to the RTS using the datastore.
+	local campaign = Game_RetrieveTableData("campaign", false)
+	campaign.narrative_variables = NarrativeVariables_GetAll()
+	Game_StoreTableData("campaign", campaign)
+	
+	-- Save the meta map, campaign datastore will be saved along with it by internal save functionality
+	-- script-triggered saves are always named "autosave"
+	MissionPrint("Saving Campaign Map")
+	
+	local autosave_name = data.save_name
+	
+	if autosave_name == nil or autosave_name == Loc_Empty() then
+		autosave_name = Loc_GetString(11247045) -- Autosave
+	end
+	
+	-- Game_AutosaveWithName will automatically add " - autosave" to end end
+	local save_request_ID = Game_AutosaveWithName(autosave_name)
+	
+	-- the Game_SaveGame will take two ticks to fire due to internal concurrency command queuing
+	-- so, wait for the save to start before checking for completion.
+	data.save_request_ID = save_request_ID
+	Rule_Add(MetaMap_SaveStageSaveStarted, data)
+	
+end
+
+function MetaMap_SaveStageSaveStarted(id, data)
+	if Game_IsSaveRequestIDStarted(data.save_request_ID) or Game_IsSaveRequestIDCompleted(data.save_request_ID) then
+		-- Save started, call back now
+		if data.callback ~= nil then
+			data.callback()
+		end
+		Rule_RemoveMe()
+		Rule_Add(MetaMap_SaveStageFinish, data)
+	end
+end
+
+-- Wait for the save to finish
+function MetaMap_SaveStageFinish(id, data)
+	-- since the save request has started, we can now clear the pending request
+	local gamesave = Game_RetrieveTableData("gamesave", false)
+	if gamesave.has_pending_save_request == true then
+		gamesave.has_pending_save_request = false
+		Game_StoreTableData("gamesave", gamesave)
+	end
+	
+	-- check that save is finished to clean up lua save state
+	if not Game_IsSaveRequestIDCompleted(data.save_request_ID) then
+		return
+	end
+	
+	if gamesave.should_auto_load then
+		gamesave.should_auto_load = false
+		Game_StoreTableData("gamesave", gamesave)
+		Game_LoadAnvilMetaGame("autosave")
+	end
+	
+	-- Save has completed, allow more saves and hide saving dialog
+	metamap_save_requested = false
+	
+	-- Allow further turn actions to be issued
+	if g_saveCommandBlocker then
+		ActionDirector_Unpause()
+		World_RemoveScriptedCommandBlocker(g_saveCommandBlocker)
+	end
+	Objective_UnpauseObjectiveManager()
+	Playbill_UnpauseAllPlaybills()
+	UI_Remove("MetaMapSaveDialog")
+	
+	-- Reset Allow save & load
+	UI_SetAllowLoadAndSave(g_save_load_allowed)
+	
+	Rule_RemoveMe()
+end
+
+function MetaMap_MetaAttackAutoResolveForcePlayerWin()
+	MetaMap_MetaAttackAutoResolve(true)
+end
+
+function MetaMap_MetaAttackAutoResolveForcePlayerLose()
+	MetaMap_MetaAttackAutoResolve(false)
+end
+
+function MetaMap_MetaAttackAutoResolveSimulate()
+	MetaMap_MetaAttackAutoResolve(nil)
+end
+
+function MetaMap_MetaAttackAutoResolve(force_player_win)
+	
+	for index = 1, World_GetPlayerCount() do 
+		-- get the info from the player's state model
+		local player = World_GetPlayerAt(index)
+		
+		local attacker = Player_GetStateModelSquadTarget(player, "meta_attacker")
+		local defender = Player_GetStateModelSquadTarget(player, "meta_defender")
+		local mission_entry_point = Player_GetStateModelEntityTarget(player, "meta_mission_entry_entity")
+		local isSkirmish = Player_GetStateModelBool(player, "start_skirmish")
+		local isMission = Player_GetStateModelBool(player, "start_mission")
+		
+		local campaign = Game_RetrieveTableData("campaign", false)
+		local report = nil
+		
+		campaign.narrative_influence = World_GetAllNarrativeInfluenceValueToUse()
+		
+		-- TODO Disable auto resolve for missions involving the human player
+		if isMission then
+			local winningPlayer = Util_GetPlayerOwner(attacker)
+			local isLocalPlayerWinner = winningPlayer ~= nil and winningPlayer.PlayerID == Game_GetLocalPlayerID()
+			report = {
+				winning_player = winningPlayer,
+				is_local_player_winner = isLocalPlayerWinner,
+				gameLength = 0,
+				auto_resolved = true,
+				attackerDamageTaken = 0,
+				defenderDamageTaken = 0
+			}
+			campaign.report = report
+			campaign.attacker = attacker
+			campaign.defender = defender
+			campaign.process_mission_result = true
+			campaign.auto_resolve_data = {
+				mission_type = "mission"
+			}
+			campaign.entry_point_entity = Entity_FromID(mission_entry_point.EntityID)
+			
+			if force_player_win ~= nil then
+				if (force_player_win == true and Squad_GetPlayerOwner(attacker).PlayerID == Game_GetLocalPlayerID()) or
+					(force_player_win == false and Squad_GetPlayerOwner(defender).PlayerID == Game_GetLocalPlayerID()) then
+					report.winning_player = Squad_GetPlayerOwner(attacker)
+					report.attackerDamageTaken = 0
+					report.defenderDamageTaken = Squad_GetHealthMax(defender) * FORCE_WIN_DAMAGE_PERCENT
+				else
+					report.winning_player = Squad_GetPlayerOwner(defender)
+					report.attackerDamageTaken = Squad_GetHealthMax(attacker) * FORCE_WIN_DAMAGE_PERCENT
+					report.defenderDamageTaken = 0
+				end
+				report.is_local_player_winner = report.winning_player.PlayerID == Game_GetLocalPlayerID()
+			end
+			
+			MetaMap_SetupCampaignRewards(campaign, campaign.entry_point_entity)
+			
+			Game_StoreTableData("campaign", campaign)
+			MetaMap_ProcessResult()
+			ClearMissionAndSkirmishStateModel()
+			return
+		elseif isSkirmish then 
+			report = MetaMap_AutoResolve(attacker, defender)
+			
+			if force_player_win ~= nil then
+				if (force_player_win == true and Squad_GetPlayerOwner(attacker).PlayerID == Game_GetLocalPlayerID()) or
+					(force_player_win == false and Squad_GetPlayerOwner(defender).PlayerID == Game_GetLocalPlayerID()) then
+					report.winning_player = Squad_GetPlayerOwner(attacker)
+					report.attackerDamageTaken = 0
+					report.defenderDamageTaken = Squad_GetHealthMax(defender) * FORCE_WIN_DAMAGE_PERCENT
+				else
+					report.winning_player = Squad_GetPlayerOwner(defender)
+					report.attackerDamageTaken = Squad_GetHealthMax(attacker) * FORCE_WIN_DAMAGE_PERCENT
+					report.defenderDamageTaken = 0
+				end
+				report.is_local_player_winner = report.winning_player.PlayerID == Game_GetLocalPlayerID()
+			end
+			campaign.report = report
+			campaign.attacker = attacker
+			campaign.defender = defender
+			campaign.process_mission_result = true
+			campaign.auto_resolve_data = {
+				mission_type = "skirmish"
+			}
+			MetaMap_SetupCampaignRewardsNoEntryPoint(campaign)
+			
+			Game_StoreTableData("campaign", campaign)
+			if defender ~= nil then
+				local skirmish_node_id = Squad_GetCurrentMovementNodeID(defender)
+				local defender_pos = Squad_GetPosition(defender)
+				local skirmish_territory = World_GetTerritorySectorID(defender_pos)
+				local skirmish_data = World_GetMovementNodeMapData(skirmish_node_id)
+				World_CampaignSkirmishAutoResolved(skirmish_data.scenario_name, report.is_local_player_winner, skirmish_territory) -- Telemetry stuff
+			end
+			MetaMap_ProcessResult()
+			ClearMissionAndSkirmishStateModel()
+			return
+		end
+	end
+end
+
+function MetaMap_PlayCombatAnimation(attacker, defender, shouldRetaliate, callback, data)
+	local attackingUnit = nil
+	local defendingUnit = nil
+	
+	if attacker.SquadID then
+		attackingUnit = Squad_FromID(attacker.SquadID)
+	else
+		attackingUnit = Entity_FromID(attacker.EntityID)
+	end
+	if defender.SquadID then
+		defendingUnit = Squad_FromID(defender.SquadID)
+	else
+		defendingUnit = Entity_FromID(defender.EntityID)
+	end 
+	
+	if MetaMap_HasVisualAttackTarget(attackingUnit) == false and MetaMap_HasVisualAttackTarget(defendingUnit) == false then
+		local distSqr = Util_GetDistanceSquared(attackingUnit, defendingUnit)
+		if distSqr <= 200 then
+			-- The attacker and defender could be far apart if this is a defend mission with the defender very far away
+			-- In this case an attack animation will look very odd so we just skip it.
+			Util_SetStateModelTarget(attackingUnit, "meta_visual_attack_target", defendingUnit)
+			if shouldRetaliate then
+				Util_SetStateModelTarget(defendingUnit, "meta_visual_attack_target", attackingUnit)
+			end
+		end
+	end
+	
+	MetaMap_DisableInput()
+	
+	Rule_Add(MetaMap_FinishCombatAnimation, {attacker = attackingUnit, defender = defendingUnit, callback = callback, params = data})
+end
+
+function MetaMap_FinishCombatAnimation(context, data)
+	if MetaMap_HasVisualAttackTarget(data.attacker) or MetaMap_HasVisualAttackTarget(data.defender) then
+		return
+	end
+	if data.callback ~= nil then
+		data.callback(data.params)
+	end
+	MetaMap_EnableInput()
+	Rule_RemoveMe()
+end
+
+function MetaMap_HasVisualAttackTarget(unitToCheck)
+	local unitType = scartype(unitToCheck)
+	local attackTarget = nil
+	if unitType == ST_SQUAD then
+		attackTarget = Squad_GetStateModelSquadTarget(unitToCheck, "meta_visual_attack_target")
+		if attackTarget == nil then
+			attackTarget = Squad_GetStateModelEntityTarget(unitToCheck, "meta_visual_attack_target")
+		end
+	elseif unitType == ST_ENTITY then
+		attackTarget = Entity_GetStateModelSquadTarget(unitToCheck, "meta_visual_attack_target")
+		if attackTarget == nil then
+			attackTarget = Entity_GetStateModelEntityTarget(unitToCheck, "meta_visual_attack_target")
+		end
+	end
+	return attackTarget ~= nil
+end
+
+function MetaMap_Retreat(context, data)
+	
+	if data.retreating_company ~= nil and Squad_IsAlive(data.retreating_company) then
+		local player = Squad_GetPlayerOwner(data.retreating_company)
+		local sg_retreat = SGroup_CreateIfNotFound("sg_retreating_company")
+		SGroup_Clear(sg_retreat)
+		SGroup_Add(sg_retreat, data.retreating_company)
+	
+		-- Company retreat doesn't really need position but faking a random position for the LocalCommand call
+		local position = Util_ScarPos(0, 0)
+	
+		if data.wait_for_unload_and_kill then
+			-- Just unload the company instead of fully retreating it as it will be killed once unloaded
+			LocalCommand_SquadPos(
+				player,
+				sg_retreat,
+				SCMD_Unload,
+				position,
+				false)
+		else
+		
+			LocalCommand_SquadPos(
+				player,
+				sg_retreat,
+				SCMD_Retreat,
+				position,
+				false)
+		end
+	end
+	
+	Rule_Add(MetaMap_WaitForRetreatToFinish, data)
+end
+
+function MetaMap_Unload(context, data)
+	
+	local player = Squad_GetPlayerOwner(data.unloading_company)
+	local sg_unload = SGroup_CreateIfNotFound("sg_unloading_company")
+	SGroup_Clear(sg_unload)
+	SGroup_Add(sg_unload, data.unloading_company)
+	
+	-- Company retreat doesn't really need position but faking a random position for the LocalCommand call
+	-- Force unload command to be queued up because if an ability caused a building to reach 10% hp
+	-- This command could be blocked
+	Squad_SetStateModelBool(data.unloading_company, "campaign_force_queue_unload_command", true)
+	LocalCommand_Squad(player, sg_unload, SCMD_Unload, false)
+	
+	Rule_Add(MetaMap_WaitForUnloadToFinish, data)
+end
+
+function MetaMap_WaitForUnloadToFinish(context, data)
+	local squad = data.unloading_company
+	if not Squad_IsAlive(squad) or Squad_GetHoldEntity(squad) == nil then
+		-- The squad has exited the building or died.
+		Entity_SetWorldOwned(data.unload_hold)
+		Rule_RemoveMe()
+	end
+end
+
+function MetaMap_PostMissionSave(data)
+	if data.should_save == true then
+		local save_name = GenerateAutoSaveName(TURN_POST_MISSION_LOC_STRING_ID)
+		MetaMap_Save(nil, nil, save_name)
+	end
+end
+
+function MetaMap_WaitForRetreatToFinish(context, data)
+	
+	local retreating_squad_alive = data.retreating_company ~= nil and Squad_IsAlive(data.retreating_company)
+	if retreating_squad_alive and Squad_GetStateModelBool(data.retreating_company, "campaign_company_retreating") == true then
+		return
+	end
+	
+	-- We may be considered finished retreating when the company has unloaded. If the company has exited
+	-- the hold, then kill it and continue, otherwise keep waiting.
+	if data.wait_for_unload_and_kill and retreating_squad_alive then
+		if Squad_IsInHoldEntity(data.retreating_company) then
+			return
+		else
+			MetaMap_KillSquadAndRaiseEventWithAttacker(data.retreating_company, data.capturing_company)
+			retreating_squad_alive = false
+		end
+	end
+	
+	if retreating_squad_alive then
+		World_RemoveSquadFromTurnActionQueue(data.retreating_company)
+	end
+		
+	-- Play capture FX & convert the point if required (deferring the save until the conversion is complete)
+	if data.switch_entry_point_owner == true then
+		MetaMap_DisableInput()
+		World_AddSquadToTurnActionQueue(data.capturing_company)
+		Rule_Add(MetaMap_WaitForCaptureToFinish, data)
+		Util_SetStateModelTarget(data.capturing_company, "meta_visual_capture_target", data.entry_point_entity)
+	else
+		MetaMap_PostMissionSave(data)
+	end
+
+	Rule_RemoveMe()
+end
+
+function MetaMap_WaitForCaptureToFinish(context, data)
+	if Squad_HasStateModelTarget(data.capturing_company, "meta_visual_capture_target") then
+		local target = Squad_GetStateModelTarget(data.capturing_company, "meta_visual_capture_target")
+		if target ~= nil then
+			return
+		end
+	end
+	
+	-- The capture animation has finished, remove this squad from the turn queue
+	World_RemoveSquadFromTurnActionQueue(data.capturing_company)
+	MetaMap_EnableInput()
+	
+	MetaMap_PostMissionSave(data)
+
+	Rule_RemoveMe()
+end
+
+--? @shortdesc Returns the name of the RTS version of the given race. 
+--? @extdesc If a player has a race like "americans_campaign" it will map to "americans." The assumption is that races
+--? are named the same but have an appended "_campaign" to the end and no underscores elsewhere
+--? @args ScarRacePBG racePBG
+function MetaMap_GetRtsRace(racePBG)
+	-- To match regular matches we are converting from campaign to RTS race, but perhaps this won't
+	-- always be desirable. In that case, just use the name of the race directly.
+	local campaignRaceName = BP_GetName(racePBG)
+	local splitResult = Util_StringSplit(campaignRaceName, "_")
+	return splitResult[1] or campaignRaceName
+end
+
+function MetaMap_CaptureNearbyEmptyPoint(losingSquad, winningSquad)
+	if losingSquad ~= nil and winningSquad ~= nil then
+		local loserPos = Util_GetPosition(losingSquad)
+		local loserPlayer = Util_GetPlayerOwner(losingSquad)
+		local winningPlayer = Util_GetPlayerOwner(winningSquad)
+
+		local eg_NearbyCapturePoints = EGroup_CreateIfNotFound("eg_NearbyCapturePoints")
+		EGroup_Clear(eg_NearbyCapturePoints)
+		
+		Player_GetAllEntitiesNearMarker(loserPlayer, eg_NearbyCapturePoints, loserPos, 10)
+		EGroup_Filter(eg_NearbyCapturePoints, BP_GetEntityBlueprintsWithType("capture"), FILTER_KEEP)
+		
+		if EGroup_Count(eg_NearbyCapturePoints) > 0 and winningPlayer ~= nil then
+			local entity = EGroup_GetSpawnedEntityAt(eg_NearbyCapturePoints, 1)
+			if not Entity_IsHoldingAny(entity) and Entity_GetCaptureResistanceRemaining(entity) > 1 then
+				Entity_SetCaptureResistance(entity, (Entity_GetCaptureResistanceRemaining(entity) - 1))
+			end
+		end
+		
+		EGroup_Destroy(eg_NearbyCapturePoints)
+	end
+end
+
+function MetaMap_Retreat_CancelMission(context, data)
+	-- retreat a few nodes
+	Squad_SetMovementDistanceRemaining(data.retreating_company, CANCEL_MISSION_RETREAT_DISTANCE)
+	data.retreat_nearby_squads = false
+	MetaMap_Retreat(context, data)
+end
+
+function MetaMap_Retreat_MissionDefeat(context, data)
+	-- retreat one day's worth
+	local squad = data.retreating_company
+	if squad ~= nil and Squad_IsAlive(squad) then
+		data.battle_location = Squad_GetPosition(squad) -- TODO should this use movement node?
+		data.retreating_player = Squad_GetPlayerOwner(squad)
+		data.retreat_nearby_squads = true
+		local daily_move_distance = Squad_GetMaxMovementPoints(squad) * Squad_GetMovementDistancePerPoint(squad)
+		local distance_to_retreat = (MISSION_DEFEAT_RETREAT_DISTANCE_DAYS * daily_move_distance) + MISSION_DEFEAT_RETREAT_EXTRA_DISTANCE
+		Squad_SetMovementDistanceRemaining(squad, distance_to_retreat)
+	end
+	MetaMap_Retreat(context, data)
+end
+
+function MetaMap_SetCampaignAIPlayerPersonality(playerID, personality_name)	
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign.ai == nil then
+		campaign.ai = {}
+	end
+	campaign.ai.strategy = personality_name
+	Game_StoreTableData("campaign", campaign)
+	AI_DoString(playerID, "AI_SetCampaignPlayerPersonality('".. personality_name .."')")
+end
+
+function MetaMap_LinkAttachmentToCompany(attachment, company)
+	Squad_SetStateModelSquadTarget(attachment, "campaign_attachment_owner", company)
+	Squad_SetStateModelListSquadTarget(company, "owned_platoons", attachment, false)
+end
+
+-- links all the partisan hub and town entities in the egroup together
+-- there should only be one partisan hub entity in the egroup
+function MetaMap_CreatePartisanHubGroup(egroup)
+	
+	local partisan_hub = nil
+	for i = 1, EGroup_Count(egroup) do
+		local entity = EGroup_GetEntityAt(egroup, i)
+		local is_partisan_hub = Entity_IsPartisanHub(entity)
+		
+		if is_partisan_hub then
+			if partisan_hub ~= nil then
+				error("More than one partisan hub was found in the egroup trying to create the partisan hub group.")
+			else
+				partisan_hub = entity
+			end
+		end
+	end
+	
+	for i = 1, EGroup_Count(egroup) do
+		local entity = EGroup_GetEntityAt(egroup, i)
+		local is_partisan_hub = Entity_IsPartisanHub(entity)
+		
+		if not is_partisan_hub then
+			Entity_AddRelatedTownToPartisanHub(partisan_hub, entity)
+		end
+	end
+	
+end
+
+
+function MetaMap_DisableInput()
+	MetaMapInput_AddUILimits({IEF_Selection, IEF_Command}, {}, false, "MetaMapLibrary")
+end
+
+function MetaMap_EnableInput()
+	MetaMapInput_RemoveUILimits("MetaMapLibrary")
+end
+
+function GetPredictedAttackResult(attacker, defender)
+
+	local report = MetaMap_AutoResolve(attacker, defender)
+
+	local attackerHealth = scartype(attacker) == ST_SQUAD and Squad_GetHealth(attacker) or Entity_GetHealth(attacker)
+	local defenderHealth = scartype(defender) == ST_SQUAD and Squad_GetHealth(defender) or Entity_GetHealth(defender)
+	
+	local attackerMaxHealth = scartype(attacker) == ST_SQUAD and Squad_GetHealthMax(attacker) or Entity_GetHealthMax(attacker)
+	local defenderMaxHealth = scartype(defender) == ST_SQUAD and Squad_GetHealthMax(defender) or Entity_GetHealthMax(defender)
+	
+	local currentAttackerHealthPercent = attackerHealth / attackerMaxHealth
+	local currentDefenderHealthPercent = defenderHealth / defenderMaxHealth
+	
+	local newAttackerHealthPercent = (attackerHealth - report.attackerDamageTaken) / attackerMaxHealth
+	local newDefenderHealthPercent = (defenderHealth - report.defenderDamageTaken) / defenderMaxHealth
+	
+	return {
+		attackerCurrentHealthPercent = currentAttackerHealthPercent,
+		defenderCurrentHealthPercent = currentDefenderHealthPercent,
+		attackerNewHealthPercent = newAttackerHealthPercent,
+		defenderNewHealthPercent = newDefenderHealthPercent
+	}
+end
+
+function MetaMap_DetermineUnitType(unit)
+	if Squad_IsOfType(unit, "infantry_small_arms") then
+		-- $11243859 Infantry (Small Arms)
+		return Loc_GetString(11243859)
+	end
+	if Squad_IsOfType(unit, "infantry_ballistic") then
+		-- $11243860 Infantry (Ballistic)
+		return Loc_GetString(11243860)
+	end
+	if Squad_IsOfType(unit, "armor_small_arms") then
+		-- $11243861 Armor (Small Arms)
+		return Loc_GetString(11243861)
+	end
+	if Squad_IsOfType(unit, "armor_ballistic") then
+		-- $11243862 Armor (Ballistic)
+		return Loc_GetString(11243862)
+	end
+	if Squad_IsOfType(unit, "armor_explosive") then
+		-- $11243863 Armor (Explosive)
+		return Loc_GetString(11243863)
+	end
+	-- $11243864 Unknown
+	return Loc_GetString(11243864)
+end
+
+function MetaMap_CalculateCombatPreview(attacker, defender, defendingEntity, combatnode, version)
+	
+	if (attacker ~= nil and (not Squad_IsAlive(attacker) or Squad_IsOfType(attacker, "company") == false)) or
+		(defender ~= nil and (not Squad_IsAlive(defender) or Squad_IsOfType(defender, "company") == false)) or
+		(defendingEntity ~= nil) then
+		return
+	end
+	
+	local attack_info = {}
+	local defend_info = {}
+	local is_skirmish = false
+	local is_counterattack = false
+	local show_detailed = false
+	local suppress_combat_preview = false
+
+	attack_info.attack_rating = Squad_GetAttackRating(attacker) * Squad_GetHealthPercentage(attacker, true)
+	attack_info.defense_rating = Squad_GetDefenseRating(attacker) * Squad_GetHealthPercentage(attacker, true)
+	-- attack_info.combat_rating = attack_info.attack_rating
+	attack_info.unit_type = MetaMap_DetermineUnitType(attacker)
+	attack_info.cover_level = Squad_GetCoverLevel(attacker)
+
+	defend_info.attack_rating = 0
+	defend_info.defense_rating = 0
+	-- defend_info.combat_rating = 0
+	defend_info.unit_type = ""
+	defend_info.cover_level = 0
+
+	local attacker_is_company = Squad_IsOfType(attacker, "company")
+
+	local function DoGet_AffectorsAsListOfID(affectors)
+		local affectorIDs = {}
+		
+		for _, value in pairs(affectors) do
+			local id = value.PropertyBagGroupID
+			table.insert(affectorIDs, {value=id})
+		end
+		
+		return affectorIDs
+	end
+	
+	local attackerSelectedAffectors = MetaMap_GetAutoResolveSelectedAffectorsAndScore(attacker, combatnode).affectors
+	attack_info.selectedAffectors = DoGet_AffectorsAsListOfID(attackerSelectedAffectors)
+	
+	if (defender ~= nil) then
+		if (defendingEntity ~= nil) then
+			-- Attacking defended mission point
+			suppress_combat_preview = true
+		else
+			-- Attacking squad in the open
+			local defender_is_company = Squad_IsOfType(defender, "company")
+			
+			local predicatedAttackResult = GetPredictedAttackResult(attacker, defender)
+			attack_info.remaining_health = predicatedAttackResult.attackerNewHealthPercent
+			defend_info.remaining_health = predicatedAttackResult.defenderNewHealthPercent
+
+			local defenderCurrentMovementNodeID = scartype(attacker) == ST_SQUAD and Squad_GetCurrentMovementNodeID(defender) or Entity_GetCurrentMovementNodeID(defender)
+			local defenderSelectedAffectors = MetaMap_GetAutoResolveSelectedAffectorsAndScore(defender, defenderCurrentMovementNodeID).affectors
+			defend_info.selectedAffectors = DoGet_AffectorsAsListOfID(defenderSelectedAffectors)
+			defend_info.attack_rating = Squad_GetAttackRating(defender) * Squad_GetHealthPercentage(defender, true)
+			defend_info.defense_rating = Squad_GetDefenseRating(defender) * Squad_GetHealthPercentage(defender, true)
+			defend_info.unit_type = MetaMap_DetermineUnitType(defender)
+			defend_info.cover_level = Squad_GetCoverLevel(defender)
+
+			-- local defenderNode = Squad_GetCurrentMovementNodeID(defender)
+			-- attack_info.combat_rating = (attack_info.attack_rating + GetAttackBonus(attacker, defenderNode)) * Squad_GetHealthPercentage(attacker, true)
+			-- defend_info.combat_rating = (defend_info.attack_rating + GetAttackBonus(defender, defenderNode)) * Squad_GetHealthPercentage(defender, true)
+
+			is_counterattack = Squad_CanCounterAttack(attacker, defender) and defend_info.remaining_health > 0
+			is_skirmish = Squad_CanProceedToSkirmish(attacker, defender) and attacker_is_company and defender_is_company
+			show_detailed = true
+		end
+	elseif (defendingEntity ~= nil) then
+		if (Entity_GetMissionMapFromEntryPoint(defendingEntity).scenario_name ~= "") then
+			-- Undefended mission point
+			suppress_combat_preview = true
+		else
+			-- Defensive emplacement
+			local predicatedAttackResult = GetPredictedAttackResult(attacker, defendingEntity)
+			
+			attack_info.remaining_health = predicatedAttackResult.attackerNewHealthPercent
+			
+			defend_info.remaining_health = predicatedAttackResult.defenderNewHealthPercent
+			defend_info.attack_rating = Entity_GetAttackRating(defendingEntity) * Entity_GetHealthPercentage(defendingEntity)
+			defend_info.defense_rating = Entity_GetDefenseRating(defendingEntity) * Entity_GetHealthPercentage(defendingEntity)
+			-- $11243879: Defense
+			defend_info.unit_type = Loc_GetString(11243879)
+			defend_info.cover_level = 0
+			defend_info.selectedAffectors = {}
+			
+			-- attack_info.combat_rating = attack_info.attack_rating * Squad_GetHealthPercentage(attacker, true)
+			-- defend_info.combat_rating = defend_info.attack_rating * Entity_GetHealthPercentage(defendingEntity)
+			
+			is_skirmish = false
+			show_detailed = false
+			is_counterattack = false
+		end
+	end
+	
+	if suppress_combat_preview == true then
+		version = nil
+	end
+	
+	local combatInfo = {
+		attacker = attack_info, 
+		defender = defend_info, 
+		is_counterattack = is_counterattack,
+		is_skirmish = is_skirmish,
+		show_detailed = show_detailed,
+		suppress_combat_preview = suppress_combat_preview,
+		version = version,
+		auto_resolve = MetaMap_GetAutoResolveScores(attacker, defender)
+	}
+	
+	UI_SetSquadDataContext(attacker, combatInfo)
+end
+
+function MetaMap_PlayerTurnStartNotificationChecks()
+	MetaMap_CheckPlayerControlledTerritories()
+	-- delay it so statetree has time to set the supplies
+	Rule_AddOneShot(MetaMap_CheckPlayerSquadsForAttrition, 0.125)
+	MetaMap_CallQueuedEventCues()
+	MetaMap_CheckOperationsInProgress()
+
+	EventCues_ClearEndTurnEvents()
+	-- EventCues_NewDay(World_GetCurrentTurn(), 5)
+	Sound_Play2D ("sfx_ui_enemy_turn_end")
+end
+
+function MetaMap_RecordPlayerControlledTerritories(player)
+	controlled_territories = {}
+	supply_blocked_territories = {}
+	
+	local local_player = Game_GetLocalPlayer()
+	territories = Player_GetControlledTerritories(local_player)
+	
+	local _record = function(gid, idx, eid)
+		local id = Entity_GetID(eid)
+		controlled_territories[id] = true
+		
+		if not Entity_CheckSupply(eid) then
+			supply_blocked_territories[id] = true
+		end
+	end
+	
+	EGroup_ForEach(territories, _record)
+end
+
+function MetaMap_CheckPlayerControlledTerritories()
+	local local_player = Game_GetLocalPlayer()
+	territories = Player_GetControlledTerritories(local_player)
+	
+	local _check = function(gid, idx, eid)
+		if not World_IsCurrentInteractionStageActive(World_GetInteractionStageAtPoint(Util_GetPosition(eid))) then
+			return
+		end
+		if not Entity_CheckSupply(eid) then
+			local capture_point_out_of_supply = Util_BindFunction(EventCues_CampaignCapturePointOutOfSupply, eid)
+			MetaMap_HandleEventCue(capture_point_out_of_supply)
+		else
+			if supply_blocked_territories[Entity_GetID(eid)] ~= nil then
+				-- Supply has been restored to a previously blocked territory
+				supply_blocked_territories[Entity_GetID(eid)] = nil
+				local capture_point_regained_supply = Util_BindFunction(EventCues_CampaignCapturePointRegainedSupply, eid)
+				MetaMap_HandleEventCue(capture_point_regained_supply)
+			end
+		end
+		
+		local id = Entity_GetID(eid)
+		controlled_territories[id] = nil
+	end
+	
+	EGroup_ForEach(territories, _check)
+	
+	for k, v in pairs(controlled_territories) do
+		--anything still in the table was lost since we recorded
+		
+		if Entity_IsValid(k) then
+			--First check if the entity has been cleaned up already
+			local capture_point_lost = Util_BindFunction(EventCues_CampaignCapturePointLost, Entity_FromID(k))
+			MetaMap_HandleEventCue(capture_point_lost)
+		end
+	end
+end
+
+function MetaMap_CheckPlayerSquadsForAttrition()
+	local local_player = Game_GetLocalPlayer()
+	local squads = Player_GetSquads(local_player)
+	
+	local check_for_attrition = function(gid, idx, sid)
+		local has_supply = Squad_HasStateModelInt(sid, "campaign_supply")
+		
+		if has_supply then
+			local supply = Squad_GetStateModelInt(sid, "campaign_supply")
+			local is_in_supply = Squad_IsInSuppliedTerritory(sid)
+			
+			if supply <= 0 then
+				local squad_suffering_attrition = Util_BindFunction(EventCues_CampaignSquadSufferingAttrition, sid)
+				MetaMap_HandleEventCue(squad_suffering_attrition)
+			elseif supply <= ATTRITION_WARNING_THRESHOLD and not is_in_supply then
+				local squad_nearing_attrition = Util_BindFunction(EventCues_CampaignSquadNearingAttrition, sid, supply)
+				MetaMap_HandleEventCue(squad_nearing_attrition)
+			end
+		end
+	end
+	
+	SGroup_ForEach(squads, check_for_attrition)
+	SGroup_Clear(squads)
+end
+
+function MetaMap_CheckOperationsInProgress()
+	local active_operation_squads = Player_GetStateModelListSquadTarget(Game_GetLocalPlayer(), "active_operation_squads")
+	for _,operation_squad in pairs(active_operation_squads) do
+		local squad_operation_in_progress = Util_BindFunction(EventCues_CampaignSquadOperationInProgress, operation_squad)
+		MetaMap_HandleEventCue(squad_operation_in_progress)
+	end
+end
+
+function MetaMap_AwardVeterancyFromKill(attacker)
+	if attacker ~= nil and Player_IsHuman(Squad_GetPlayerOwner(attacker)) then
+		MetaMap_AwardPlayerVeterancy(attacker, t_veterancy_tuning.cmap_kill_veterancy_value)
+	end
+	-- TODO implement AI veterancy
+end
+
+function MetaMap_AwardVeterancyFromMission(attacker, defender, campaign)
+	if attacker ~= nil and Player_IsHuman(Squad_GetPlayerOwner(attacker)) then
+		MetaMap_AwardPlayerVeterancyFromMission(attacker, campaign)
+		if defender ~= nil then
+			MetaMap_AwardAIVeterancyFromMission(defender, campaign)
+		end
+	elseif defender ~= nil and Player_IsHuman(Squad_GetPlayerOwner(defender)) then
+		MetaMap_AwardPlayerVeterancyFromMission(defender, campaign)
+		if attacker ~= nil then
+			MetaMap_AwardAIVeterancyFromMission(attacker, campaign)
+		end
+	end
+end
+
+function MetaMap_AwardPlayerVeterancyFromMission(player_squad, campaign)
+	if campaign.veterancy_gained ~= nil then
+		MetaMap_AwardPlayerVeterancy(player_squad, campaign.veterancy_gained.player)
+		MetaMap_AwardPlayerAffectorVeterancy(campaign.mission_affector_sources, campaign.veterancy_gained.affector)
+	end
+end
+
+function MetaMap_AwardAIVeterancyFromMission(ai_squad, campaign)
+	if campaign.veterancy_gained ~= nil then
+		MetaMap_AwardAIVeterancy(ai_squad, campaign.veterancy_gained.ai)
+	end
+end
+
+function MetaMap_AwardPlayerVeterancy(player_squad, veterancy_gain)
+	local oldRank = Squad_GetVeterancyRank(player_squad)
+	Squad_IncreaseVeterancy(player_squad, veterancy_gain, false, false)
+	local maxRank = Squad_GetMaxVeterancyRank(player_squad)
+	if (maxRank > 0)then 
+		local newRank = Squad_GetVeterancyRank(player_squad)
+		if (newRank ~= oldRank) and (newRank >= maxRank) then
+			Player_SetStateModelSquadTarget(Game_GetLocalPlayer(), "officer_recipient", player_squad)
+		end
+	end
+end
+
+function MetaMap_AwardPlayerAffectorVeterancy(modifier_sources, xp_gain)
+	if modifier_sources ~= nil and #modifier_sources > 0 then
+		for i, source in pairs(modifier_sources) do
+			if Squad_IsValid(source.SquadID) then
+			local squad = Squad_FromID(source.SquadID)
+			if squad ~= nil then
+				Squad_IncreaseVeterancy(squad, xp_gain, false, false)
+			end
+			else
+				print("WARNING: No affector company squad found with id "..source.SquadID)
+			end
+		end
+	end
+end
+
+function MetaMap_AwardAIVeterancy(ai_squad, veterancy_gain)
+	Squad_IncreaseVeterancy(ai_squad, veterancy_gain, false, false)
+end
+
+function MetaMap_SetupCampaignRewardsNoEntryPoint(campaign, mapPoolPbg, mapPoolMapEntryIndex)
+	
+	if mapPoolPbg ~= nil then
+		local indexToUse = mapPoolMapEntryIndex or 0
+		
+		campaign.mission_player_base_veterancy_value = World_GetMapEntryPlayerBaseVeterancyValueFromMapPool(mapPoolPbg, indexToUse)
+		campaign.mission_ideal_efficiency_veterancy_value = World_GetMapEntryPlayerIdealEfficiencyVeterancyValueFromMapPool(mapPoolPbg, indexToUse)
+		campaign.mission_ai_win_veterancy_value = World_GetMapEntryAIWinVeterancyValueFromMapPool(mapPoolPbg, indexToUse)
+		campaign.mission_ai_loss_veterancy_value = World_GetMapEntryAILossVeterancyValueFromMapPool(mapPoolPbg, indexToUse)		
+		campaign.rewarded_skill_points = 0
+		
+		local abilities_to_grant = World_GetMapEntryRewardAbilitiesFromMapPool(mapPoolPbg, indexToUse)
+		if next(abilities_to_grant) ~= nil then
+			campaign.rewarded_abilities = abilities_to_grant
+		end
+		
+		local upgrades_to_grant = World_GetMapEntryRewardUpgradesFromMapPool(mapPoolPbg, indexToUse)
+		if next(upgrades_to_grant) ~= nil then
+			campaign.rewarded_upgrades = upgrades_to_grant
+		end
+		
+		local resources_to_grant = World_GetMapEntryRewardResourcesFromMapPool(mapPoolPbg, indexToUse)
+		if next(resources_to_grant) ~= nil then
+			campaign.rewarded_resources = resources_to_grant
+		end
+		
+		campaign.narrative_influence = World_GetAllNarrativeInfluenceValueToUse()
+		local rewarded_influence = World_GetMapEntryRewardInfluencePointsFromMapPool(mapPoolPbg, indexToUse)
+		
+		if campaign.narrative_influence ~= nil and rewarded_influence ~= nil then
+			for character_name, influence_point in pairs(rewarded_influence) do
+				if campaign.narrative_influence[character_name] ~= nil then
+					campaign.narrative_influence[character_name] = influence_point + campaign.narrative_influence[character_name]
+				else
+					table.insert(campaign.narrative_influence, character_name, influence_point)
+				end
+			end
+		end
+		
+		campaign.reward_loss_resource_percentage = World_GetMapEntryRewardLossResourcePercentageFromMapPool(mapPoolPbg, indexToUse)
+		
+	else
+		-- If we didn't have a map pool, the try to determine the rewards from the node.
+		if (campaign.defender ~= nil) then
+			local skirmish_node_id = Squad_GetCurrentMovementNodeID(campaign.defender)
+		
+			local abilities_to_grant = World_GetMapEntryRewardAbilitiesFromMovementNodeID(skirmish_node_id)
+			if next(abilities_to_grant) ~= nil then
+				campaign.rewarded_abilities = abilities_to_grant
+			end
+			local upgrades_to_grant = World_GetMapEntryRewardUpgradesFromMovementNodeID(skirmish_node_id)
+			if next(upgrades_to_grant) ~= nil then
+				campaign.rewarded_upgrades = upgrades_to_grant
+			end
+			local resources_to_grant = World_GetMapEntryRewardResourcesFromMovementNodeID(skirmish_node_id)
+			if next(resources_to_grant) ~= nil then
+				campaign.rewarded_resources = resources_to_grant
+			end
+			
+			campaign.reward_loss_resource_percentage = World_GetMapEntryRewardLossResourcePercentageFromMovementNodeID(skirmish_node_id)
+		end
+		
+		campaign.mission_player_base_veterancy_value = 0
+		campaign.mission_ideal_efficiency_veterancy_value = 0
+		campaign.mission_ai_win_veterancy_value = 0
+		campaign.mission_ai_loss_veterancy_value = 0
+	end
+end
+
+function MetaMap_SetupCampaignRewards(campaign, mission_entry_point)
+	if mission_entry_point and scartype(campaign) == ST_TABLE then
+		campaign.mission_player_base_veterancy_value = World_GetMapEntryPlayerBaseVeterancyValue(mission_entry_point)
+		campaign.mission_ideal_efficiency_veterancy_value = World_GetMapEntryPlayerIdealEfficiencyVeterancyValue(mission_entry_point)
+		campaign.mission_ai_win_veterancy_value = World_GetMapEntryAIWinVeterancyValue(mission_entry_point)
+		campaign.mission_ai_loss_veterancy_value = World_GetMapEntryAILossVeterancyValue(mission_entry_point)
+		
+		campaign.rewarded_skill_points = 0
+		local abilities_to_grant = World_GetMapEntryRewardAbilitiesFromEntryPointEntity(mission_entry_point)
+		if next(abilities_to_grant) ~= nil then
+			campaign.rewarded_abilities = abilities_to_grant
+		end
+		local upgrades_to_grant = World_GetMapEntryRewardUpgradesFromEntryPointEntity(mission_entry_point)
+		if next(upgrades_to_grant) ~= nil then
+			campaign.rewarded_upgrades = upgrades_to_grant
+		end
+		local resources_to_grant = World_GetMapEntryRewardResourcesFromEntryPointEntity(mission_entry_point)
+		if next(resources_to_grant) ~= nil then
+			campaign.rewarded_resources = resources_to_grant
+		end
+		campaign.narrative_influence = World_GetAllNarrativeInfluenceValueToUse()
+		local rewarded_influence = World_GetMapEntryRewardInfluencePointsFromEntryPointEntity(mission_entry_point)
+		if campaign.narrative_influence ~= nil and rewarded_influence ~= nil then
+			for character_name, influence_point in pairs(rewarded_influence) do
+				if campaign.narrative_influence[character_name] ~= nil then
+					campaign.narrative_influence[character_name] = influence_point + campaign.narrative_influence[character_name]
+				else
+					table.insert(campaign.narrative_influence, character_name, influence_point)
+				end
+			end
+		end
+		campaign.reward_loss_resource_percentage = World_GetMapEntryRewardLossResourcePercentageFromEntryPointEntity(mission_entry_point)
+	else
+		MetaMap_SetupCampaignRewardsNoEntryPoint(campaign)
+	end
+end
+
+function MetaMap_ProcessRewards(campaign, attacker, defender, local_player_winner, was_auto_resolve)
+	-- player does not get any rewards for auto resolve loss, just xp and skill point for mission completion
+	if not was_auto_resolve or local_player_winner then
+		if campaign.rewarded_abilities ~= nil or campaign.rewarded_upgrades ~= nil or campaign.rewarded_resources ~= nil then
+			local human_player = Game_GetLocalPlayer()
+			
+			if campaign.rewarded_abilities ~= nil then
+				for key, value in pairs(campaign.rewarded_abilities) do
+					local ability = BP_GetAbilityBlueprintByPbgID(value.PropertyBagGroupID)
+					Player_AddAbility(human_player, ability)
+				end
+			end
+			
+			if campaign.rewarded_upgrades ~= nil then
+				for key, value in pairs(campaign.rewarded_upgrades) do
+					local upgrade = BP_GetUpgradeBlueprintByPbgID(value.PropertyBagGroupID)
+					Player_CompleteUpgrade(human_player, upgrade)
+				end
+			end
+			
+			if campaign.rewarded_resources ~= nil then
+				for resource_name, resource_amount in pairs(campaign.rewarded_resources) do
+					if resource_name ~= "requisition" then
+						local resource_type = World_GetResourceTypeByName(resource_name)
+						local current_resource_amount = Player_GetResource(human_player, resource_type)
+						Player_SetResource(human_player, resource_type, current_resource_amount + resource_amount)
+					end
+				end
+				-- Award the player company with requisition if the datastore has it
+				if campaign.rewarded_resources.requisition ~= nil and campaign.rewarded_resources.requisition > 0 and attacker ~= nil then
+					local player_company_squad = nil
+					
+					-- If the attacker is human
+					if Player_IsHuman(Squad_GetPlayerOwner(attacker)) then
+						player_company_squad = attacker
+					else
+						-- If the defender is human
+						player_company_squad = defender
+					end
+					
+					local existing_requisition = Squad_GetResource(player_company_squad, RT_Requisition)
+					
+					-- Add the requisition
+					if player_company_squad ~= nil then
+						Squad_SetResource(player_company_squad, RT_Requisition, existing_requisition + campaign.rewarded_resources.requisition)
+					end
+					
+					-- Notify the user about the gained requisition
+					
+					--local resource_data = {
+					--	Resources = {
+					--		Requisition = campaign.rewarded_resources.requisition
+					--	}
+					--}
+					--local added_requisition = Util_BindFunction(EventCues_CampaignResourcesGained, resource_data)
+					--MetaMap_HandleEventCue(added_requisition)
+				end
+			end
+		end
+		
+		-- Award the player with influence when there's a discrepancy between the influence sent into the mission
+		-- and the influence that came out of the mission for that particular character
+		if campaign.narrative_influence ~= nil and next(campaign.narrative_influence) ~= nil then
+			local all_narrative_influence = World_GetAllNarrativeInfluenceValueToUse()
+			for character_name, influence_value in pairs(campaign.narrative_influence) do
+				if all_narrative_influence[character_name] ~= influence_value then
+					ApplyNarrativeInfluenceValue(character_name, influence_value)
+				end
+			end
+		end
+	end
+end
+
+function ClearCombatPreview(context, data)
+	if Squad_IsValid(data.squadID) then
+		local squad = Squad_FromID(data.squadID)
+		Squad_SetStateModelBool(squad, "cmap_assault_being_processed", false)
+	end
+	Rule_RemoveMe()
+end
+
+function GenerateAutoSaveName(save_name_format_loc_id)
+	local current_turn = World_GetCurrentTurn()
+	
+	local save_name = Loc_FormatText(save_name_format_loc_id, current_turn)
+	
+	return save_name.LocString
+end

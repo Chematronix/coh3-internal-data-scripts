@@ -1,0 +1,2041 @@
+----------------------------------------------------------------------------------------------------------------
+-- Command helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+
+import("GroupCallers.scar")
+
+--? @group scardoc;Command
+
+function LocalCommand_Init()
+
+	__t_MoveToAndDeleteTracking = {}			-- data table for the delete-when-near-marker system
+	__t_SquadMarkerProxDespawner = {}		-- data table for the despawn-when-near-marker system
+	__t_SquadMoveToAttackMove = {}			-- data table for the MoveToThenAttackMove
+	__t_stagRetreat = {}					-- Table for staggered retreat
+	__stagRetreatID = 0						-- Id for staggered retreat
+	__stagRetreatSG = SGroup_CreateIfNotFound("__stagRetreatSG")
+
+end
+Scar_AddInit(LocalCommand_Init)
+
+
+
+
+----------------------------------------------------------------------------------------------------------------------
+-- MOVE COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+NIL_DEST = nil
+NIL_LOAD = nil
+NIL_FACE = nil
+NIL_UPG = nil
+NO_ATTACK = false
+NO_QUEUE = false
+NIL_DELETE = nil
+NIL_OFFSET = nil
+NIL_DIST = nil
+NIL_COVER = nil
+
+--? @shortdesc Move a squad group to a given position.
+--? @extdesc Supports facing, 'offset' movement, and can find cover. The sgroup can be deleted when in proximity of a marker (it assumes a proximity of 5 if you forget to set one on the marker)
+--? @args SGroupID sgroup, Pos/SGroupID/EGroupID/MarkerID position, [Boolean queued, MarkerID deleteWhenNearMarker, Position facing, Integer offset, Real distance, Real coverSearchRadius, Bool splitCmd]
+--? @result Void
+function Cmd_Move( sgroupid, target, queued, marker, facing, offset, offsetDistance, coverSearchRadius, splitCmd, acceptableProximity)
+
+	if queued == nil then queued = false end
+	
+	if splitCmd == nil then splitCmd = false end
+	
+	if acceptableProximity == nil then acceptableProximity = 0 end
+	
+	local player = Util_GetPlayerOwner(sgroupid)
+	
+	if not SGroup_IsEmpty(sgroupid) then
+		
+		if scartype(target) == ST_SGROUP and offset == nil and player ~= nil then
+			-- moving to another sgroup. this does not support offset or cover.
+			LocalCommand_SquadSquad(
+				player,
+				sgroupid,
+				SCMD_Move,
+				target,
+				queued
+			)
+		else
+			-- get offset if needed
+			if offset then
+				target = Util_GetOffsetPosition(target, offset, offsetDistance)
+			end
+			
+			-- search for cover if needed
+			if scartype(coverSearchRadius) == ST_NUMBER then
+				target = Squad_FindCover(SGroup_GetSpawnedSquadAt(sgroupid, 1), Util_GetPosition(target), coverSearchRadius)
+			end
+			
+			-- finally, move there
+			if target == nil then
+				target = SGroup_GetPosition(sgroupid)
+			end
+			
+			if facing ~= nil and player ~= nil then	
+				LocalCommand_SquadMovePosFacing(
+					player,
+					sgroupid,
+					Util_GetPosition(target),
+					Util_GetPosition(facing),
+					queued,
+					false,
+					splitCmd,
+					acceptableProximity
+				)
+			elseif player ~= nil then
+				LocalCommand_SquadMovePos(
+					player,
+					sgroupid,
+					Util_GetPosition(target),
+					queued,
+					false,
+					splitCmd,
+					acceptableProximity
+				)
+			end
+			
+		end
+		
+		if scartype(marker) == ST_MARKER then
+			_AddSquadToBeDeletedNearMarker(sgroupid, marker, "delete")			
+		end
+		
+	end
+	
+end
+
+--? @shortdesc Move a squad group to a given position, attack-moving once close enough
+--? @extdesc Squad will move to a position, once they're within 'distance', they will attack-move the rest of the way.
+--? @args SGroupID sgroup, Pos/SGroupID/EGroupID/MarkerID position, [Integer distance, Boolean ANY, Boolean queued]
+--? @result Void
+function Cmd_MoveToThenAttackMove(sgroupid, marker, distance, any, queued)
+	
+	if distance == nil then
+		distance = 10
+	end
+	
+	if any == nil then
+		any = ANY
+	end
+	
+	if queued == nil then
+		queued = false
+	end
+	
+	Cmd_Move(sgroupid, marker, queued)
+	
+	for k,v in ipairs(__t_SquadMoveToAttackMove) do
+		if v.sgroupid == sgroupid then
+			return
+		end
+	end
+	
+	local t = {}
+	t.sgroupid = sgroupid
+	t.marker = marker
+	t.distance = distance
+	t.any = any
+	
+	table.insert(__t_SquadMoveToAttackMove, t)
+	
+	if Rule_Exists(_moveToThenAttackMoveManager) == false then
+		Rule_AddInterval(_moveToThenAttackMoveManager, 1)
+	end
+	
+	-- Add an event to monitor the squad - if they receive another command, remove them from the manager
+	Rule_AddSGroupEvent(_moveToThenAttackMoveRemoval, sgroupid, GE_SquadCommandIssued)
+
+end
+
+function _moveToThenAttackMoveManager()
+	if (#__t_SquadMoveToAttackMove) == 0 then
+		Rule_RemoveMe()
+		return
+	else
+		for k,v in pairs(__t_SquadMoveToAttackMove) do 
+			if SGroup_IsEmpty(v.sgroupid) then
+				table.remove(__t_SquadMoveToAttackMove, k)
+			else
+				
+				if Prox_AreSquadsNearMarker(v.sgroupid, v.marker, v.any, v.distance) then
+					Cmd_AttackMove(v.sgroupid, v.marker)
+					table.remove(__t_SquadMoveToAttackMove, k)
+				end
+			end
+		end
+	end
+end
+
+function _moveToThenAttackMoveRemoval(data)
+	if data.command ~= nil then
+		if (#__t_SquadMoveToAttackMove) > 0 then
+			for k,v in pairs(__t_SquadMoveToAttackMove) do
+				local _findSquad = function(gid, idx, sid)
+					if sid == data.squad then
+						table.remove(__t_SquadMoveToAttackMove, k)
+						Rule_RemoveSGroupEvent(_moveToThenAttackMoveRemoval, v.sgroupid)
+						return
+					end
+				end
+				
+				SGroup_ForEach(v.sgroupid, _findSquad)
+			end
+		end
+	end
+end
+
+
+
+-- 
+-- internal function for getting units to delete (or despawn) when they reach a marker
+-- action = "delete" or "despawn" (default is "delete")
+-- proximityFallback specifies an additional distance to check from the squad to the position to
+-- delete the squad at.
+--
+function _AddSquadToBeDeletedNearMarker(sgroupid, marker, action, callback, callbackData, proximityFallback)
+	
+	if __t_MoveToAndDeleteTracking == nil then	-- in case the table isn't defined (possibly because of an old save game), create it now
+		__t_MoveToAndDeleteTracking = {}
+	end
+	
+	action = action or "delete"
+	
+	local timeStamp = World_GetGameTime()
+
+	local _AddSquad = function(gid, idx, sid)
+		
+		local worldID = Squad_GetID(sid)
+		
+		-- delete any existing orders for this squad
+		for index, entry in ipairs(__t_MoveToAndDeleteTracking) do
+			if entry.worldID == worldID then
+				table.remove(__t_MoveToAndDeleteTracking, index)
+				break
+			end
+		end
+
+		-- add new entry		
+		local entry = {
+			action = action,
+			worldID = worldID, 
+			marker = marker, 
+			callback = callback, 
+			callbackData = callbackData,
+			commandTimeStamp = timeStamp,
+			proximityFallback = proximityFallback,
+		}
+
+		table.insert(__t_MoveToAndDeleteTracking, entry)
+		
+	end
+	
+	SGroup_ForEach(sgroupid, _AddSquad)
+	
+	-- kick off the manager rule if it isn't already running
+	if Rule_Exists(_MoveToAndDeleteManager) == false then
+		Rule_AddInterval(_MoveToAndDeleteManager, 0.5)
+	end
+	
+end
+
+function _MoveToAndDeleteManager()
+
+	local timeStamp = World_GetGameTime()
+	
+	for i = #__t_MoveToAndDeleteTracking, 1, -1 do
+		
+		local entry = __t_MoveToAndDeleteTracking[i]
+		local processed = false 
+		
+		local _ProcessSquad = function(squadid)
+			
+			if entry.action == "delete" then 
+				Squad_Destroy(squadid)								-- delete the squad
+			elseif entry.action == "despawn" then 
+				Squad_DeSpawn(squadid)								-- or despawn the squad
+			end
+			
+			if scartype(entry.callback) == ST_FUNCTION then			-- call a callback function if one was provided
+				entry.callback(squadid, entry.callbackData)
+			end				
+			
+			table.remove(__t_MoveToAndDeleteTracking, i)				-- delete this entry from the tracking list
+			
+			processed = true
+			
+		end
+		
+		
+		
+		if Squad_IsValid(entry.worldID) == false then 
+			
+			-- if this squad disappeared for other reasons (i.e. was killed), delete this entry
+			table.remove(__t_MoveToAndDeleteTracking, i)
+			
+		else
+			
+			local sid = Squad_FromID(entry.worldID)		
+			
+			local squadPosition = Squad_GetPosition(sid)
+			
+			-- Entries can specify a proximityFallback to use which will be checked in addition to the marker's proximity (if that is available).
+			-- If the squad is within proximityFallback OR the marker's proximity then it will be considered close enough. In this sense
+			-- the fallback value is the smallest value at which the squad is guaranteed to be deleted (called minProximity). It may be deleted
+			-- within a larger proximity if specified on the marker.
+			local minProximity = entry.proximityFallback or 10
+			
+			if scartype(entry.marker) == ST_MARKER then
+				
+				-- delete any squads that are near the marker (or within proximity fallback for marker)					
+				if Marker_HasProximityRange(entry.marker) == true and Marker_InProximity(entry.marker, squadPosition) == true then					
+					_ProcessSquad(sid)				
+				elseif World_DistancePointToPoint(Marker_GetPosition(entry.marker), squadPosition) <= minProximity then
+					_ProcessSquad(sid)
+				end
+				
+			elseif scartype(entry.marker) == ST_SCARPOS then
+
+				if World_DistancePointToPoint(Util_GetPosition(entry.marker), squadPosition) <= minProximity then
+					_ProcessSquad(sid)
+				end
+				
+			end
+			
+			-- check if this squad still en route to it's delete destination (i.e. it hasn't been given other commands in the meantime)
+			--[[
+			-- This has been broken by changes to Squad_GetDestination(), which no longer returns the final queued command's location
+			-- It returns the first queued command's location instead, which means we can no longer evaluate whether the command queue has changed
+			-- While still recognizing when it's the same queue as before
+			if processed == false and timeStamp - entry.commandTimeStamp >= 1 then 
+				local hasDestination = Squad_HasDestination(sid)
+				local distance = -1
+				if hasDestination == true then
+					distance = Util_GetDistance(Squad_GetDestination(sid), entry.marker)
+				end
+				if (Squad_HasDestination(sid) == false or Util_GetDistance(Squad_GetDestination(sid), entry.marker) >= 5) then
+					view(Squad_GetDestination(sid))
+					table.remove(__t_MoveToAndDeleteTracking, i)				-- delete this entry from the tracking list
+					print("DEBUG: Has Destination? "..tostring(hasDestination)..", distance? "..tostring(distance))
+					if hasDestination == true then
+						print("DEBUG: Destination: "..tostring(Squad_GetDestination(sid)))
+					else
+						print("DEBUG: No Destination!")
+					end
+					print("DEBUG: sid:")
+					Util_PrintTable(sid)
+					print("DEBUG: timestamp? "..tostring(timeStamp)..", entry.commandTimeStamp? "..tostring(entry.commandTimeStamp))
+				end
+			end
+			]]
+				
+		end
+		
+	end
+	
+	if (#__t_MoveToAndDeleteTracking) == 0 then
+		Rule_RemoveMe()
+	end
+	
+end
+
+
+--? @shortdesc Move a squad group out of a position to a certain radius
+--? @extdesc All squads in the group will move away from the centre position from its current position
+--? @args SGroupID sgroup, Pos position, Int radius, [Boolean queued]
+--? @result Void
+function Cmd_MoveAwayFromPos( sgroupid, pos, radius, queued )
+	
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if ( SGroup_Count(sgroupid) >= 1 ) then 	-- ignore empty group
+	
+		local count = SGroup_CountSpawned( sgroupid )
+	
+		for i=1, count do
+		
+			local squad = SGroup_GetSpawnedSquadAt( sgroupid, i )
+			
+			-- Check how far away the squad if from the position
+			local spos = Squad_GetPosition( squad )
+			if ( World_DistancePointToPoint( spos, pos ) < radius ) then
+		
+				-- make sure our temporary sgroup hasn't been created by something else
+				if ( SGroup_Exists( "sg_Cmd_MoveAwayFromPos" ) ) then
+					fatal( "Cmd_MoveAwayFromPos: Unable to run command because 'sg_Cmd_MoveAwayFromPos' already exists" )
+				end
+		
+				local tempsgroup = SGroup_Create( "tempsgroup" )
+				SGroup_Add( tempsgroup, squad )
+
+				-- Get new position to move to
+				local vec = World_Pos( spos.x-pos.x, spos.y-pos.y, spos.z-pos.z )
+				vec = Vector_Normalize( vec )
+				vec.x = vec.x * radius
+				vec.y = vec.y * radius
+				vec.z = vec.z * radius
+				pos.x = pos.x + vec.x
+				pos.y = pos.y + vec.y
+				pos.z = pos.z + vec.z
+				
+				if Util_GetPlayerOwner( tempsgroup ) ~= nil then
+					LocalCommand_SquadPos(
+						Util_GetPlayerOwner( tempsgroup ),
+						sgroupid,
+						SCMD_Move,
+						pos,
+						queued
+					)
+				end
+				
+				SGroup_Destroy( tempsgroup )
+				
+			end
+
+		
+		end
+			
+	end
+	
+end
+
+--? @shortdesc Send a command to the squad to follow a path. Can wait at each waypoint. The sgroup can be deleted when in proximity of a marker if you pass in the marker as the 7th argument (it assumes a proximity of 5 if you forget to set one on the marker)
+--? @extdesc loop can be: LOOP_NONE, LOOP_NORMAL, LOOP_TOGGLE_DIRECTION
+--? @args SGroupID sgroup, String pathName, Boolean bFromClosest, Integer loop, Boolean bAttackMove, Float pauseTime[, MarkerID deleteWhenNearMarker, Boolean queued, Boolean bMoveForward]
+--? @result Void
+function Cmd_SquadPath(sgroup, pathName, bFromClosest, loop, bAttackMove, pauseTime, marker, queued, bMoveForward, acceptable_proximity)
+
+	if (pauseTime == nil) then
+		pauseTime = 0
+	end
+	
+	if queued == nil then queued = false end
+	
+	if bMoveForward == nil then bMoveForward = true end
+	
+	-- backwards compatibility
+	if loop == true then
+		loop = LOOP_NORMAL
+	elseif loop == false then
+		loop = LOOP_NONE
+	end
+	
+	local proximity = acceptable_proximity or 1
+	
+	if (SGroup_Count(sgroup) >= 1) and Util_GetPlayerOwner( sgroup  ) ~= nil then -- ignore empty groups
+		LocalCommand_SquadPath(
+			Util_GetPlayerOwner( sgroup ),
+			sgroup,
+			pathName,
+			0,
+			bFromClosest,
+			loop,
+			bAttackMove,
+			pauseTime,
+			bMoveForward,
+			queued,
+			proximity
+		)
+		
+		if scartype(marker) == ST_MARKER then
+			_AddSquadToBeDeletedNearMarker(sgroup, marker, "delete")
+		end
+	end
+
+end
+
+
+-- Squad patrol manager
+
+--? @shortdesc Causes a squad to patrol a marker attacking any enemies that come within its radius. If used on circular markers, the radius must be at least 5. To stop the squad from patrolling the marker, use Cmd_Stop.
+--? @args SGroupID sgroup, MarkerID marker
+--? @result Void
+function Cmd_SquadPatrolMarker(sgroup, marker)
+
+	if (scartype(marker) ~= ST_MARKER) then
+		fatal("Cmd_SquadPatrolMarker: invalid marker")
+	end
+	
+	if(Marker_GetProximityRadiusOrDefault(marker, 5) < 5) then
+		fatal("Cmd_SquadPatrolMarker: markers must have a radius of at least 5 meters")
+	end
+		
+	if __t_SquadPatrolOrders == nil then __t_SquadPatrolOrders = {} end
+	if __NextValidID == nil then __NextValidID = 1 end
+	
+	local T = {}
+	
+	T.Player = Util_GetPlayerOwner( sgroup )
+	T.SGroup = sgroup
+	T.Marker = marker
+	T.State = 0
+	T.Target = SGroup_Create("Cmd_SquadPatrolMarker_" .. __NextValidID) -- a sgroup that target squads get put into (for isolating specific squads)
+
+	__NextValidID = __NextValidID + 1
+	
+	table.insert(__t_SquadPatrolOrders, T)
+	
+	if (not Rule_Exists(__UpdateSquadPatrolOrders)) then
+		Rule_AddInterval(__UpdateSquadPatrolOrders, 2)
+	end
+
+end
+
+function __SquadStopPatrollingMarker(sgroup)
+	if __t_SquadPatrolOrders ~= nil then
+		for k, v in pairs(__t_SquadPatrolOrders) do
+			if v.SGroup == sgroup then
+				SGroup_Destroy(v.Target)
+				__t_SquadPatrolOrders[k] = nil
+				if ((#__t_SquadPatrolOrders) == 0) then
+					Rule_Remove(__UpdateSquadPatrolOrders)
+				end
+				return
+			end
+		end
+	end
+end
+
+function __UpdateSquadPatrolOrders()
+
+	for k, v in pairs(__t_SquadPatrolOrders) do
+		
+		local bRemoveEntry = 0
+		
+		if not SGroup_IsEmpty(v.SGroup) then
+			
+			-- 0 patrolling
+			-- 1 attacking
+			
+			if (v.State == 0) then
+				
+				if ((v.Destination == nil) or (not SGroup_IsAttackMoving(v.SGroup, false))) then
+					
+					-- find a destination at least 10 meters away. the marker has been validated as having a radius of 5 or more, so this should never cause an infinite loop...
+					local startpos = SGroup_GetPosition(v.SGroup)
+					local destination = nil
+					local tries = 0 -- give up after a while if things go horribly wrong
+					repeat
+						destination = Util_GetRandomPosition(v.Marker)
+						tries = tries + 1
+					until (World_DistancePointToPoint(startpos, destination) >= 10 or tries >= 100)
+					
+					if (tries >= 100) then
+						print("Could not find a destination 10+ meters away")
+					end
+					
+					v.Destination = destination
+					--print("Moving to destination (" .. math.floor(v.Destination.x) .. "," .. math.floor(v.Destination.y) .. "," .. math.floor(v.Destination.z) .. ")")
+					--Cmd_Move(v.SGroup, v.Destination)
+					Cmd_AttackMove(v.SGroup, v.Destination)
+					
+				end
+				
+				-- detect enemies within range
+				local playerCount = World_GetPlayerCount()
+				for i = 1, playerCount do
+					
+					local player = World_GetPlayerAt(i)
+					if (player ~= v.Player and Player_GetRelationship(v.Player, player) == R_ENEMY) then
+					
+						-- get all of this player's squads near the marker
+						local sgTemp = SGroup_Create("__UpdateSquadPatrolOrders_temp")
+						Player_GetAllSquadsNearMarker(player, sgTemp, v.Marker)
+						
+						-- found anyone? then attack them
+						if (SGroup_CountSpawned(sgTemp) >= 1) then
+							
+							SGroup_Clear(v.Target)
+							SGroup_Add(v.Target, SGroup_GetSpawnedSquadAt(sgTemp, 1))
+							
+							v.State = 1
+							
+							print("Detected enemies within range of the marker")
+							Cmd_Attack(v.SGroup, v.Target)
+							
+						end
+						
+						SGroup_Destroy(sgTemp)
+					end
+				end
+				
+			elseif (v.State == 1) then
+				-- break out of attack state if enemy moves out of marker range or is dead
+				if (SGroup_CountSpawned(v.Target) == 0) or (not Prox_AreSquadsNearMarker(v.Target, v.Marker, false)) then
+					
+					print("Going back to patrolling")
+					-- go back to patrolling the marker
+					v.State = 0
+					v.Destination = nil
+					
+				end
+			end
+		else
+			bRemoveEntry = 1
+		end
+		
+		if (bRemoveEntry > 0) then
+			
+			print("Removing squad patrol order (reason: " .. bRemoveEntry .. ")")
+			__SquadStopPatrollingMarker(v.SGroup)
+			return
+			
+		end
+	end
+	
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- ATTACK COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Issues an attack command to an SGroup
+--? @args SGroupID sgroup, SGroup/EGroup/Pos/Marker target[, Boolean queued, Boolean stationary, String plan, Boolean check FOW]
+--? @result Void
+function Cmd_Attack( sgroup, target, queued, stationary, plan, checkFow)
+
+	if queued == nil then queued = false end
+	if stationary == nil then stationary = false end
+	if plan == nil then plan = "" end
+	if checkFow == nil then checkFow =  true end
+	
+	if not SGroup_IsEmpty(sgroup) and Util_GetPlayerOwner( sgroup  ) ~= nil then
+		
+		local type = scartype(target)
+		if type == ST_EGROUP then
+			LocalCommand_SquadEntityAttack(
+				Util_GetPlayerOwner(sgroup),
+				sgroup,
+				target,
+				checkFow,
+				stationary,
+				plan,
+				queued
+			)
+		elseif type == ST_SGROUP then
+			LocalCommand_SquadSquadAttack(
+				Util_GetPlayerOwner(sgroup),
+				sgroup,
+				target,
+				checkFow,
+				stationary,
+				plan,
+				queued
+			)
+		elseif type == ST_SCARPOS or type == ST_MARKER then
+			LocalCommand_SquadPositionAttack(
+				Util_GetPlayerOwner(sgroup),
+				sgroup,
+				Util_GetPosition(target),
+				checkFow,
+				stationary,
+				plan,
+				queued
+			)
+		else
+			fatal("Cmd_Attack: unsupported target " .. scartype_tostring(target))
+		end
+		
+	end
+	
+end
+
+--? @shortdesc Order a squad group to attack move to a position (anything whose position can be queried). can be queued, can follow a plan, can search for cover within a radius
+--? @args SGroupID sgroup, Position targetposition[, Boolean queued, String plan, Real coverSearchRadius, MarkerID deleteWhenNearMarker, Boolean splitCmd]
+--? @result Void
+function Cmd_AttackMove( sgroupid, targetposition, queued, plan, coverSearchRadius, marker, split, deleteCallback, deleteCallbackData)
+	if queued == nil then queued = false end
+	if split == nil then split = false end
+	if ( SGroup_Count(sgroupid) >= 1 and Util_GetPlayerOwner( sgroupid  ) ~= nil ) then 										-- ignore empty groups
+		if type(plan) == "string" then
+			LocalCommand_SquadAttackMovePos(
+				Util_GetPlayerOwner( sgroupid ),
+				sgroupid,
+				SCMD_AttackMove,
+				Util_GetPosition(targetposition),
+				plan,
+				queued,
+				split
+			)
+		else
+			if type(coverSearchRadius) == "number" then
+				targetposition = Squad_FindCover(SGroup_GetSpawnedSquadAt(sgroupid, 1), Util_GetPosition(targetposition), coverSearchRadius)
+			end
+			LocalCommand_SquadPos(
+				Util_GetPlayerOwner( sgroupid ),
+				sgroupid,
+				SCMD_AttackMove,
+				Util_GetPosition(targetposition),
+				queued
+			)
+		end
+		
+		if scartype(marker) == ST_MARKER then
+			_AddSquadToBeDeletedNearMarker(sgroupid, marker, "delete", deleteCallback, deleteCallbackData)			
+		end
+	end
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- Retreat COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Order a squad group to retreat, optionally to a specific location. The sgroup can be deleted when in proximity of a marker (it assumes a proximity of 5 if you forget to set one on the marker)
+--? @extdesc vulnerableRetreat will make retreating squads take more damage
+--? @args SGroupID sgroup[, Position location, Bool/MarkerID/ScarPos deleteWhenNearMarker, Boolean queued, Boolean saveEncounters, Boolean vulnerableRetreat]
+--? @result Void
+function Cmd_Retreat( sgroupid, location, marker, queued, saveEncounters, vulnerableRetreat, allowNonInteractiveStages )
+	
+
+	if marker == true then
+		marker = location
+	end
+	if queued == nil then
+		queued = false
+	end	
+	
+	if saveEncounters == nil then
+		saveEncounters = false
+	end
+	
+	if vulnerableRetreat == nil then
+		vulnerableRetreat = false
+	end
+	
+	if allowNonInteractiveStages == nil then
+		allowNonInteractiveStages = false
+	end
+	
+	if Ai ~= nil then
+		if not saveEncounters then
+			Ai:RemoveFromAllEncounters(sgroupid)
+		end
+	end
+
+	if ( SGroup_CountSpawned(sgroupid) >= 1 ) then 					-- ignore empty groups
+		local _retreat = function(a,b,squad)
+			
+			local queueRetreat = queued
+			
+			local __retreatTemporaryGroup = SGroup_CreateIfNotFound("__retreatTemporaryGroup")
+			
+			SGroup_Clear(__retreatTemporaryGroup)
+			SGroup_Add(__retreatTemporaryGroup, squad)
+			
+			if Squad_IsInHoldEntity(squad) or Squad_IsInHoldSquad(squad) then
+				Cmd_UngarrisonSquad(__retreatTemporaryGroup, nil, queued)	
+				queueRetreat = true
+			end
+			
+			-- Queue the retreat command for squads that are exiting a garrison
+			if ( SGroup_CountSpawned(__retreatTemporaryGroup) >= 1 ) and Util_GetPlayerOwner( __retreatTemporaryGroup ) ~= nil then 				-- ignore empty groups
+				if location then
+					
+					LocalCommand_SquadRetreatPos(
+						Util_GetPlayerOwner( __retreatTemporaryGroup ),
+						__retreatTemporaryGroup,
+						Util_GetPosition(location),
+						queueRetreat,
+						allowNonInteractiveStages
+						)
+				else
+					LocalCommand_Squad(
+						Util_GetPlayerOwner( __retreatTemporaryGroup ),
+						__retreatTemporaryGroup,
+						SCMD_Retreat,
+						queueRetreat
+					)
+				end
+			end
+		end
+		
+		SGroup_ForEach(sgroupid, _retreat)
+		
+		if scartype(marker) == ST_MARKER or scartype(marker) == ST_SCARPOS then
+			_AddSquadToBeDeletedNearMarker(sgroupid, marker, "delete", nil, nil, World_GetAcceptableTargetedRetreatProximity() + 1)
+		elseif(scartype(marker) ~= ST_NIL) then
+			print(string.format("### WARNING: Invalid type ('%s') passed for deleteWhenNearMarker parameter in Cmd_Retreat(). Must be MarkerID/ScarPos.", scartype_tostring(marker)))
+		end
+	end
+	
+	if vulnerableRetreat == true then 
+		Modify_Vulnerability(sgroupid, 3)
+	end
+end
+
+--? @shortdesc Retreats large numbers of units in a staggered, realistic manner.
+--? @extdesc Each Squad in the sgroup will have a 1 in 3 chance to retreat.  After 10 seconds (or maxTries), all squads will be forced to retreat. Squads will delete on arrival at their retreat point.
+--? @extdesc vulnerableRetreat will make retreating squads take more damage
+--? @args SGroupID sgroup, Table markers, [Integer maxTries, Boolean vulnerableRetreat]
+--? @result Void
+function Cmd_StaggeredRetreat(sgroup, table_markers, maxTries, vulnerableRetreat)
+	
+	__stagRetreatID = __stagRetreatID + 1
+	
+	local t = {}
+	t.tmr_id = ("_tmr_stagRetreat"..__stagRetreatID)
+	t.squads = {}
+	t.mkrs = table_markers
+	if maxTries == nil then t.maxTries = 10 else t.maxTries = maxTries end
+	if vulnerableRetreat == nil then vulnerableRetreat = false end
+	t.vulnerableRetreat = vulnerableRetreat
+	
+	local _sortSGroups = function(gid, idx, sid)	-- Sort the squads into a table
+		local sg = SGroup_CreateIfNotFound("_sg_retreatSquad_"..Squad_GetID(sid))
+		SGroup_Add(sg, sid)
+		table.insert(t.squads, sg)
+	end
+	
+	SGroup_ForEach(sgroup, _sortSGroups)
+	
+	table.insert(__t_stagRetreat, t)
+	
+	if Rule_Exists(__StaggeredRetreat_Mngr) == false then
+		Rule_AddInterval(__StaggeredRetreat_Mngr, 1)
+	end
+
+end
+
+function __StaggeredRetreat_Mngr()
+	
+	if (#__t_stagRetreat) == 0 then
+		Rule_RemoveMe()
+		return
+	end
+	
+	for k, this in pairs(__t_stagRetreat) do
+		local forceRetreat = false
+		local vulnerableRetreat = this.vulnerableRetreat
+		if Timer_Exists(this.tmr_id) == false then
+			Timer_Start(this.tmr_id, this.maxTries)
+		elseif Timer_GetRemaining(this.tmr_id) <= 0 then
+			forceRetreat = true
+		end
+		
+		if (#this.squads) == 0 then
+			table.remove(__t_stagRetreat, k)
+			return
+		end
+		
+		for i = (#this.squads), 1, -1 do
+			if SGroup_IsEmpty(this.squads[i]) == false then
+				local chance = World_GetRand(1, 3)
+				if chance == 3 or forceRetreat == true then
+					local retreatPoint = World_GetClosest(Util_GetPosition(this.squads[i]), this.mkrs)
+					
+					Cmd_Retreat(this.squads[i], retreatPoint, retreatPoint, false, false, vulnerableRetreat)
+					
+					table.remove(this.squads, i)
+				end
+			else
+				table.remove(this.squads, i)
+			end
+		end
+	end
+
+end
+
+
+
+--? @shortdesc Order a squad group to hold position at a given location (or just it's current location)
+--? @extdesc The location parameter can be a position (to hold position at that location), or a Boolean to enable/disable HoldPosition at the current location. If it's omitted entirely, it defaults to true.
+--? @args SgroupID sgroup[, Marker/Pos/Boolean location, Boolean queued] 
+function Cmd_HoldPosition(sgroup, location, queued)
+	
+	if queued == nil then
+		queued = false
+	end
+	
+	if SGroup_CountSpawned(sgroup) >= 1 then	
+		
+		local player = Util_GetPlayerOwner(sgroup)
+
+		if scartype(location) == ST_MARKER or scartype(location) == ST_SCARPOS then
+			Cmd_Move(sgroup, location, queued)
+			LocalCommand_SquadExt(player, sgroup, SCMD_HoldPosition, 1, true)		
+		elseif location == nil or location == true then
+			LocalCommand_SquadExt(player, sgroup, SCMD_HoldPosition, 1, queued)		
+		elseif location == false then 
+			LocalCommand_SquadExt(player, sgroup, SCMD_HoldPosition, 0, queued)		
+		end
+	
+	end
+	
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- LOAD & GARRISON COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Order a squad group to load at a random entity or squad of the group
+--? @extdesc overload is a flag that will allow the hold entity to ignore maximum slot check
+--? @args SGroupID fromsgroupid, EGroupID/SGroupID togroupid, [Bool overload, Bool queued, Bool instant]
+--? @result EntityID or SquadID id of the destination
+function Cmd_Garrison( fromsgroupid, togroupid, overload, queued, instant )
+
+	if overload == nil then overload = false end
+	if queued == nil then queued = false end
+	if instant == nil then instant = false end
+	
+	local groupcaller = __GetGroupCaller(togroupid, true)
+	if groupcaller == nil then
+		fatal("Cmd_Garrison: 'togroupid' parameter must be EGroup or SGroup!")
+	end
+
+	-- get one random entity from the target egroup
+	local item = groupcaller.GetRandomSpawnedItem( togroupid )
+	if ( item == 0 ) then
+		print("Cmd_Garrison: Unable to get random entity/squad from the destination group (it's empty)")
+		return
+	end
+
+	local tempgroup = groupcaller.Create("Cmd_Garrison")
+	groupcaller.AddItem(tempgroup, item)
+	
+	if not SGroup_IsEmpty(fromsgroupid) and Util_GetPlayerOwner( fromsgroupid ) ~= nil then
+		
+		local commandfunc = LocalCommand_SquadEntityLoad
+		if groupcaller == SGroupCaller then
+			commandfunc = LocalCommand_SquadSquadLoad
+		end
+		
+		local command = SCMD_Load
+		if instant then
+			command = SCMD_InstantLoad
+		end
+		
+		commandfunc(
+			Util_GetPlayerOwner(fromsgroupid),
+			fromsgroupid,
+			command,
+			tempgroup,
+			overload,
+			queued
+		)
+	end
+
+	-- remove the temporary sgroup
+	groupcaller.Destroy( tempgroup )
+	
+	return item
+	
+end
+
+--? @shortdesc Orders an EGroup or SGroup to kick out its occupants. If no position is specified, the occupants stay at the exit.
+--? @args EGroupID/SGroupID fromgroupid[, Position destination, Boolean queued]
+function Cmd_EjectOccupants( fromgroupid, destination, queued )
+
+	if queued == nil then queued = false end
+	
+	-- backwards compatiblity with COH missions...
+	if Util_GetPlayerOwner(fromgroupid) == nil then
+		return
+	end
+	
+	if scartype(fromgroupid) == ST_EGROUP then
+		
+		-- unload all squads from building
+		if not EGroup_IsEmpty(fromgroupid) then
+			if destination ~= nil then
+				LocalCommand_EntityPos(
+					Util_GetPlayerOwner(fromgroupid),
+					fromgroupid,
+					CMD_UnloadSquads,
+					Util_GetPosition(destination)
+				)
+			else
+				LocalCommand_Entity(
+					Util_GetPlayerOwner(fromgroupid),
+					fromgroupid,
+					CMD_UnloadSquads
+				)
+			end
+		end
+		
+	elseif scartype(fromgroupid) == ST_SGROUP then
+		
+		-- unload all squads from vehicle
+		if not SGroup_IsEmpty(fromgroupid) then
+			if destination ~= nil then
+				LocalCommand_SquadPos(
+					Util_GetPlayerOwner(fromgroupid),
+					fromgroupid,
+					SCMD_UnloadSquads,
+					Util_GetPosition(destination),
+					queued
+				)
+			else
+				LocalCommand_Squad(
+					Util_GetPlayerOwner(fromgroupid),
+					fromgroupid,
+					SCMD_UnloadSquads,
+					queued
+				)
+			end
+		end
+		
+	else
+		fatal("Cmd_EjectOccupants: invalid group passed in: " .. scartype_tostring(fromgroupid))
+	end
+	
+end
+
+--? @shortdesc Orders an sgroup to exit the building or vehicle that it's in. If no position is specified, the sgroup stays at the exit.
+--? @args SGroupID sgroupid[, Position destination, Boolean queued]
+function Cmd_UngarrisonSquad( sgroupid, destination, queued )
+
+	if queued == nil then queued = false end
+	
+	if SGroup_IsEmpty(sgroupid) or Util_GetPlayerOwner(sgroupid) == nil then
+		return
+	end
+	
+	-- unload squad from building or vehicle that it's in
+	if destination ~= nil then
+		LocalCommand_SquadPos(
+			Util_GetPlayerOwner(sgroupid),
+			sgroupid,
+			SCMD_Unload,
+			Util_GetPosition(destination),
+			queued
+		)
+	else
+		-- squad won't accept an unload command with no destination, so use the hold's position (this is what the code does too)
+		
+		-- we have to unload each squad individually, in case squads from the same sgroup are in different holds
+		local _UnloadOneSquad = function(gid, idx, sid)
+			
+			local hold
+			if Squad_IsInHoldEntity(sid) then
+				hold = Squad_GetHoldEntity(sid)
+			elseif Squad_IsInHoldSquad(sid) then
+				hold = Squad_GetHoldSquad(sid)
+			end
+			
+			-- exit out of it, at the hold's position
+			if hold ~= nil then
+				
+				destination = Util_GetPosition(hold)
+				local sg = SGroup_Create("Cmd_UngarrisonSquad")
+				SGroup_Add(sg, sid)
+				
+				LocalCommand_SquadPos(
+					Util_GetPlayerOwner(sg),
+					sg,
+					SCMD_Unload,
+					Util_GetPosition(destination),
+					queued
+				)
+				
+				SGroup_Destroy(sg)
+				
+			end
+		end
+		
+		SGroup_ForEach(sgroupid, _UnloadOneSquad)
+	end
+	
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- MISC COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Sends an camouflage stance command to all squads in a group.  stanceid should be the number returned by Util_GetCamouflageStanceID( stancename )
+--? @args SGroupID sgroup, CamouflageStanceID stanceid
+--? @result Void
+function Cmd_SquadCamouflageStance( sgroupid, stanceid )
+		
+	if( SGroup_Count( sgroupid )  >= 1 and Util_GetPlayerOwner(sgroupid) ~= nil) then								-- ignore empty groups
+		-- send commands
+		LocalCommand_SquadExt(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_SetCamouflageStance,
+			stanceid,
+			0
+		)
+	end
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- REINFORCEMENT COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+DO_NOTHING = 0
+SPAWN_ATMARKER = 1
+SPAWN_ATSQUAD = 2
+
+--? @shortdesc Sends a reinforce command to all squads in a group.  count represents the number of commands to send.
+--? @extdesc Note: To reinforce squad bypassing the pre-reqs and costs use Cmd_InstantReinforceUnit.
+--? @args SGroupID sgroup, Integer count
+--? @result Void
+function Cmd_ReinforceUnit( sgroupid, count, instant )
+	
+	if count == nil then count = 1 end												-- default parameter
+	
+	if( SGroup_CountSpawned( sgroupid )  >= 1 ) then								-- ignore empty groups
+		-- send commands
+		for i=1, count do
+			local cmd = SCMD_ReinforceUnit
+			if instant == true then cmd = SCMD_InstantReinforceUnit end
+			LocalCommand_Squad(
+				Util_GetPlayerOwner( sgroupid ),
+				sgroupid,
+				cmd,
+				false
+			)
+			
+		end
+	end
+end
+
+--? @shortdesc Sends a instant reinforce command to all squads in a group.  count represents the number of commands to send.
+--? @extdesc Note: This function bypasses pre-reqs, costs and the production queue
+--? @args SGroupID sgroup, Integer count
+--? @result Void
+function Cmd_InstantReinforceUnit( sgroupid, count )
+	Cmd_ReinforceUnit(sgroupid, count, true)
+	__ApplyRoleVariation(sgroupid)
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- UPGRADE COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Sends an upgrade command to a player, egroup or sgroup. accepts a single upgrade or table of upgrades.
+--? @args PlayerID/EGroupID/SGroupID user, UpgradeBlueprint/Table blueprint[, Integer count, Boolean instant]
+--? @result Void
+function Cmd_Upgrade( user, upgrade, count, instant )
+
+	if count == nil then count = 1 end
+	if scartype(upgrade) ~= ST_TABLE then upgrade = {upgrade} end
+	if instant == nil then instant = false end
+	
+	local player = Util_GetPlayerOwner(user)
+	
+	for n = 1, count do
+		for i = 1, (#upgrade) do
+			if scartype(user) == ST_PLAYER then
+				LocalCommand_PlayerUpgrade(
+					user,
+					upgrade[i],
+					instant,
+					false
+				)
+			elseif scartype(user) == ST_EGROUP then
+				if not EGroup_IsEmpty(user) and player ~= nil then
+					LocalCommand_EntityUpgrade(
+						player,
+						user,
+						upgrade[i],
+						instant,
+						false
+					)
+				end
+			elseif scartype(user) == ST_SGROUP then
+				if not SGroup_IsEmpty(user) and player ~= nil then
+					LocalCommand_SquadUpgrade(
+						player,
+						user,
+						upgrade[i],
+						instant,
+						false
+					)
+				end
+			else
+				fatal("Cmd_Upgrade: unsupported upgrade user " .. scartype_tostring(user))
+			end
+		end
+	end
+
+end
+
+--? @shortdesc Sends an upgrade remove command to a player, egroup or sgroup. accepts a single upgrade or table of upgrades.
+--? @args PlayerID/EGroupID/SGroupID user, UpgradeBlueprint/Table blueprint
+--? @result Void
+function Cmd_UpgradeRemove(user, upgrades)
+	if scartype(upgrades) ~= ST_TABLE then
+		upgrades = {upgrades}
+	end
+	for i = 1, #upgrades do
+		if scartype(user) == ST_PLAYER then
+			Player_RemoveUpgrade(user, upgrades[i])
+		elseif scartype(user) == ST_EGROUP then
+			if not EGroup_IsEmpty(user) then
+				EGroup_RemoveUpgrade(user, upgrades[i])
+			end
+		elseif scartype(user) == ST_SGROUP then
+			if not SGroup_IsEmpty(user) then
+				SGroup_RemoveUpgrade(user, upgrades[i])
+			end
+		else
+			error("Cmd_UpgradeRemove: unsupported upgrade user "..scartype_tostring(user))
+		end
+	end
+end
+
+--? @shortdesc Sends an instant upgrade command to a player, egroup or sgroup. accepts a single upgrade or table of upgrades.
+--? @args PlayerID/EGroupID/SGroupID target, UpgradeBlueprint/Table blueprint[, Integer count]
+--? @result Void
+function Cmd_InstantUpgrade( target, upgrade, count )
+	Cmd_Upgrade(target, upgrade, count, true)
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- ABILITY COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Sends an ability command to a player, egroup or sgroup. extra parameters are provided if the ability requires them.
+--? @args PlayerID/EGroupID/SGroupID user, AbilityBlueprint blueprint, [Position/SGroupID/EGroupID target, Position direction, Bool skipCostPrereq, Bool queued]
+--? @result Void
+function Cmd_Ability( user, ability, target, dir, skipCostPrereq, queued, stop )
+
+	if skipCostPrereq == nil then skipCostPrereq = false end
+	if queued == nil then queued = false end
+	if stop == nil then stop = false end
+	
+--~ 	print(scartype_tostring(user))
+	local player = Util_GetPlayerOwner(user)
+	local __sgLocalTemp = SGroup_CreateIfNotFound("__sgLocalTemp")
+	
+	if (scartype(user)) == ST_SQUAD then
+		SGroup_Add(__sgLocalTemp, user)
+		user = __sgLocalTemp
+	end
+	
+	if scartype(user) == ST_SGROUP then
+	
+		-- Filter user for the ones that have the ability
+		local _sg_casters = SGroup_CreateIfNotFound("_sg_casters")
+		local _FilterSquad = function (gid, idx, sid)
+			if (Squad_HasAbility(sid, ability)) then
+				SGroup_Add(_sg_casters, sid)
+			end
+		end
+		SGroup_ForEach(user, _FilterSquad)
+		
+		if SGroup_IsEmpty(_sg_casters) then
+			return
+		end
+		
+		if (player ~= nil) then
+			if stop then
+					LocalCommand_SquadStopAbility(
+						player,
+						_sg_casters,
+						ability,
+						skipCostPrereq,
+						queued
+						)
+			elseif scartype(target) == ST_EGROUP then
+				LocalCommand_SquadEntityAbility(
+					player,
+					_sg_casters,
+					target,
+					ability,
+					skipCostPrereq,
+					queued
+				)
+			elseif scartype(target) == ST_SGROUP then
+				LocalCommand_SquadSquadAbility(
+					player,
+					_sg_casters,
+					target,
+					ability,
+					skipCostPrereq,
+					queued
+					)
+			elseif target == nil then
+				LocalCommand_SquadAbility(
+					player,
+					_sg_casters,
+					ability,
+					skipCostPrereq,
+					queued
+					)
+			else
+				LocalCommand_SquadPosAbility(
+					player,
+					_sg_casters,
+					Util_GetPosition(target),
+					ability,
+					skipCostPrereq,
+					queued
+				)
+			end
+		end
+		
+		SGroup_Clear(_sg_casters)
+		
+		-- Trigger the ability command on squads in the hold as well
+		-- NOTE: This involves recursive calling of Cmd_Ability itself.  Ensure _sg_casters is cleared first to avoid infinite recursion.
+		if SGroup_IsHoldingAny(user) then
+      
+			_sg_commandtemp = SGroup_CreateIfNotFound("_sg_commandtemp")
+			SGroup_GetSquadsHeld(user, _sg_commandtemp)
+      
+			Cmd_Ability(_sg_commandtemp, ability, target, dir, skipCostPrereq)
+      
+		end	
+		
+	elseif scartype(user) == ST_EGROUP then
+		
+		-- Filter user for the ones that have the ability
+		local _eg_casters = EGroup_CreateIfNotFound("_eg_casters")
+		local _FilterEntity = function(gid, idx, eid)
+			if (Entity_HasAbility(eid, ability)) then
+				EGroup_Add(_eg_casters, eid)
+			end
+		end
+		EGroup_ForEach(user, _FilterEntity)
+		
+		if EGroup_IsEmpty(_eg_casters) then
+			return
+		end
+		
+		if (player ~= nil) then
+			if stop then
+				LocalCommand_EntityStopAbility(
+					player,
+					_eg_casters,
+					ability,
+					skipCostPrereq,
+					queued
+					)
+			elseif target then
+				if dir then
+					LocalCommand_EntityPosDirAbility(
+						player,
+						_eg_casters,
+						Util_GetPosition(target),
+						Util_GetPosition(dir),
+						ability,
+						skipCostPrereq,
+						queued
+					)
+				else
+					LocalCommand_EntityPosAbility(
+						player,
+						_eg_casters,
+						Util_GetPosition(target),
+						ability,
+						skipCostPrereq,
+						queued
+					)
+				end
+			else
+				LocalCommand_EntityAbility(
+					player,
+					_eg_casters,
+					ability,
+					skipCostPrereq,
+					queued
+					)
+			end
+		end
+		
+		EGroup_Clear(_eg_casters)
+
+		-- Trigger the ability command on squads in the hold as well
+		if EGroup_IsHoldingAny(user) then
+      
+			_sg_commandtemp = SGroup_CreateIfNotFound("_sg_commandtemp")
+			EGroup_GetSquadsHeld(user, _sg_commandtemp)
+      
+			Cmd_Ability(_sg_commandtemp, ability, target, dir, skipCostPrereq)
+		end
+    		
+	elseif scartype(user) == ST_PLAYER then
+		
+		if stop then
+			LocalCommand_PlayerStopAbility(
+				user,
+				user,
+				ability,
+				skipCostPrereq
+				)
+		elseif target then
+			if dir then
+				LocalCommand_PlayerPosDirAbility(
+					user,
+					user,
+					Util_GetPosition(target),
+					Util_GetPosition(dir),
+					ability,
+					skipCostPrereq
+					)
+			else
+				LocalCommand_PlayerPosAbility(
+					user,
+					user,
+					Util_GetPosition(target),
+					ability,
+					skipCostPrereq
+					)
+			end
+		else
+			LocalCommand_PlayerAbility(
+				user,
+				user,
+				ability,
+				skipCostPrereq
+				)
+		end
+		
+	else
+		fatal("Cmd_Ability: unsupported ability user " .. scartype_tostring(user))
+	end
+	
+	if SGroup_IsEmpty(__sgLocalTemp) == false then
+		SGroup_Clear(__sgLocalTemp)
+	end
+	
+end
+
+--? @shortdesc Attach the squad from sgroupnameAttachee to sgroupname.  Both SGroups must contain only one squad.
+--? @args SGroupID sgroup, SGroupID sgroupAttachee
+--? @result Void
+function Cmd_AttachSquads( sgroupid, sgroupidAttachee )
+	
+	-- validate squad groups are different
+	if( sgroupid == sgroupidAttachee ) then
+		fatal("Cannot attach squads from the same group!")
+	end
+	
+	-- validate squad groups only have one squad
+	if( SGroup_Count( sgroupid ) ~= 1 or SGroup_Count( sgroupidAttachee ) ~= 1 ) then
+		fatal( "SGroups must contain only one squad" )
+	end
+		
+	-- validate squads have same player owner
+	if( Player_GetID( Squad_GetPlayerOwner( SGroup_GetSpawnedSquadAt( sgroupid, 1 ) ) ) ~= Player_GetID( Squad_GetPlayerOwner( SGroup_GetSpawnedSquadAt( sgroupidAttachee, 1 ) ) ) ) then
+		fatal( "Cannot attach squads belonging to seperate players" )
+	end
+	
+	-- issue order
+	LocalCommand_SquadSquad( 
+		Squad_GetPlayerOwner( SGroup_GetSpawnedSquadAt( sgroupid, 1 ) ),
+		sgroupidAttachee, 
+		SCMD_Attach, 
+		sgroupid,
+		false
+	)	
+	
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- STOP COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Sends a stop command to egroup or sgroup.
+--? @args EGroupID/SGroupID group
+--? @result Void
+function Cmd_Stop(group)
+
+	if scartype(group) == ST_EGROUP then
+		if not EGroup_IsEmpty(group) and Util_GetPlayerOwner(group) ~= nil then
+			LocalCommand_Entity(
+				Util_GetPlayerOwner(group),
+				group,
+				CMD_Stop
+			)
+		end
+	elseif scartype(group) == ST_SGROUP then
+		if not SGroup_IsEmpty(group) and Util_GetPlayerOwner(group) ~= nil then
+			LocalCommand_Squad(
+				Util_GetPlayerOwner(group),
+				group,
+				SCMD_Stop,
+				false
+			)
+		end
+		__SquadStopPatrollingMarker(group)
+	else
+		fatal("Cmd_Stop: invalid group " .. scartype_tostring(group))
+	end
+
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- LIBRARY COMMANDS
+----------------------------------------------------------------------------------------------------------------------
+
+--? @shortdesc Moves a squad group to the closest marker in a list/table of MarkerIDs.
+--? @args SGroupID sgroup, Table markertable
+--? @result markerID
+function Cmd_MoveToClosestMarker( sgroupid, markeridtable )
+	
+	if( SGroup_Count( sgroupid ) == 0 ) then
+		fatal( "Cannot issue order on empty group" )
+	end
+	
+	local range = (#markeridtable)
+	local distance = {}
+	local closest = 9999
+	local closestPoint = 0
+	local startPoint = 0
+	for r = 1, range do
+		table.insert(distance, r, World_DistanceSGroupToPoint( sgroupid, Marker_GetPosition(markeridtable[r]), 1) )
+	end
+
+	for r = 1, range do
+		if distance[r] < closest then
+			closest = distance[r]
+			closestPoint = r
+			startPoint = markeridtable[closestPoint]
+--			print("the closest point currently is "..tableName[closestPoint])
+		end
+	end
+--	print("the starting marker is "..startPoint)
+	if startPoint == markeridtable[closestPoint] and Util_GetPlayerOwner( sgroupid ) ~= nil then
+		LocalCommand_SquadPos( 
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid, 
+			SCMD_Move,
+			Marker_GetPosition( startPoint ),
+			false
+		)
+		
+		return startPoint
+	end
+	
+	return nil
+end
+
+--? @shortdesc Moves a squad group to the indicated Marker and destroys it.
+--? @args SGroupID sgroup, MarkerID marker, boolean queued
+--? @result Void
+function Cmd_MoveToAndDestroy(sgroupid, markerid, queued, callback, callbackData)
+	
+	if( SGroup_Count( sgroupid ) == 0 ) then
+		fatal( "Cannot issue order on empty group" )
+	end
+	
+	if queued == nil then
+		queued = false
+	end
+	
+	Cmd_Move(sgroupid, markerid, queued)
+	
+	_AddSquadToBeDeletedNearMarker(sgroupid, markerid, "delete", callback, callbackData)
+
+end
+
+--? @shortdesc Moves a squad group to the indicated Marker and despawns it.
+--? @args SGroupID sgroup, MarkerID marker, boolean queued
+--? @result Void
+function Cmd_MoveToAndDeSpawn( sgroupid, markerid, queued)
+	
+	if( SGroup_Count( sgroupid ) == 0 ) then
+		fatal( "Cannot issue order on empty group" )
+	end
+	
+	if queued == nil then
+		queued = false
+	end
+	
+	Cmd_Move(sgroupid, markerid, queued)
+	
+	_AddSquadToBeDeletedNearMarker(sgroupid, markerid, "despawn")
+
+end
+
+
+--? @shortdesc Command attacker sgroup to attack move to strategic point target; when it is capturable, the sgroup would capture it
+--? @args SGroupID attacker, EGroupID target, [ Boolean queued ]
+--? @result Void
+function Cmd_AttackMoveThenCapture( attacker, target, queued )
+
+	if ( SGroup_IsEmpty(attacker) ) then
+		print("Cmd_AttackMoveThenCapture: 'attacker' is an empty group")
+		return
+	end
+	
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	Cmd_AttackMove(attacker, target, queued)
+	
+	if Util_GetPlayerOwner( attacker ) ~= nil then
+		LocalCommand_SquadEntity(
+			Util_GetPlayerOwner( attacker ),
+			attacker,
+			SCMD_Capture,
+			target,
+			true -- must always be queued, since it's preceded by the move command
+		)
+	end
+end
+
+--? @shortdesc Command attacker sgroup to attack move to strategic point target; when it is capturable, the sgroup would capture it
+--? @args SGroupID attacker, EGroupID target, [ Boolean queued ]
+--? @result Void
+function Cmd_MoveToThenCapture( capturer, target, queued )
+
+	if ( SGroup_IsEmpty(capturer) ) then
+		print("Cmd_MoveToThenCapture 'capturer' is an empty group")
+		return
+	end
+	
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	Cmd_Move(capturer, target, queued)
+	
+	if Util_GetPlayerOwner( capturer ) ~= nil then
+		
+		LocalCommand_SquadEntity(
+			Util_GetPlayerOwner( capturer ),
+			capturer,
+			SCMD_Capture,
+			target,
+			true -- must always be queued, since it's preceded by the move command
+		)
+	end
+	
+end
+
+--? @shortdesc Order a squad group to capture team weapon entity group.
+--? @args SGroupID sgroupid, EGroupID targetid, [Boolean queued]
+function Cmd_CaptureTeamWeapon( sgroupid, targetid, queued )
+
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if ( (SGroup_Count(sgroupid) >= 1) and (EGroup_Count(targetid) >= 1) and Util_GetPlayerOwner( sgroupid ) ~= nil) then 	-- ignore empty groups
+		LocalCommand_SquadEntity(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_CaptureTeamWeapon,
+			targetid,
+			queued
+		)
+	end
+
+end
+
+--? @shortdesc Order a squad group to recrew an abandoned vehicle.
+--? @args SGroupID sgroupid, EGroupID targetid, [Boolean queued]
+function Cmd_RecrewVehicle( sgroupid, targetid, queued )
+
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if ( (SGroup_Count(sgroupid) >= 1) and (EGroup_Count(targetid) >= 1) and Util_GetPlayerOwner( sgroupid ) ~= nil ) then 	-- ignore empty groups
+		LocalCommand_SquadEntity(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_Recrew,
+			targetid,
+			queued
+		)
+	end
+
+end
+
+--? @shortdesc Order a squad group to abandon their current team weapon if they have it and they could (tuning value in attribute editor)
+--? @args SGroupID sgroupid[, Boolean preserveCrew, Boolean queued]
+function Cmd_AbandonTeamWeapon( sgroupid, preserveCrew, queued )
+
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if ( preserveCrew == nil ) then
+		preserveCrew = false
+	end
+	
+	if preserveCrew == true then preserveCrew = 1 else preserveCrew = 0 end
+	
+	if (SGroup_Count(sgroupid) >= 1) and Util_GetPlayerOwner( sgroupid ) ~= nil then 	-- ignore empty groups
+		LocalCommand_SquadExt(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_AbandonTeamWeapon,
+			preserveCrew,
+			queued
+		)
+	end
+
+end
+
+--? @shortdesc Order a squad group to instant setup their team weapon without animation
+--? @args SGroupID sgroupid, [Boolean queued]
+function Cmd_InstantSetupTeamWeapon( sgroupid, queued )
+
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if (SGroup_Count(sgroupid) >= 1 and Util_GetPlayerOwner( sgroupid ) ~= nil) then 	-- ignore empty groups
+		LocalCommand_Squad(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_InstantSetupTeamWeapon,
+			queued
+		)
+	end
+
+end
+
+--? @shortdesc Order a squad group to setup their team weapon with animation 
+--? @args SGroupID sgroupid, [Boolean queued]
+function Cmd_SetupTeamWeapon( sgroupid, queued )
+
+	if ( queued == nil ) then
+		queued = false
+	end
+		
+	if (SGroup_Count(sgroupid) >= 1 and Util_GetPlayerOwner( sgroupid ) ~= nil) then 	-- ignore empty groups
+		LocalCommand_Squad(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_SetupTeamWeapon,
+			queued
+		)
+	end
+
+end
+
+
+function Cmd_DoPlan( sgroupid, plan, pos, queued )
+	
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if (SGroup_Count(sgroupid) >= 1 and Util_GetPlayerOwner( sgroupid ) ~= nil) then 	-- ignore empty groups
+		if plan then
+			-- custom plan
+			if pos == nil then
+				LocalCommand_SquadDoCustomPlan(
+					Util_GetPlayerOwner( sgroupid ),
+					sgroupid,
+					plan,
+					queued
+				)
+			else
+				LocalCommand_SquadDoCustomPlanTarget(
+					Util_GetPlayerOwner( sgroupid ),
+					sgroupid,
+					Util_GetPosition(pos),
+					plan,
+					queued
+				)
+			end
+		else
+			-- default plan
+			if pos == nil then
+				LocalCommand_Squad(
+					Util_GetPlayerOwner( sgroupid ),
+					sgroupid,
+					SCMD_DoPlan,
+					queued
+				)
+			else
+				LocalCommand_SquadPos(
+					Util_GetPlayerOwner( sgroupid ),
+					sgroupid,
+					SCMD_DoPlan,
+					Util_GetPosition(pos),
+					queued
+				)
+			end
+		end
+	end
+end
+
+--? @shortdesc Order a squad group to revert occupied building
+--? @args SGroupID sgroupid, EGroupID targetid, [Boolean queued]
+function Cmd_RevertOccupiedBuilding( sgroupid, targetid, queued )
+
+	if ( queued == nil ) then
+		queued = false
+	end
+	
+	if ( (SGroup_Count(sgroupid) >= 1) and (EGroup_Count(targetid) >= 1) and Util_GetPlayerOwner( sgroupid ) ~= nil) then 	-- ignore empty groups
+		LocalCommand_SquadEntity(
+			Util_GetPlayerOwner( sgroupid ),
+			sgroupid,
+			SCMD_RevertFieldSupport,
+			targetid,
+			queued
+		)
+	end
+
+end
+
+--? @shortdesc Orders a squad group to place demolition charges on a building (egroup). Function does nothing if egroup cannot be detonated, or player can't afford the demolitions
+--? @args SGroupID sgroupid, EGroupID targetid[, Boolean skipCostPrereq, Boolean queued]
+function Cmd_SetDemolitions( sgroupid, targetid, skipCostPrereq, queued )
+
+	if skipCostPrereq == nil then skipCostPrereq = true end
+	if queued == nil then queued = false end
+	
+	if not SGroup_IsEmpty(sgroupid) and not EGroup_IsEmpty(targetid) and Util_GetPlayerOwner(sgroupid) ~= nil then
+		LocalCommand_SquadEntityBool(Util_GetPlayerOwner(sgroupid), sgroupid, SCMD_PlaceCharge, targetid, not skipCostPrereq, queued)
+	end
+
+end
+
+--? @shortdesc Detonates a building's demolitions
+--? @args PlayerID player, EGroupID target[, Boolean queued]
+--? @result Void
+function Cmd_DetonateDemolitions( player, targetid, queued )
+
+	if queued == nil then queued = false end
+	
+	local _OneEntity = function(gid, idx, eid)
+		local eg = EGroup_Create("Cmd_DetonateDemolitions")
+		EGroup_Add(eg, eid)
+		LocalCommand_PlayerEntity(player, player, PCMD_DetonateCharges, eg)
+		EGroup_Destroy(eg)
+	end
+	
+	EGroup_ForEach(targetid, _OneEntity)
+	
+end
+
+--? @shortdesc Orders a squad to contruct a building at specified position, or to continue construction on an existing building.
+--? @extdesc The command also checks to see if a building already exists at the location, and the squad will continue building it, if it is of the correct type.
+--? @args SGroup sgroupid, Entity blueprint, EGroupID/Position/Marker targetid[, Position Facing, Boolean queued]
+--? @result Void
+function Cmd_Construct(sgroupid, ebp, targetid, facing, queued)
+	
+	local _eg_construction = EGroup_CreateIfNotFound("_eg_construction")
+	
+	local player
+	if not SGroup_IsEmpty(sgroupid) then
+		player = Util_GetPlayerOwner(sgroupid)
+	else
+		fatal("SGroup does not contain any squads")
+	end
+	
+	if targetid == nil then
+		fatal("targetid -- the position at which the to build cannot be nil")
+	end
+		
+	if queued == nil then queued = false end
+	if facing == nil then
+	
+		-- get the heading of the marker and order the squad to build in the direction of the marker
+		if scartype(targetid) == ST_MARKER then
+			local vector = Marker_GetDirection(targetid)
+			local pos = Marker_GetPosition(targetid)
+			
+			pos.x = pos.x + (10*vector.x)
+			pos.y = pos.y + (10*vector.y)
+			pos.z = pos.z + (10*vector.z)
+			facing = pos
+		else
+			facing = Util_GetOffsetPosition(targetid, OFFSET_FRONT, 10)
+		end
+	end
+	
+	if targetid ~= nil then
+		if scartype(targetid) == ST_MARKER then
+			targetid = Util_GetPosition(targetid)
+		end
+	
+		if scartype(targetid) == ST_EGROUP 
+		and not EGroup_IsEmpty(targetid) then
+		
+			if not SGroup_IsEmpty(sgroupid) and player ~= nil then
+				LocalCommand_SquadEntity(player, sgroupid, SCMD_BuildStructure, targetid, queued)
+			end
+			
+		elseif scartype(targetid) == ST_SCARPOS and player ~= nil then
+			
+			-- check if the building is under construction
+			Player_GetAllEntitiesNearMarker(player, _eg_construction, targetid, 5)
+			EGroup_Filter(_eg_construction, ebp, FILTER_KEEP)
+			EGroup_FilterUnderConstruction(_eg_construction, FILTER_KEEP)
+							
+			if not EGroup_IsEmpty(_eg_construction) then
+				print("WARNING! Cmd_Construct: Continuing construction on existing building")
+				LocalCommand_SquadEntity(player, sgroupid, SCMD_BuildStructure, _eg_construction, queued)
+			else
+				LocalCommand_PlayerSquadConstructBuilding(player, sgroupid, ebp, targetid, facing, queued)
+			end		
+			
+		end
+	end
+	
+	EGroup_Destroy(_eg_construction)
+
+end
+
+
+
+--? @shortdesc Orders a squad to surrender and awards the local player with an appropriate number of action points
+--? @extdesc Use the optional parameter to assign action points to override the default number.  The function automatically addresses squads that are in buildings or vehicles by ordering them out of the vehicle.
+--? @extdesc The command will also overwrite the exit position as well, if you do not want the squads to exit at the map entry point.
+--? @args SGroup sgroupid [, Integer actionpoints, Position exitpos, Boolean deleteAtExit, Boolean removeWeapon]
+--? @result Void
+function Cmd_Surrender(sgroupid, action_points, exitpos, delete, removeWeapon)
+
+	if SGroup_CountSpawned(sgroupid) < 1 then
+		return
+	end
+		
+	if action_points == nil then
+		-- assign an arbitrary number of action points to the player (as if they had killed the squad)
+		action_points = 3*SGroup_TotalMembersCount(sgroupid)
+	end
+	
+	SGroup_CreateKickerMessage(sgroupid, Game_GetLocalPlayer(), 42812)
+
+	if _surrender == nil then
+		_surrender = {}
+	end
+		
+	_sg_temp = SGroup_CreateIfNotFound("_sg_temp")
+	_eg_all = EGroup_CreateIfNotFound("_eg_all")
+	
+	if exitpos == nil then
+		fatal("Attempted to call Cmd_Surrender() with a nil exit position.")
+	end
+	
+	if delete == nil then
+		delete = true
+	end
+	
+	if removeWeapon == nil then
+		removeWeapon = true
+	end
+	
+	SGroup_Clear(_sg_temp)
+	EGroup_Clear(_eg_all)
+	
+	-- we need to loop through every squad in the sgroup to ensure that
+	-- each squad gets treated separately for when they exit the map.
+	local _AddSquad = function( gid, idx, sid )
+	
+		local temp = {
+			pos_exit 	= exitpos,
+			state		= false,
+			deleteSquad	= delete,
+			disarm		= removeWeapon,
+		}
+		
+		-- adds a new table, then gets the index of that table and creates
+		-- an sgroup off of the name based on the table.
+		table.insert(_surrender, temp)
+		local num = (#_surrender)
+		
+		_surrender[num].sgroup = SGroup_CreateIfNotFound("_sg_surrender"..num)
+		
+		-- adding in a basic timer to make sure that the squads get removed,
+		-- if for some reason they never make it back to the surrendering location
+		_surrender[num].timer = "_SURRENDER_TIMER"..num
+		
+		SGroup_Add(_surrender[num].sgroup, sid)
+		
+	end
+	
+	SGroup_ForEach(sgroupid, _AddSquad)
+	Cmd_Stop(sgroupid)
+	
+	-- order the squad to abandon their team weapon
+	-- usually kills them, unless it is a "special" team weapon that can abandon
+	if SGroup_HasTeamWeapon(sgroupid, ANY) then
+		Cmd_AbandonTeamWeapon(sgroupid, true) -- preserve crew after abandon
+	end
+	
+	
+	-- thell them not to shoot at anything and remove possible suppression effects.
+	SGroup_SetSuppression(sgroupid, 0)
+	SGroup_SetAutoTargetting(sgroupid, "hardpoint_01", false)	
+	SGroup_SetInvulnerable(sgroupid, true)
+	SGroup_SetCrushable(sgroupid, false)
+	SGroup_EnableAttention(sgroupid, false)
+
+	-- give experience points
+	-- grant the squad action points (need to change to attacker squad group
+	SGroup_GetLastAttacker(sgroupid, _sg_temp)
+	if not SGroup_IsEmpty(_sg_temp) then
+		Cmd_Stop(_sg_temp) -- prevent the squad from continuing to attack the current squad
+		Squad_RewardActionPoints( SGroup_GetSpawnedSquadAt(_sg_temp, 1), action_points )
+	else
+		Player_AddResource(Game_GetLocalPlayer(), RT_Action, action_points)
+	end
+	
+	-- stop showing the UI selection parameters, prevent them from being selected,
+	SGroup_EnableUIDecorator(sgroupid, false )
+	SGroup_EnableMinimapIndicator(sgroupid, false)
+	SGroup_SetSelectable(sgroupid, false)
+	
+	if Rule_Exists(_SurrenderInternal) == false then
+		Rule_AddInterval(_SurrenderInternal, 0.5)
+	end
+
+end
+
+function _SurrenderInternal()
+
+	_sg_surrender_internal = SGroup_CreateIfNotFound("_sg_surrender_internal")
+
+	for k, v in pairs(_surrender) do
+		
+		if SGroup_IsEmpty(v.sgroup) then
+			table.remove(_surrender, k)
+		else
+		
+			if not SGroup_IsMoving( v.sgroup, ALL ) 
+			and v.state == false then
+				
+				if SGroup_HasTeamWeapon(v.sgroup, ANY) then
+					Cmd_AbandonTeamWeapon(v.sgroup, true) -- preserve crew after abandon
+				elseif SGroup_IsInHoldEntity(v.sgroup, ANY) 
+				or SGroup_IsInHoldSquad(v.sgroup, ANY) then
+					-- if they are in a building, they need to get out first
+					Cmd_UngarrisonSquad(v.sgroup)
+				else
+					v.state = "surrender"
+					Timer_Start(v.timer, 3*60)
+					SGroup_SetMoodMode(v.sgroup, MM_ForceCalm)
+					SGroup_SetAnimatorState(v.sgroup, "surrender", "on")
+					
+					-- drop their slot weapons (skip cost check and be queued command)
+					if v.disarm == true then
+						SGroup_CallSquadFunction(v.sgroup, function(id) Squad_AddAbility(id, ABILITY.GLOBAL.SP_DROP_WEAPONS) end, nil)
+						Cmd_Ability(v.sgroup, ABILITY.GLOBAL.SP_DROP_WEAPONS, nil, nil, true, true )
+					end
+					Cmd_DoPlan(v.sgroup, "surrender", v.pos_exit, true)
+				end
+				
+			elseif v.state == "surrender" then		
+				if Prox_AreSquadMembersNearMarker(v.sgroup, v.pos_exit, ANY, 5)
+				  or Timer_GetRemaining(v.timer) <= 0 then
+					if v.deleteSquad == true then
+						SGroup_DestroyAllSquads(v.sgroup)
+					end
+				elseif not SGroup_IsMoving(v.sgroup, ANY) then
+					-- *** TODO: brw, sometimes the soldiers stop before getting to the exit point, need to fix this 
+					-- not sure if it is a code problem or a squad ai issue
+					Cmd_DoPlan(v.sgroup, "surrender", v.pos_exit, true)
+				end
+			end
+			
+		end
+		
+	end
+	
+	if (#_surrender) == 0 then
+		SGroup_Destroy(_sg_surrender_internal)
+		Rule_RemoveMe()
+	end
+
+end

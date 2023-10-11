@@ -1,0 +1,31 @@
+function ScoringFunctions_CapturePoint(aiPlayer)
+	typeTuning = 
+	{ 
+		territory_point = 
+		{
+			weight = 1,
+			squad_type = false,
+		}
+	}
+	
+	result =
+	{ 
+		AIEncounterScoring_PresenceOfTypes(aiPlayer, typeTuning),
+		AIEncounterScoring_UncapturedStrategicPoint(aiPlayer),
+		AIEncounterScoring_StrategicIntention(aiPlayer, {["victory_point"] =1}),
+		AIEncounterScoring_AlliedCombatFitness(aiPlayer, 0.3, 0.8, true),
+		AIEncounterScoring_CombatFitnessAtTarget(aiPlayer, 0.3, 0.8, true)
+	}
+	
+	return result
+end
+
+function ScoringFunctions_DefendAlliedSquad(aiPlayer)
+	result =
+	{ 
+		AIEncounterScoring_TargetIsAlly(aiPlayer),
+		AIEncounterScoring_CombatFitnessAtTarget(aiPlayer, 0.2, 0.5, false),
+		AIEncounterScoring_InFrontLineRegion(aiPlayer) -- just thrown in for fun for now
+	}
+	return result
+end

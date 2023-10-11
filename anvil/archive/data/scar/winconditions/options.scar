@@ -1,0 +1,1858 @@
+-----------------------------------------------------------------------
+-- Options
+--
+-- (c) Relic Entertainment 2020
+--
+-- Processes common/shared match options specified in the *.rdo file.
+-- Any mode-specific options should be handled in the game mode script. 
+-----------------------------------------------------------------------
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Options")
+
+
+-----------------------------------------------------------------------
+-- Constants
+-----------------------------------------------------------------------
+
+-- Hard-code these blueprints since they have no identifying unit_class in the squad_type_ext
+_options_basic_infantry_sbps = {
+	americans = SBP.AMERICAN.RIFLEMEN_US,
+	british_africa = SBP.BRITISH_AFRICA.TOMMY_AFRICA_UK,
+	germans = SBP.GERMAN.GRENADIER_GER,
+	afrika_korps = SBP.AFRIKA_KORPS.PANZERGRENADIER_AK,
+}
+
+_options_medical_bps = {
+	americans = EBP.AMERICAN.TRIAGE_CENTER_US,
+	british_africa = EBP.BRITISH_AFRICA.TRIAGE_CENTER_AFRICA_UK,
+	germans = "medical_station_hq_ger",		-- upgrade
+	afrika_korps = nil,
+}
+
+-- Player upgrades for each tier by faction
+_options_upgrades_by_tier = {
+	americans = {
+		[1] = {},
+		[2] = {"grenade_riflemen_us"},
+		[3] = {"bar_riflemen_global_us"},
+		[4] = {},
+		[5] = {},
+	},
+	british_africa = {
+		[1] = {},
+		[2] = {"rifle_grenade_tommy_uk"},
+		[3] = {"stuart_squad_unlock_uk", "bishop_squad_unlock_uk", "training_center_infantry_uk"},
+		[4] = {"grant_unlock_uk", "17pdr_squad_unlock_uk"},
+		[5] = {},
+	},
+	germans = {
+		[1] = {},
+		[2] = {"medical_station_hq_ger"},
+		[3] = {"adv_mech_assault_tactics_ger"},
+		[4] = {"side_skirts_global_ger"},
+		[5] = {},
+	},
+	afrika_korps = {
+		[1] = {},
+		[2] = {"t1_unit_unlock_ak", "anti_tank_package_ak"},
+		[3] = {"t2_unit_unlock_ak", "armory_halftrack_spare_parts_ak", "armory_advanced_field_repairs_ak"},
+		[4] = {"armory_smoke_survivability_ak", "armory_veteran_squad_leaders_ak"},
+		[5] = {},
+	},
+}
+
+-- Player sbps to explicitly unlock by faction
+_options_sbps_by_tier = {
+	americans = {
+		[3] = {"halftrack_us"},
+	},
+}
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+
+-- Called by core.scar at very start of initialization sequence. 
+-- Ideally this function should be in a separate, shared script but options.scar is the only script 
+-- common to all game modes (and fade in behavior is dependent on the selected options anyway).
+function Project_OnInit()
+	Game_FadeToBlack(FADE_OUT, 0)
+end
+
+
+-- Called by OnInit() in core.scar.
+function Options_OnInit()
+
+	print("Scenario: "..Game_GetScenarioFileName())
+
+	local options = {}
+	Setup_GetWinConditionOptions(options)
+	
+	-- Returns the maximum ticket count selected in the match options
+	local _GetTicketOption = function()
+		local option = Options_GetOption(options, "option_tickets")
+		if scartype(option) == ST_NUMBER then
+			return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.tickets_100 then
+				return 100
+			elseif option.enum_value == option.enum_items.tickets_150 then
+				return 150
+			elseif option.enum_value == option.enum_items.tickets_200 then
+				return 200
+			elseif option.enum_value == option.enum_items.tickets_250 then
+				return 250
+			elseif option.enum_value == option.enum_items.tickets_300 then
+				return 300
+			elseif option.enum_value == option.enum_items.tickets_350 then
+				return 350
+			elseif option.enum_value == option.enum_items.tickets_400 then
+				return 400
+			elseif option.enum_value == option.enum_items.tickets_500 then
+				return 500
+			elseif option.enum_value == option.enum_items.tickets_600 then
+				return 600
+			elseif option.enum_value == option.enum_items.tickets_700 then
+				return 700
+			elseif option.enum_value == option.enum_items.tickets_750 then
+				return 750
+			elseif option.enum_value == option.enum_items.tickets_800 then
+				return 800
+			elseif option.enum_value == option.enum_items.tickets_1000 then
+				return 1000
+			end
+		end
+		return 0
+	end
+
+	-- Returns the starting building tier selected in the match options
+	local _GetBuildingTierOption = function()
+		local option = Options_GetOption(options, "option_tier")
+		if scartype(option) == ST_NUMBER then
+			return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.tier_0 then
+				return 0
+			elseif option.enum_value == option.enum_items.tier_1 then
+				return 1
+			elseif option.enum_value == option.enum_items.tier_2 then
+				return 2
+			elseif option.enum_value == option.enum_items.tier_3 then
+				return 3
+			elseif option.enum_value == option.enum_items.tier_4 then
+				return 4
+			elseif option.enum_value == option.enum_items.tier_5 then
+				return 5
+			end
+		end
+		return 0
+	end
+
+	-- Returns true if players should receive upgrade and unit unlocks corresponding to the starting building tier
+	local _GetBalanceTierOption = function()
+		local option = Options_GetOption(options, "option_balance_tier")
+		if scartype(option) == ST_BOOLEAN then
+			return option
+		end
+		return true
+	end
+
+	-- Returns the *additional* unit type to spawn
+	local _GetUnitsOption = function()
+		local option = Options_GetOption(options, "option_units")
+		if scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.units_none then
+				return nil
+			elseif option.enum_value == option.enum_items.units_default then
+				return 1
+			elseif option.enum_value == option.enum_items.units_infantry then
+				return 2
+			elseif option.enum_value == option.enum_items.units_remove then
+				return -1
+			end
+		end
+	end
+	
+	-- Returns the starting manpower amount selected in the match options (1 = use default Attribute Editor value)
+	local _GetStartingManpowerOption = function()
+		local option = Options_GetOption(options, "option_manpower")
+		if scartype(option) == ST_NUMBER then
+			return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.manpower_200 then
+				return 200
+			elseif option.enum_value == option.enum_items.manpower_250 then
+				return 250
+			elseif option.enum_value == option.enum_items.manpower_500 then
+				return 500
+			elseif option.enum_value == option.enum_items.manpower_700 then
+				return 700
+			elseif option.enum_value == option.enum_items.manpower_1000 then
+				return 1000
+			elseif option.enum_value == option.enum_items.manpower_1500 then
+				return 1500
+			elseif option.enum_value == option.enum_items.manpower_2000 then
+				return 2000
+			elseif option.enum_value == option.enum_items.manpower_3000 then
+				return 3000
+			elseif option.enum_value == option.enum_items.manpower_4000 then
+				return 4000
+			elseif option.enum_value == option.enum_items.manpower_5000 then
+				return 5000
+			elseif option.enum_value == option.enum_items.manpower_6000 then
+				return 6000
+			elseif option.enum_value == option.enum_items.manpower_7000 then
+				return 7000
+			elseif option.enum_value == option.enum_items.manpower_8000 then
+				return 8000
+			elseif option.enum_value == option.enum_items.manpower_9000 then
+				return 9000
+			elseif option.enum_value == option.enum_items.manpower_9999 then
+				return 9999
+			end
+		end
+	end	
+	
+		-- Returns the starting manpower amount selected in the match options (1 = use default Attribute Editor value)
+	local _GetStartingMunitionsOption = function()
+		local option = Options_GetOption(options, "option_munitions")
+		if scartype(option) == ST_NUMBER then
+			return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.munitions_50 then
+				return 50
+			elseif option.enum_value == option.enum_items.munitions_100 then
+				return 100
+			elseif option.enum_value == option.enum_items.munitions_200 then
+				return 200
+			elseif option.enum_value == option.enum_items.munitions_300 then
+				return 300
+			elseif option.enum_value == option.enum_items.munitions_400 then
+				return 400
+			elseif option.enum_value == option.enum_items.munitions_500 then
+				return 500
+			elseif option.enum_value == option.enum_items.munitions_600 then
+				return 600
+			elseif option.enum_value == option.enum_items.munitions_700 then
+				return 700
+			elseif option.enum_value == option.enum_items.munitions_800 then
+				return 800
+			elseif option.enum_value == option.enum_items.munitions_900 then
+				return 900
+			end
+		end
+	end	
+	
+	-- Returns the starting manpower amount selected in the match options (1 = use default Attribute Editor value)
+	local _GetStartingFuelOption = function()
+		local option = Options_GetOption(options, "option_fuel")
+		if scartype(option) == ST_NUMBER then
+				return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.fuel_50 then
+				return 50
+			elseif option.enum_value == option.enum_items.fuel_100 then
+				return 100
+			elseif option.enum_value == option.enum_items.fuel_200 then
+				return 200
+			elseif option.enum_value == option.enum_items.fuel_300 then
+				return 300
+			elseif option.enum_value == option.enum_items.fuel_400 then
+				return 400
+			elseif option.enum_value == option.enum_items.fuel_500 then
+				return 500
+			elseif option.enum_value == option.enum_items.fuel_600 then
+				return 600
+			elseif option.enum_value == option.enum_items.fuel_700 then
+				return 700
+			elseif option.enum_value == option.enum_items.fuel_800 then
+				return 800
+			elseif option.enum_value == option.enum_items.fuel_900 then
+				return 900
+			end
+		end
+	end
+
+
+	-- Returns the starting command points selected in the match options
+	local _GetCommandPointsOption = function()
+		local option = Options_GetOption(options, "option_command_points")
+		if scartype(option) == ST_NUMBER then
+			return option
+		end
+	end
+
+
+	-- Returns the population capacity selected in the match options
+	local _GetPopCapOption = function()
+		local option = Options_GetOption(options, "option_popcap")
+		if scartype(option) == ST_NUMBER then
+				return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.popcap_30 then
+				return 30
+			elseif option.enum_value == option.enum_items.popcap_40 then
+				return 40
+			elseif option.enum_value == option.enum_items.popcap_50 then
+				return 50
+			elseif option.enum_value == option.enum_items.popcap_60 then
+				return 60
+			elseif option.enum_value == option.enum_items.popcap_70 then
+				return 70
+			elseif option.enum_value == option.enum_items.popcap_80 then
+				return 80
+			elseif option.enum_value == option.enum_items.popcap_90 then
+				return 90
+			elseif option.enum_value == option.enum_items.popcap_100 then
+				return 100
+			elseif option.enum_value == option.enum_items.popcap_110 then
+				return 110
+			elseif option.enum_value == option.enum_items.popcap_120 then
+				return 120
+			elseif option.enum_value == option.enum_items.popcap_130 then
+				return 130
+			elseif option.enum_value == option.enum_items.popcap_140 then
+				return 140
+			end
+		end
+	end
+
+	-- Returns the resource income rate modifier selected in the match options
+	local _GetResourceIncomeOption = function()
+		local option = Options_GetOption(options, "option_income")
+		if scartype(option) == ST_NUMBER then
+				return option / 100
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.income_0_manpower then
+				return -1
+			elseif option.enum_value == option.enum_items.income_0 then
+				return 0.0
+			elseif option.enum_value == option.enum_items.income_80 then
+				return 0.8
+			elseif option.enum_value == option.enum_items.income_90 then
+				return 0.9
+			elseif option.enum_value == option.enum_items.income_100 then
+				return 1.0
+			elseif option.enum_value == option.enum_items.income_110 then
+				return 1.1
+			elseif option.enum_value == option.enum_items.income_120 then
+				return 1.2
+			elseif option.enum_value == option.enum_items.income_130 then
+				return 1.3
+			elseif option.enum_value == option.enum_items.income_140 then
+				return 1.4
+			elseif option.enum_value == option.enum_items.income_150 then
+				return 1.5
+			elseif option.enum_value == option.enum_items.income_175 then
+				return 1.75
+			elseif option.enum_value == option.enum_items.income_200 then
+				return 2.0
+			elseif option.enum_value == option.enum_items.income_250 then
+				return 2.5
+			elseif option.enum_value == option.enum_items.income_300 then
+				return 3.0
+			end
+		end
+		return 1.0
+	end
+	
+	-- Returns the production speed modifier selected in the match options
+	local _GetProductionSpeedOption = function()
+		local option = Options_GetOption(options, "option_production")
+		if scartype(option) == ST_NUMBER then
+				return option / 100
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.production_110 then
+				return 1.1
+			elseif option.enum_value == option.enum_items.production_120 then
+				return 1.2
+			elseif option.enum_value == option.enum_items.production_130 then
+				return 1.3
+			elseif option.enum_value == option.enum_items.production_140 then
+				return 1.4
+			elseif option.enum_value == option.enum_items.production_150 then
+				return 1.5
+			elseif option.enum_value == option.enum_items.production_160 then
+				return 1.6
+			elseif option.enum_value == option.enum_items.production_180 then
+				return 1.8
+			elseif option.enum_value == option.enum_items.production_200 then
+				return 2.0
+			elseif option.enum_value == option.enum_items.production_250 then
+				return 2.5
+			elseif option.enum_value == option.enum_items.production_300 then
+				return 3.0
+			elseif option.enum_value == option.enum_items.production_400 then
+				return 4.0
+			elseif option.enum_value == option.enum_items.production_500 then
+				return 5.0
+			elseif option.enum_value == option.enum_items.production_1000 then
+				return 10.0
+			end
+		end
+	end
+
+	-- Returns the construction speed modifier (for buildings and emplacements) selected in the match options
+	local _GetConstructionSpeedOption = function()
+		local option = Options_GetOption(options, "option_construction")
+		if scartype(option) == ST_NUMBER then
+			if option <= 5 then
+				return option
+			end
+			return option / 100
+		end
+	end
+
+	-- Returns the construction speed modifier for base buildings selected in the match options
+	local _GetBaseConstructionSpeedOption = function()
+		local option = Options_GetOption(options, "option_base_construction")
+		if scartype(option) == ST_NUMBER then
+			if option <= 5 then
+				return option
+			end
+			return option / 100
+		end
+	end
+
+	-- Returns the starting territory option selected in the match options
+	local _GetStartingTerritoryOption = function()
+		local option = Options_GetOption(options, "option_territory")
+		if scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.territory_adjacent then
+				return 1
+			elseif option.enum_value == option.enum_items.territory_split then
+				return 2
+			end
+		end
+	end
+
+	-- Returns the unit health modifier selected in the match options
+	local _GetUnitHealthOption = function()
+		local option = Options_GetOption(options, "option_health")
+		if scartype(option) == ST_NUMBER then
+			if option <= 5 then
+				return option
+			end
+			return option / 100
+		end
+	end
+
+	-- Returns the unit upkeep modifier selected in the match options
+	local _GetUnitUpkeepOption = function()
+		local option = Options_GetOption(options, "option_upkeep")
+		if scartype(option) == ST_NUMBER then
+			if option <= 5 then
+				return option
+			end
+			return option / 100
+		end
+	end
+
+	-- Returns the weapon drop rate selected in the match options (can't actually specify a percentage - only always, never, default)
+	local _GetWeaponDropRateOption = function()
+		local option = Options_GetOption(options, "option_weapon_drop")
+		if scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.weapon_drop_always then
+				return 1.0
+			elseif option.enum_value == option.enum_items.weapon_drop_never then
+				return 0.0
+			end
+		end
+	end
+
+	local _GetResourceCaptureTimeOption = function()
+		local option = Options_GetOption(options, "option_resource_capture_time")
+		if scartype(option) == ST_NUMBER then
+			return option / 100
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.time_40 then
+				return 0.4
+			elseif option.enum_value == option.enum_items.time_50 then
+				return 0.5
+			elseif option.enum_value == option.enum_items.time_60 then
+				return 0.6
+			elseif option.enum_value == option.enum_items.time_70 then
+				return 0.7
+			elseif option.enum_value == option.enum_items.time_80 then
+				return 0.8
+			elseif option.enum_value == option.enum_items.time_90 then
+				return 0.9
+			elseif option.enum_value == option.enum_items.time_10s then
+				return 10
+			elseif option.enum_value == option.enum_items.time_15s then
+				return 15
+			elseif option.enum_value == option.enum_items.time_20s then
+				return 20
+			elseif option.enum_value == option.enum_items.time_25s then
+				return 25
+			elseif option.enum_value == option.enum_items.time_30s then
+				return 30
+			end
+		end
+	end
+
+	local _GetVPCaptureTimeOption = function()
+		local option = Options_GetOption(options, "option_vp_capture_time")
+		if scartype(option) == ST_NUMBER then
+			return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.time_25s then
+				return 25
+			elseif option.enum_value == option.enum_items.time_30s then
+				return 30
+			elseif option.enum_value == option.enum_items.time_35s then
+				return 35
+			elseif option.enum_value == option.enum_items.time_40s then
+				return 40
+			elseif option.enum_value == option.enum_items.time_resource then
+				return _GetResourceCaptureTimeOption()
+			end
+		end
+	end
+
+	local _GetBattlegroupOption = function()
+		local option = Options_GetOption(options, "option_battlegroups")
+		if scartype(option) == ST_BOOLEAN then
+			if not option then 
+				return -1
+			end
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.disabled then
+				return -1
+			elseif option.enum_value == option.enum_items.unlocked then
+				return 1
+			end
+		end
+	end
+
+	local _GetExcludeOption = function()
+		local option = Options_GetOption(options, "option_exclude")
+		if scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.exclude_snipers then
+				return 1
+			elseif option.enum_value == option.enum_items.exclude_aircraft then
+				return 2
+			elseif option.enum_value == option.enum_items.exclude_artillery then
+				return 3
+			elseif option.enum_value == option.enum_items.exclude_armor then
+				return 4
+			elseif option.enum_value == option.enum_items.exclude_vehicles then
+				return 5
+			elseif option.enum_value == option.enum_items.exclude_vehicles_artillery then
+				return 6
+			end
+		end
+	end
+
+	local _GetExperienceOption = function()
+		local option = Options_GetOption(options, "option_experience")
+		if scartype(option) == ST_NUMBER then
+			return option / 100
+		end
+	end
+
+	local _GetSightOption = function()
+		local option = Options_GetOption(options, "option_sight")
+		if scartype(option) == ST_NUMBER then
+			return option / 100
+		end
+	end
+
+	local _GetAutoreinforceOption = function()
+		local option = Options_GetOption(options, "option_reinforce")
+		if scartype(option) == ST_BOOLEAN then
+			return option
+		elseif scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.autoreinforce_disabled then
+				return false
+			end
+		end
+		return true
+	end
+
+	local _GetResourceModelOption = function()
+		local option = Options_GetOption(options, "option_resource_model")
+		if scartype(option) == ST_TABLE then
+			if option.enum_value == option.enum_items.resource_model_coh2 then
+				return 2
+			elseif option.enum_value == option.enum_items.resource_model_none then
+				return 0
+			end
+		end
+	end
+
+	local _GetTeamSizeIncomePenalty = function()
+		local option = Options_GetOption(options, "option_team_income_penalty")
+		if scartype(option) == ST_NUMBER then
+			return option / 100
+		end
+	end
+
+	_options = {
+		fade_in = 1,
+		max_tickets = _GetTicketOption(),
+		popcap = _GetPopCapOption(),
+		manpower = _GetStartingManpowerOption(),
+		munitions = _GetStartingMunitionsOption(),
+		fuel = _GetStartingFuelOption(),
+		command = _GetCommandPointsOption(),
+		income = _GetResourceIncomeOption(),
+		production = _GetProductionSpeedOption(),
+		construction = _GetConstructionSpeedOption(),
+		base_construction = _GetBaseConstructionSpeedOption(),
+		rs_capture = _GetResourceCaptureTimeOption(),
+		vp_capture = _GetVPCaptureTimeOption(),
+		territory = _GetStartingTerritoryOption(),
+		tier = _GetBuildingTierOption(),
+		balance_tier = _GetBalanceTierOption(),
+		units = _GetUnitsOption(),
+		health = _GetUnitHealthOption(),
+		upkeep = _GetUnitUpkeepOption(),
+		sight = _GetSightOption(),
+		bg_abilities = _GetBattlegroupOption(),
+		exclude = _GetExcludeOption(),
+		autoreinforce = _GetAutoreinforceOption(),
+		resource_model = _GetResourceModelOption(),
+		team_size_income_penalty = _GetTeamSizeIncomePenalty(),
+		experience = _GetExperienceOption(),
+		weapon_drop_rate = _GetWeaponDropRateOption(),
+		weapon_drop_squads = {},
+	}
+	
+	-- Prevent event queue spam at the start of the match due to buildings constructed, upgrades applied through script
+	Options_EnableEventCues(false)
+
+	-- Change the default camera to face the middle of the map
+	if _options.face_front or Misc_IsCommandLineOptionSet("face_front") then
+		Options_SetDefaultCamera()
+	end
+
+	-- Override initial territory control via command line arg (for testing only)
+	if Misc_IsDevMode() and Misc_IsCommandLineOptionSet("territory") then
+		local territory_override = tonumber(Misc_GetCommandLineString("territory"))
+		if territory_override then
+			_options.territory = math.max(0, math.min(2, territory_override))
+		end
+	end
+
+	-- Set player battlegroups based on command-line args (for testing only)
+	Debug_SetBattlegroups()
+end
+
+
+-- Called by core.scar after all OnInit() callbacks are finished.
+function Options_InitComplete()
+	Options_Log()
+	Options_SetMaxTickets()
+
+	local ebps, abilities, building_ebps, base_ebps
+	for i = 1, World_GetPlayerCount() do 
+
+		local player = World_GetPlayerAt(i)
+
+		-- Resource income rate
+		if _options.income == -1 then
+			-- No manpower income
+			Modify_PlayerResourceRate(player, RT_Manpower, 0.0, MUT_Multiplication)
+		else
+			if _options.income == 0 then
+				-- No resource income at all
+				Modify_PlayerResourceRate(player, RT_Manpower, 0, MUT_Multiplication)
+				Modify_PlayerResourceRate(player, RT_Munition, 0, MUT_Multiplication)
+				Modify_PlayerResourceRate(player, RT_Fuel, 0, MUT_Multiplication)
+
+				--TODO: Convert resource points to strategic points?
+			end
+			if _options.income ~= 1 then
+				-- Modify resource income
+				Modify_PlayerResourceRate(player, RT_Manpower, _options.income, MUT_Multiplication)
+				Modify_PlayerResourceRate(player, RT_Munition, _options.income, MUT_Multiplication)
+				Modify_PlayerResourceRate(player, RT_Fuel, _options.income, MUT_Multiplication)
+			end
+		end
+
+		-- Max pop cap (only modify if different from the default)
+		if _options.popcap and _options.popcap ~= 100 then
+			Player_SetPopCapOverride(player, _options.popcap)
+		end
+
+		-- Production speed
+		if _options.production and _options.production ~= 1.0 then
+			Modifier_ApplyToPlayer(Modifier_Create(MAT_Player, "production_speed_player_modifier", MUT_Multiplication, false, _options.production, ""), player, 0)
+		end
+
+		-- Construction speed (buildings and emplacements)
+		if _options.construction and _options.construction ~= 1.0 then
+			if _options.construction == 0.0 then
+				_options.construction = 0.001
+			end
+			building_ebps = building_ebps or BP_GetEntityBlueprintsWithType({"building"})
+			for _, building_ebp in pairs(building_ebps) do
+				Modifier_ApplyToPlayer(Modifier_Create(MAT_EntityType, "cost_ticks_modifier", MUT_Multiplication, false, 1.0/_options.construction, building_ebp), player, 0)
+			end
+		end
+
+		-- Construction speed (base buildings only)
+		if _options.base_construction and _options.base_construction ~= 1.0 then
+			if _options.base_construction == 0.0 then
+				_options.base_construction = 0.001
+			end
+			base_ebps = base_ebps or BP_GetEntityBlueprintsWithType({"production1", "production2", "production3", "production4"})
+			for _, building_ebp in pairs(base_ebps) do
+				Modifier_ApplyToPlayer(Modifier_Create(MAT_EntityType, "cost_ticks_modifier", MUT_Multiplication, false, 1.0/_options.base_construction, building_ebp), player, 0)
+			end
+		end
+
+		--Sight
+		if _options.sight and _options.sight ~= 1.0 then
+			Modifier_ApplyToPlayer(Modifier_Create(MAT_Player, "sight_radius_player_modifier", MUT_Multiplication, false, _options.sight, ""), player, 0)
+		end
+
+		-- Upkeep
+		if _options.upkeep and _options.upkeep ~= 1.0 then
+			Modifier_ApplyToPlayer(Modifier_Create(MAT_Player, "player_upkeep_manpower", MUT_Multiplication, false, _options.upkeep, ""), player, 0)
+		end
+
+		-- Experience
+		if _options.experience and _options.experience ~= 1.0 then
+			Modifier_ApplyToPlayer(Modifier_Create(MAT_Player, "received_veterancy_player_modifier", MUT_Multiplication, false, _options.experience, ""), player, 0)
+			
+			if _options.experience == 0 then
+				-- De-clutter UI by removing all abilities related to veterancy
+				if not abilities then 
+					abilities = {}
+					local n = BP_GetPropertyBagGroupCount(PBG_Ability)
+					for j = 0, n-1 do
+						local ability_name = BP_GetPropertyBagGroupPathName(PBG_Ability, j)
+						if string.find(string.lower(ability_name), "veterancy_") then
+							table.insert(abilities, BP_GetAbilityBlueprint(ability_name))
+						end
+					end
+				end
+				Player_SetAbilityAvailability(player, abilities, ITEM_REMOVED)
+			end
+		end
+
+		-- Starting squads
+		Options_SpawnSquads(player, _options.units)
+
+		-- Disable/unlock battlegroup upgrades
+		if _options.bg_abilities then
+			Options_SetBattlegroupUpgrades(player, _options.bg_abilities)
+		end
+
+		if _options.exclude then
+			Options_Exclude(player, _options.exclude)
+		end
+
+		-- Modify health, etc. of default units
+		SGroup_ForEachEx(Player_GetSquads(player), function(sgroup, index, squad) Options_ApplySquadModifiers(squad) end, true, true)
+
+		-- Modify health, etc. of default buildings
+		EGroup_ForEach(Player_GetEntities(player), function(egroup, index, entity) Options_ApplyEntityModifiers(entity) end)
+		
+		-- Auto-reinforce 
+		if not _options.autoreinforce then
+			Player_SetAbilityAvailability(player, ABILITY.COMMON.AUTO_REINFORCE, ITEM_REMOVED)
+			Player_SetAbilityAvailability(player, ABILITY.COMMON.AUTO_REINFORCE_HALFTRACK, ITEM_REMOVED)
+		end
+	end
+
+	if _options.health and _options.health ~= 1.0 then
+		Rule_AddGlobalEvent(Options_OnBuildItemComplete, GE_BuildItemComplete)
+		Rule_AddGlobalEvent(Options_OnConstructionComplete, GE_ConstructionComplete)
+	end
+
+	if _options.weapon_drop_rate then
+		Rule_AddGlobalEvent(Options_OnBuildItemCompleteSetDropRate, GE_BuildItemComplete)
+		Rule_AddGlobalEvent(Options_OnUpgradeCompleteSetDropRate, GE_UpgradeComplete)
+		Rule_AddGlobalEvent(Options_OnItemPickupSetDropRate, GE_SquadItemPickup)
+	end
+
+	if _options.rs_capture then
+		local eg_points = EGroup_CreateUnique()
+		World_GetStrategyPoints(eg_points, false)
+		Options_ModifyCaptureTime(eg_points, _options.rs_capture)
+		EGroup_Destroy(eg_points)
+	end
+
+	if _options.vp_capture then
+		local eg_vps = EGroup_CreateUnique()
+		local eg = EGroup_CreateUnique()
+		World_GetStrategyPoints(eg, true)
+		EGroup_ForEach(eg, function(egroup, index, entity)
+				if Entity_IsVictoryPoint(entity) then
+					EGroup_Add(eg_vps, entity)
+				end
+			end)
+		for i = 1, World_GetPlayerCount() do 
+			local player_entities = Player_GetAllEntities(World_GetPlayerAt(i))
+			EGroup_ForEach(player_entities, function(egroup, index, entity)
+					if Entity_IsVictoryPoint(entity) then
+						EGroup_Add(eg_vps, entity)
+					end
+				end)
+			EGroup_Clear(player_entities)
+		end
+		Options_ModifyCaptureTime(eg_vps, _options.vp_capture)
+		EGroup_Destroy(eg)
+		EGroup_Destroy(eg_vps)
+	end
+
+	if _options.resource_model then
+		Options_SetResourceModel(_options.resource_model)
+	end
+
+	if _options.team_size_income_penalty then
+		Options_SetTeamSizeIncomePenalty(_options.team_size_income_penalty)
+	end
+
+	if _options.no_holds then
+		Options_DisableHolds()
+	end
+
+	Options_SetTerritory(_options.territory)
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function Options_Start()
+
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+
+		-- Need to defer spawning buildings a few ticks until placeholder for HQ attachments is created
+		Options_SpawnBase(player, _options.tier)
+		
+		-- Unlock upgrades and squads to suit the starting building tier (also deferred to accommodate US support center upgrades)
+		if _options.balance_tier then
+			Options_BalanceTier(player, _options.tier)
+		end
+
+		-- Need to defer modifiying starting resources a few ticks
+		if _options.manpower then
+			Player_SetResource(player, RT_Manpower, _options.manpower)
+		end
+
+		-- Starting munitions
+		if _options.munitions then
+			Player_SetResource(player, RT_Munition, _options.munitions)
+		end
+
+		-- Starting fuel
+		if _options.fuel then
+			Player_SetResource(player, RT_Fuel, _options.fuel)
+		end
+
+		-- Starting command points
+		if _options.command then
+			if _options.command < 0 then
+				Options_DisableBattlegroupAbilities(player)
+			else
+				Player_SetResource(player, RT_Command, _options.command)
+			end
+		end
+	end
+
+	-- Delay by a tick so all other *_Start() functions have a chance to complete.
+	Rule_AddOneShot(Mission_Started, 0.125)
+end
+
+
+function Mission_Started()
+	Options_EnableEventCues(true)
+	
+	if _options.fade_in and scartype(_options.fade_in) == ST_NUMBER then
+		Game_FadeToBlack(FADE_IN, _options.fade_in)
+	end
+end
+
+
+function Options_Log()
+	if _options.income then
+		if _options.income == -1 then
+			print("Manpower income = 0")
+		elseif _options.income ~= 1 then
+			print(string.format("Resource income = %.02fx", _options.income))
+		end
+	end
+	if _options.manpower then
+		print(string.format("Starting manpower = %d", _options.manpower))
+	end
+	if _options.munitions then
+			print(string.format("Starting munitions = %d", _options.munitions))
+	end
+	if _options.fuel then
+		print(string.format("Starting fuel = %d", _options.fuel))
+	end
+	if _options.command then
+		print(string.format("Starting command points = %d", _options.command))
+	end
+	if _options.popcap and _options.popcap ~= 100 then
+		print(string.format("Pop cap = %d", _options.popcap))
+	end
+	if _options.production and _options.production ~= 1 then
+		print(string.format("Production speed = %.02fx", _options.production))
+	end
+	if _options.construction and _options.construction ~= 1 then
+		print(string.format("Construction speed = %.02fx", _options.construction))
+	end
+	if _options.base_construction and _options.base_construction ~= 1 then
+		print(string.format("Base construction speed = %.02fx", _options.base_construction))
+	end
+	if _options.experience and _options.experience ~= 1 then
+		print(string.format("Experience rate = %.02fx", _options.experience))
+	end
+	if _options.territory then
+		if _options.territory == 1 then
+			print("Starting territory = Base + adjacent")
+		elseif _options.territory == 2 then
+			print("Starting territory = Equal split")
+		end
+	end
+	if _options.tier > 0 then
+		print("Starting building tier = ".. _options.tier)
+	end
+	if _options.units then
+		print("Starting units = ".. _options.units)
+	end
+	if _options.bg_abilities then
+		print("Battlegroup abilities = ".. _options.bg_abilities)
+	end
+	if _options.exclude then
+		print("Exclusions = ".. _options.exclude)
+	end
+	if _options.health and _options.health ~= 1 then
+		print(string.format("Entity health = %.02fx", _options.health))
+	end
+	if _options.upkeep and _options.upkeep ~= 1 then
+		print(string.format("Upkeep = %.02fx", _options.upkeep))
+	end
+	if _options.sight and _options.sight ~= 1 then
+		print(string.format("Sight = %.02fx", _options.sight))
+	end
+	if _options.weapon_drop_rate then
+		print(string.format("Weapon drop rate = %.02f", _options.weapon_drop_rate))
+	end
+	if _options.rs_capture then
+		print(string.format("Resource point capture time = %.02f", _options.rs_capture))
+	end
+	if _options.vp_capture then
+		print(string.format("Victory point capture time = %.02f", _options.vp_capture))
+	end
+	if _options.resource_model then
+		print("Resource model = CoH ".. _options.resource_model)
+	end
+	if not _options.autoreinforce then
+		print("Auto-reinforce = disabled")
+	end
+	if _options.team_size_income_penalty and _options.team_size_income_penalty ~= 0 then
+		print(string.format("Team size income penalty = %.02f per player", _options.team_size_income_penalty))
+	end
+end
+
+-- Global event callback for GE_ConstructionComplete
+-- Modifies health, etc. of constructed buildings
+function Options_OnConstructionComplete(context)	 
+	Options_ApplyEntityModifiers(context.entity)
+end
+
+
+-- Global event callback for GE_BuildItemComplete
+-- Modifies health, accuracy, range, etc. of spawned units
+function Options_OnBuildItemComplete(context)
+	if context.spawnedSquad then 
+		Options_ApplySquadModifiers(context.spawnedSquad)
+	end
+end
+
+
+-- Called when a win condition has been met signalling that the match should end.
+-- Clean up UI and rules associated with this script module.
+function Options_OnWinConditionTriggered(match_result)
+	if Rule_Exists(Options_OnBuildItemComplete) then
+		Rule_RemoveGlobalEvent(Options_OnBuildItemComplete)
+	end
+	if Rule_Exists(Options_OnConstructionComplete) then
+		Rule_RemoveGlobalEvent(Options_OnConstructionComplete)
+	end
+	if Rule_Exists(Options_OnBuildItemCompleteSetDropRate) then
+		Rule_RemoveGlobalEvent(Options_OnBuildItemCompleteSetDropRate)
+	end
+	if Rule_Exists(Options_OnUpgradeCompleteSetDropRate) then
+		Rule_RemoveGlobalEvent(Options_OnUpgradeCompleteSetDropRate)
+	end
+	if Rule_Exists(Options_OnItemPickupSetDropRate) then
+		Rule_RemoveGlobalEvent(Options_OnItemPickupSetDropRate)
+	end
+	if Rule_Exists(Options_OnUpgradeComplete) then
+		Rule_RemoveGlobalEvent(Options_OnUpgradeComplete)
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count. 
+function Options_OnMaxTicketsChanged(tickets, player)
+	-- Track whether max tickets has been set by some other script
+	_options.max_tickets_set = true 
+end
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+-- Returns the option value (boolean, integer, or table) corresponding to a given option name
+-- from an options table returned by Setup_GetWinConditionOptions().
+function Options_GetOption(options, option_name)
+	for _, section in pairs(options) do
+		if section[option_name] then
+			return section[option_name]
+		end
+	end
+end
+
+
+-- Set the default camera to face the middle of the map
+function Options_SetDefaultCamera()
+	local player = Game_GetLocalPlayer()
+	local start = Player_GetStartingPosition(player)
+	local direction = Util_GetDirectionFromAtoB(start, Util_ScarPos(0,0))
+	local focus = World_GetOffsetPosition(start, direction, OFFSET_FRONT, 8)
+	local angle = math.deg(math.atan(direction.z, direction.x))
+	Camera_SetDefaultOrbit(270 - angle)
+	Camera_SetDefaultDeclination(33)	-- default is normally 43
+	Camera_SetDefaultZoomDist(50)		-- default is normally 40
+	Camera_ResetToDefault()
+	Camera_MoveTo(focus, false, 1, false, true)
+end
+
+
+-- Enables/disables event queue notifications. 
+function Options_EnableEventCues(enable)
+	local events = {
+		UIE_ConstructionComplete,
+		UIE_UpgradeComplete,
+		UIE_AbilityExectued,
+		UIE_SuperAbility,
+		UIE_PhaseUp,
+		UIE_StrategicPointReverting,
+		UIE_StrategicPointCaptured,
+		UIE_StrategicPointSecured,
+		UIE_EnemyTerritoryEntered,
+		UIE_TerritoryEntered,
+		UIE_InfantryReplaced,
+		UIE_VehicleReplaced,
+		UIE_InfantryAttacked,
+		UIE_VehicleAttacked,
+		UIE_PlayerAttacked,
+		UIE_AllyAttacked,
+		UIE_EnemyReveal,
+		UIE_SquadPinned,
+		UIE_SquadKilled,
+		UIE_SquadVeterancy,
+		UIE_CasualtySquadSpawned,
+		UIE_CommandPointGained,
+	}
+	for _, event in pairs(events) do 
+		UI_EnableUIEventCueType(event, enable)
+	end
+end
+
+
+
+-- Modifies health, accuracy, range, etc. of spawned units
+function Options_ApplySquadModifiers(squad)
+	if _options.health then
+		local modifier = Modifier_Create(MAT_Entity, "health_maximum_modifier", MUT_Multiplication, false, _options.health, "")
+		for i = 1, Squad_Count(squad) do
+			local entity = Squad_EntityAt(squad, (i-1))
+			if Entity_IsActive(entity) and Entity_ExtensionExist(entity, "modifier_ext") 
+				and (Entity_IsOfType(entity, "infantry") or Entity_IsOfType(entity, "vehicle")) then 
+				Modifier_ApplyToEntity(modifier, entity, 0)
+			end
+		end
+	end
+end
+
+-- Modifies health, etc. of buildings
+function Options_ApplyEntityModifiers(entity)
+	if _options.health and Entity_IsOfType(entity, "building") and Entity_IsActive(entity) and Entity_ExtensionExist(entity, "modifier_ext") then
+		local modifier = Modifier_Create(MAT_Entity, "health_maximum_modifier", MUT_Multiplication, false, _options.health, "")
+		Modifier_ApplyToEntity(modifier, entity, 0)
+	end
+end
+
+
+function Options_SpawnBase(player, tier)
+
+	if tier < 1 then
+		return
+	end
+
+	if not _options.unit_types then
+		local unit_types_by_tier = {
+			{"tier_1"},
+			{"tier_2"},
+			{"tier_3"},
+			{"tier_4"},
+		}
+		for i = 4, 1, -1 do
+			if i > tier then
+				table.remove(unit_types_by_tier, i)
+			end
+		end
+		_options.unit_types = {}
+		for _, unit_types in pairs(unit_types_by_tier) do
+			for _, unit_type in pairs(unit_types) do 
+				table.insert(_options.unit_types, unit_type)
+			end
+		end
+	end
+
+
+	-- Cache production building ebps since it is hideously expensive to generate
+	if not _options.ebps then
+		_options.ebps = BP_GetEntityBlueprintsWithType(_options.unit_types)
+	end
+
+	-- Filter building ebps based player's race
+	local ebps = {}
+	for _, ebp in pairs(_options.ebps) do
+		if EBP_IsOfRace(BP_GetName(ebp), Player_GetRace(player)) then
+			table.insert(ebps, ebp)
+		end
+	end
+
+	-- Spawn base buildings
+	local start = Player_GetStartingPosition(player)
+	local eg_all = Player_GetEntities(player)
+	local eg_hq = EGroup_CreateUnique()
+	EGroup_Filter(eg_all, "hq", FILTER_REMOVE, eg_hq)
+	local facing = Util_GetDirectionFromAtoB(start, Util_ScarPos(0,0))
+	if EGroup_Count(eg_hq) > 0 then
+		facing = Entity_GetHeading(EGroup_GetEntityAt(eg_hq, 1))
+	end
+	-- Spawn medical building in front of HQ first
+	if tier > 1 then
+		local medical_bp = _options_medical_bps[Player_GetRaceName(player)]
+		if scartype(medical_bp) == ST_PBG then
+			local pos = World_GetOffsetPosition(start, facing, OFFSET_FRONT, 16)
+			pos = World_GetOffsetPosition(pos, facing, OFFSET_LEFT, World_GetRand(-5,5)/2)  -- Add some left/right variability
+			local facing_pos = World_GetOffsetPosition(pos, facing, OFFSET_FRONT, 12)
+			local entity = Entity_CreateFacing(medical_bp, player, pos, facing_pos, true)
+			Entity_Spawn(entity)
+			Entity_ForceConstruct(entity)
+		elseif scartype(medical_bp) == ST_STRING then
+			Player_CompleteUpgrade(player, BP_GetUpgradeBlueprint(medical_bp))
+		end
+	end
+	-- Spawn remaining buildings around start position
+	start = World_GetOffsetPosition(start, facing, OFFSET_FRONT, 10)	-- prefer building in front of HQ
+	for _, ebp in pairs(Table_Shuffle(ebps)) do
+		if not EGroup_ContainsBlueprints(eg_all, ebp, ANY) then
+			World_UpdatePathfindingBlockers()
+			local pos = Entity_FindConstructionLocation(player, ebp, start, 80, 1)
+			local facing_pos = World_GetOffsetPosition(pos, facing, OFFSET_FRONT, 10)
+			local entity = Entity_CreateFacing(ebp, player, pos, facing_pos, true)
+			Entity_Spawn(entity)
+			Entity_ForceConstruct(entity)
+		end
+	end
+	EGroup_Destroy(eg_hq)
+end
+
+
+-- Additional starting unit(s)
+function Options_SpawnSquads(player, option)
+	if option then 
+		if option == -1 then
+			local sg = Player_GetSquads(player)
+			SGroup_Filter(sg, {"auto_builder", "building"}, FILTER_REMOVE)
+			SGroup_DestroyAllSquads(sg)
+		else
+			local sbp = _options_basic_infantry_sbps[Player_GetRaceName(player)]
+			if option == 1 then
+				local sg = Player_GetSquads(player)
+				SGroup_Filter(sg, {"auto_builder", "building"}, FILTER_REMOVE)
+				sbp = Squad_GetBlueprint(SGroup_GetSquadAt(sg, 1))
+			end
+			local pos = World_GetOffsetPositionRelativeToFacingTarget(Player_GetStartingPosition(player), Util_ScarPos(0,0), 15.0)
+			Squad_CreateAndSpawnToward(sbp, player, 0, pos, Util_ScarPos(0,0))
+		end
+	end
+end
+
+-- Global event callback for GE_BuildItemComplete
+-- Modifies weapon drop rate of spawned units
+function Options_OnBuildItemCompleteSetDropRate(context)
+	if context.spawnedSquad then
+		Options_SetWeaponDropRate(context.spawnedSquad)
+	end
+end
+
+
+-- Global event callback for GE_UpgradeComplete
+-- Modifies weapon drop rate of upgraded units
+function Options_OnUpgradeCompleteSetDropRate(context)
+	if scartype(context.executer) == ST_SQUAD then
+		Options_SetWeaponDropRate(context.executer)
+	elseif context.upgrade == BP_GetUpgradeBlueprint("bar_riflemen_global_us") then
+		-- Set all rifleman squad BARs (un)droppable
+		local player = Entity_GetPlayerOwner(context.executer)
+		local sg = Player_GetSquads(player)
+		SGroup_Filter(sg, SBP.AMERICAN.RIFLEMEN_US, FILTER_KEEP)
+		SGroup_ForEach(sg, function(sgroup, index, squad) 
+				Options_SetWeaponDropRate(squad)
+			end)
+	elseif context.upgrade == BP_GetUpgradeBlueprint("infantry_support_center_us") then
+		local player = Entity_GetPlayerOwner(context.executer)
+		-- Set Captain's LMG (un)droppable
+		local sg = Player_GetSquads(player)
+		SGroup_Filter(sg, SBP.AMERICAN.CAPTAIN_US, FILTER_KEEP)
+		SGroup_ForEach(sg, function(sgroup, index, squad) 
+				Options_SetWeaponDropRate(squad)
+			end)
+	end
+end
+
+
+-- Global event callback for GE_SquadItemPickup
+-- Modifies weapon drop rate of picked up weapons
+function Options_OnItemPickupSetDropRate(context)
+	Options_SetWeaponDropRate(context.squad)
+end
+
+
+-- Modifies weapon drop rate of a squad
+function Options_SetWeaponDropRate(squad)
+	-- Use a delayed function since Bazooka squads are borked ortherwise
+	table.insert(_options.weapon_drop_squads, Squad_GetID(squad))
+	if not Rule_Exists(Options_DelayedSetWeaponDropRate) then
+		Rule_AddOneShot(Options_DelayedSetWeaponDropRate, 0.5)
+	end
+end
+
+
+-- Modifies weapon drop rate of a squad
+-- Use a delayed function since Bazooka squads are borked ortherwise
+function Options_DelayedSetWeaponDropRate()
+	for _, squad_id in pairs(_options.weapon_drop_squads) do
+		if Squad_IsValid(squad_id) then
+			local squad = Squad_FromID(squad_id)
+			if Squad_IsAlive(squad) then 
+				for _, weapon in pairs(Squad_GetAttachedWeapons(squad)) do
+					Squad_OverrideItemDropChance(squad, weapon, _options.weapon_drop_rate)
+				end
+				if Squad_IsOfType(squad, "teamweapon") then
+					Squad_SetTeamWeaponDestroyOnAbandonChance(squad, 1.0 - _options.weapon_drop_rate)
+				end
+			end
+		end
+	end
+	_options.weapon_drop_squads = {}
+end
+
+-- If value less then 2 then treat it as a multiplier. If value greater than 2 then treat it as the desired capture time (in seconds).
+function Options_ModifyCaptureTime(eg, value)
+	if value <= 2.0 then 
+		local modifier = Modifier_Create(MAT_Entity, "strategic_point_capture_ticks_modifier", MUT_Multiplication, false, value, "")
+		EGroup_ForEach(eg,
+			function (egroup, index, entity)
+				if Entity_IsActive(entity) then
+					Modifier_ApplyToEntity(modifier, entity, 0)
+				end
+			end)
+	else
+		EGroup_ForEach(eg,
+			function (egroup, index, entity)
+				if Entity_IsActive(entity) then
+					local info = BP_GetEntityBPStrategicPointInfo(Entity_GetBlueprint(entity))
+					Modifier_ApplyToEntity(Modifier_Create(MAT_Entity, "strategic_point_capture_ticks_modifier", MUT_Multiplication, false, value / info.capture_time, ""), entity, 0)
+				end
+			end)
+	end
+end
+
+
+-- Global event callback for GE_UpgradeComplete
+-- Unlocks all battlegroup abilities when player chooses a battlegroup
+function Options_OnUpgradeComplete(context)
+	for _, upgrade_type in pairs(BP_GetUpgradeTypes(context.upgrade)) do
+		if string.find(upgrade_type, "TechTree") then
+			for _, techtree in pairs(BP_GetTechTreeBlueprintsByType("battlegroup")) do
+				local techtree_info = BP_GetTechTreeBPInfo(techtree)
+				if techtree_info.activation_upgrade == context.upgrade then 
+					for _, branch in pairs(techtree_info.branches) do
+						for _, branch in pairs(techtree_info.branches) do
+							Cmd_InstantUpgrade(context.executer, branch.upgrades)
+						end
+					end
+				end
+			end
+		end
+	end
+	--local upgrades = Player_GetActiveUpgrades(World_GetPlayerAt(1))
+	--print("Upgrade complete: "..BP_GetName(context.upgrade))
+end
+
+
+-- Applies a resource multiplier penalty based on number of additional team members
+function Options_SetTeamSizeIncomePenalty(penalty)
+	penalty = penalty or 0
+
+	-- Get size of the biggest team
+	local biggest_team_size = 0
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		local team_size = 0	
+		for j = 1, World_GetPlayerCount() do
+			if Player_ObserveRelationship(player, World_GetPlayerAt(j)) == R_ALLY then 
+				team_size = team_size + 1
+			end
+		end
+		if biggest_team_size < team_size then
+			biggest_team_size = team_size
+		end
+	end
+
+	if biggest_team_size > 1 and penalty > 0 then
+		local income_factor = 1.0 - (biggest_team_size - 1) * penalty
+		local eg_points = EGroup_CreateUnique()
+		World_GetStrategyPoints(eg_points, false)
+		EGroup_ForEach(eg_points,
+			function (egroup, index, entity)
+				if Entity_IsActive(entity) then
+					Modifier_ApplyToEntity(Modifier_Create(MAT_Entity, "entity_rate_manpower", MUT_Multiplication, false, income_factor, ""), entity, 0)
+					Modifier_ApplyToEntity(Modifier_Create(MAT_Entity, "entity_rate_munition", MUT_Multiplication, false, income_factor, ""), entity, 0)
+					Modifier_ApplyToEntity(Modifier_Create(MAT_Entity, "entity_rate_fuel", MUT_Multiplication, false, income_factor, ""), entity, 0)
+				end
+			end)
+		EGroup_Destroy(eg_points)
+	end
+end
+
+
+-- Sets the resource model. 1 = COH1 (default), 2 = COH2, 0 = none
+function Options_SetResourceModel(resource_model)
+	if resource_model == 0 then
+		-- Replace all territory points with invisible territory points
+		local ebp = BP_GetEntityBlueprint("territory_creator_invisible")
+		local positions = {}
+		local eg = EGroup_CreateUnique()
+		World_GetStrategyPoints(eg, false)
+		EGroup_ForEach(eg, function(egroup, index, entity)
+				table.insert(positions, Entity_GetPosition(entity))
+				Entity_Destroy(entity)
+			end)
+		EGroup_Destroy(eg)
+		for _, position in pairs(positions) do
+			FOW_RevealArea(position, 2, 0.5)		-- Remove ghost images
+			Entity_Spawn(Entity_CreateENV(ebp, position, true))
+		end
+	elseif resource_model == 2 then
+		if EBP_Exists("territory_fuel_point_coh2") and EBP_Exists("territory_munitions_point_coh2") and EBP_Exists("territory_strategic_point_coh2") then
+			
+			local _UseClassicResourceIncome = function()
+				local sim_rate = Game_GetSimRate()
+				for i = 1, World_GetPlayerCount() do
+					local player =World_GetPlayerAt(i)
+					Player_CompleteUpgrade(player, BP_GetUpgradeBlueprint("disable_passive_resource_income"))
+					Modify_PlayerResourceRate(player, RT_Manpower, (290 / 60 / sim_rate), MUT_Addition)
+					Modify_PlayerResourceRate(player, RT_Munition, (6 / 60 / sim_rate) , MUT_Addition)
+					Modify_PlayerResourceRate(player, RT_Fuel, (4 / 60 / sim_rate), MUT_Addition)
+				end
+			end
+
+			local resource_markers_exist
+			local eg_points = EGroup_CreateUnique()
+			World_GetStrategyPoints(eg_points, false)
+
+			-- First try to use markers (if they exist)
+			local _SwitchResourcePoints = function(marker_prefix, ebp_name)
+				for i, mkr in pairs(Marker_GetSequence(marker_prefix)) do
+					local shortest_distance = 9999
+					local point
+					EGroup_ForEach(eg_points,
+						function (egroup, index, entity)
+							local distance = Util_GetDistance(mkr, entity)
+							if distance < shortest_distance and distance < 50 then
+								shortest_distance = distance
+								point = entity
+							end
+						end)
+					if point then
+						local pos = Entity_GetPosition(point)
+						EGroup_Remove(eg_points, point)
+						Entity_Destroy(point)
+						Entity_Spawn(Entity_CreateENV(BP_GetEntityBlueprint(ebp_name), pos, true))
+						resource_markers_exist = true
+					end
+				end
+			end
+
+			_SwitchResourcePoints("mkr_coh2_fuel_", "territory_fuel_point_coh2")
+			_SwitchResourcePoints("mkr_coh2_muni_", "territory_munitions_point_coh2")
+
+			if resource_markers_exist then
+				-- Switch all remaining points to strategic points
+				EGroup_ForEach(eg_points,
+					function (egroup, index, entity)
+						local pos = Entity_GetPosition(point)
+						Entity_Spawn(Entity_CreateENV(BP_GetEntityBlueprint("territory_strategic_point_coh2"), pos, true))
+					end)
+				EGroup_DestroyAllEntities(eg_points)
+				_UseClassicResourceIncome()
+				return
+			end
+
+			-- As a fallback, sort all resource points by type and size, then switch the two largest resource points 
+			-- that are furthest from map center to COH2-style fuel/munition points. Switch all other points to 
+			-- COH2-style strategic points.
+			local points = {
+				fuel = {},
+				munition = {},
+				strategic = {},
+			}
+			EGroup_ForEach(eg_points,
+				function (egroup, index, entity)
+					local bp_name = BP_GetName(Entity_GetBlueprint(entity))
+					if string.find(bp_name, "fuel") then
+						table.insert(points.fuel, entity)
+					elseif string.find(bp_name, "muni") then
+						table.insert(points.munition, entity)
+					else
+						table.insert(points.strategic, entity)
+					end
+				end)
+			EGroup_Destroy(eg_points)
+			
+			local _sort_by_size = function(a, b)
+				local name_a = BP_GetName(Entity_GetBlueprint(a))
+				local name_b = BP_GetName(Entity_GetBlueprint(b))
+				return (string.find(name_a, "high") and string.find(name_b, "med"))
+				or (string.find(name_a, "high") and string.find(name_b, "low"))
+				or (string.find(name_a, "med") and string.find(name_b, "low"))
+			end
+			
+			local _sort_by_distance = function(a, b)
+				return World_DistancePointToPoint(Util_ScarPos(0,0), Entity_GetPosition(a)) < World_DistancePointToPoint(Util_ScarPos(0,0), Entity_GetPosition(b))
+			end
+			
+			table.sort(points.fuel, _sort_by_size)
+			table.sort(points.munition, _sort_by_size)
+			
+			for i = #points.fuel, 2, -1 do
+				if BP_GetName(Entity_GetBlueprint(points.fuel[i])) ~= BP_GetName(Entity_GetBlueprint(points.fuel[1])) then
+					table.insert(points.strategic, points.fuel[i])
+					table.remove(points.fuel, i)
+				end
+			end
+			for i = #points.munition, 2, -1 do
+				if BP_GetName(Entity_GetBlueprint(points.munition[i])) ~= BP_GetName(Entity_GetBlueprint(points.munition[1])) then
+					table.insert(points.strategic, points.munition[i])
+					table.remove(points.munition, i)
+				end
+			end
+			
+			table.sort(points.fuel, _sort_by_distance)
+			table.sort(points.munition, _sort_by_distance)
+
+			for i = 1, #points.fuel do
+				local point = points.fuel[i]
+				local pos = Entity_GetPosition(point)
+				Entity_Destroy(point)
+				local ebp = BP_GetEntityBlueprint("territory_strategic_point_coh2")
+				if i <= 2 then
+					ebp = BP_GetEntityBlueprint("territory_fuel_point_coh2")
+				end
+				Entity_Spawn(Entity_CreateENV(ebp, pos, true))
+			end
+			for i = 1, #points.munition do
+				local point = points.munition[i]
+				local pos = Entity_GetPosition(point)
+				Entity_Destroy(point)
+				local ebp = BP_GetEntityBlueprint("territory_strategic_point_coh2")
+				if i <= 2 then
+					ebp = BP_GetEntityBlueprint("territory_munitions_point_coh2")
+				end
+				Entity_Spawn(Entity_CreateENV(ebp, pos, true))
+			end
+			for i = 1, #points.strategic do
+				local point = points.strategic[i]
+				local pos = Entity_GetPosition(point)
+				Entity_Destroy(point)
+				Entity_Spawn(Entity_CreateENV(BP_GetEntityBlueprint("territory_strategic_point_coh2"), pos, true))
+			end
+			_UseClassicResourceIncome()
+		end
+	end
+end
+
+
+-- Disables hold_ext of all neutral entities and sets them non-selectable.
+function Options_DisableHolds()
+	local eg = EGroup_CreateUnique()
+	World_GetAllNeutralEntities(eg)
+	EGroup_ForEach(eg,
+		function (egroup, index, entity)
+			if Entity_ExtensionExist(entity, "hold_ext") then
+				Entity_SetExtEnabled(entity, "hold_ext", false)
+				Misc_SetEntitySelectable(entity, false)
+			end
+		end)
+	EGroup_Destroy(eg)
+end
+
+
+-- Sets the maximum ticket count
+function Options_SetMaxTickets()
+	if not _options.max_tickets_set then 
+		-- Override ticket value selected in match options with 'ticket' command line argument value if provided.
+		if Misc_IsDevMode() and Misc_IsCommandLineOptionSet("tickets") then
+			local ticket_override = tonumber(Misc_GetCommandLineString("tickets"))
+			if ticket_override ~= nil and ticket_override > 0 then 
+				_options.max_tickets = ticket_override
+			end
+		end
+		Core_CallDelegateFunctions("OnMaxTicketsChanged", _options.max_tickets)
+	end
+end
+
+
+-- Sets initial territory based on a given option (1 = adjacent to base, 2 = even split between teams)
+function Options_SetTerritory(territory_option)
+	territory_option = territory_option or 0
+	if territory_option == 1 then
+		-- Adjacent
+		for i = 1, World_GetPlayerCount() do 
+			local player = World_GetPlayerAt(i)
+			local eg_sectors = EGroup_CreateUnique()
+			local sectors = Territory_GetAdjacentSectors(Territory_FindClosestSectorToPoint(Player_GetStartingPosition(player)))
+			for j = 1, #sectors do 
+				local entity = Territory_GetSectorCreatorEntity(sectors[j])
+				if World_OwnsEntity(entity) then
+					EGroup_Add(eg_sectors, entity)
+				end
+			end
+			EGroup_InstantCaptureStrategicPoint(eg_sectors, player)
+			EGroup_Destroy(eg_sectors)
+		end
+	elseif territory_option == 2 then
+		-- Even split between teams (based on average distance to point from each team's start positions)
+		local threshold = 20	-- Point must be at least this much closer to one team's start positions to take ownership
+		local eg_points = EGroup_CreateUnique()
+		World_GetStrategyPoints(eg_points, false)
+		-- Sort players into teams
+		local teams = {}
+		local _GetTeam = function(player)
+			local player_index = World_GetPlayerIndex(player)
+			for _, team in pairs(teams) do
+				for _, p in pairs(team.players) do
+					if p == player or Player_ObserveRelationship(p, player) == R_ALLY then
+						return team
+					end
+				end
+			end
+		end
+		for i = 1, World_GetPlayerCount() do
+			local player = World_GetPlayerAt(i)
+			local team = _GetTeam(player)
+			if team then
+				table.insert(team.players, player)
+			else
+				table.insert(teams, { players = {player} })
+			end
+		end
+		-- Exclude any points explicitly set to remain neutral when territory is equally split
+		EGroup_ForEach(EGroup_CreateIfNotFound("neutral_if_map_split"),
+			function (egroup, index, entity)
+				if EGroup_ContainsEntity(eg_points, entity) then
+					EGroup_Remove(eg_points, entity)
+				end
+			end)
+
+		-- HACK: Account for stock maps that don't have points assigned to "neutral_if_map_split" egroup. 
+		local exclude = {
+			torrente_4p_mkiii = {
+				Util_ScarPos(-138,-18),	-- med muni
+				Util_ScarPos(-4,1),		-- med fuel
+				Util_ScarPos(70,-9),	-- med muni
+				Util_ScarPos(138,-4),	-- med muni
+			},
+			desert_airfield_6p_mkii = {
+				Util_ScarPos(122,-170),	-- med muni
+				Util_ScarPos(73,-97),	-- strat
+				Util_ScarPos(-105,67),	-- strat
+				Util_ScarPos(-123,183),	-- med muni
+			},
+			mountain_ruins_6p = {
+				Util_ScarPos(-14,20),	-- high fuel
+				Util_ScarPos(38,-50),	-- strat
+				Util_ScarPos(76,-82),	-- med muni
+				Util_ScarPos(117,-136),	-- high muni
+				Util_ScarPos(138,-193),	-- high fuel
+			},
+			mountain_ruins_8p_mkii = {
+				Util_ScarPos(-16,23),	-- med muni
+				Util_ScarPos(33,-67),	-- strat
+				Util_ScarPos(116,-135),	-- med muni
+				Util_ScarPos(133,-224),	-- low fuel
+			},
+			winter_line_8p_mkii = {
+				Util_ScarPos(36,186),	-- low fuel
+				Util_ScarPos(10,58),	-- med muni
+				Util_ScarPos(0,-1),		-- med muni
+				Util_ScarPos(-4,-47),	-- low fuel
+				Util_ScarPos(-27,-153)	-- low fuel
+			},
+		}
+		if exclude[Game_GetScenarioFileName()] then
+			for _, pos in pairs(exclude[Game_GetScenarioFileName()]) do
+				EGroup_ForEach(eg_points,
+					function (egroup, index, entity)
+						if World_DistancePointToPoint(pos, Entity_GetPosition(entity)) < 15 then
+							EGroup_Remove(eg_points, entity)
+						end
+					end)
+			end
+		end
+
+		-- Assign ownership of remaining points to the team that is closer (by a threshold distance). 
+		EGroup_ForEach(eg_points,
+			function (egroup, index, entity)
+				local distances = {}
+				local pos = Entity_GetPosition(entity)
+				for team_index, team in pairs(teams) do
+					local distance = 0
+					for _, player in pairs(team.players) do 
+						distance = distance + World_DistancePointToPoint(pos, Player_GetStartingPosition(player))
+					end
+					table.insert(distances, {team_index = team_index, avg_distance = distance / #team.players})
+				end
+				table.sort(distances, function(a, b) return a.avg_distance < b.avg_distance end)
+				if #teams > 1 and (distances[2].avg_distance - distances[1].avg_distance) >= threshold then 
+					Entity_InstantCaptureStrategicPoint(entity, teams[distances[1].team_index].players[1])
+				end
+			end)
+		FOW_RevealEGroupOnly(eg_points, 1.0)	-- Make visible briefly so players can see they are captured
+		EGroup_Destroy(eg_points)
+	end
+end
+
+
+function Options_SetBattlegroupUpgrades(player, battlegroup_option)
+	if battlegroup_option > 0 then
+		-- Unlock all abilities when player chooses a battlegroup
+--		if not Rule_Exists(Options_OnUpgradeComplete) then
+--			Rule_AddGlobalEvent(Options_OnUpgradeComplete, GE_UpgradeComplete)	-- BUG: Battlegroup activation upgrades never trigger an upgrade event
+--		end
+
+		-- HACK: Give player a pile of command points with which to choose battlegroup abilities since activation 
+		-- upgrades never trigger an event and there's no way to determine mutually exclusive upgrades through script.
+		Player_SetResource(player, RT_Command, 30)
+
+	elseif battlegroup_option == -1 then
+		-- Disable all battlegroup abilities
+		Options_DisableBattlegroupAbilities(player)
+
+		-- Hide battlegroup UI -- BUG: This also hides the command point counter.
+--		if player == Game_GetLocalPlayer() then
+--			local player_data = Core_GetPlayersTableEntry(player)
+--			player_data.scarModel.hideBattleGroup = true
+--			UI_SetPlayerDataContext(player, player_data.scarModel)
+--		end
+	end
+end
+
+
+-- Disable all battlegroup abilities for the given player
+function Options_DisableBattlegroupAbilities(player)
+
+	-- BUG: Battlegroup UI does not respect upgrade availability
+	for _, techtree in pairs(BP_GetTechTreeBlueprintsByType("battlegroup")) do
+		local techtree_info = BP_GetTechTreeBPInfo(techtree)
+		Player_SetUpgradeAvailability(player, techtree_info.activation_upgrade, ITEM_LOCKED)
+		if Player_HasUpgrade(player, techtree_info.activation_upgrade) then
+			Player_RemoveUpgrade(player, techtree_info.activation_upgrade)
+		end
+
+		--TODO: Only use the tech trees relevant to the player's race (using BP_GetLoadoutArmyUpgrades(race.loadout))
+		for _, branch in pairs(techtree_info.branches) do
+			for _, upgrade in pairs(branch.upgrades) do 
+				Player_SetUpgradeAvailability(player, upgrade, ITEM_LOCKED)
+			end
+		end
+	end
+
+	Modify_PlayerResourceCap(player, RT_Action, 0, MUT_Multiplication)
+	Modify_PlayerResourceCap(player, RT_Command, 0, MUT_Multiplication)
+	Player_SetResource(player, RT_Action, 0)
+	Player_SetResource(player, RT_Command, 0)
+end
+
+
+-- Unlocks upgrades and squads to suit the player's starting building tier.
+function Options_BalanceTier(player, tier)
+	for i = 1, tier do
+		local upgrades = _options_upgrades_by_tier[Player_GetRaceName(player)][i]
+		if upgrades then
+			for _, upgrade in pairs(upgrades) do
+				if BP_UpgradeExists(upgrade) then
+					Player_CompleteUpgrade(player, BP_GetUpgradeBlueprint(upgrade))
+				else
+					print("Options_BalanceUpgrades() - "..upgrade.." does not exist")
+				end
+			end
+		end
+		-- Unlock specific squads that have bespoke requirements
+		if _options_sbps_by_tier[Player_GetRaceName(player)] then
+			local sbps = _options_sbps_by_tier[Player_GetRaceName(player)][i]
+			if sbps then
+				for _, sbp in pairs(sbps) do
+					if SBP_Exists(sbp) then
+						Player_SetSquadProductionAvailability(player, BP_GetSquadBlueprint(sbp), ITEM_UNLOCKED)
+					end
+				end
+			end
+		end
+	end
+end
+
+
+-- Exclude various unit types: 1 = snipers, 2 = aircraft, 3 = artillery, 4 = armor, 5 = all vehicles, 6 = vehicles & artillery
+function Options_Exclude(player, exclude)
+
+	-- No snipers
+	if exclude == 1 then
+		-- Disable sniper production
+		local sbps = BP_GetSquadBlueprintsWithType_Internal({"sniper"}, ANY)
+		Player_SetSquadProductionAvailability(player, sbps, ITEM_REMOVED)
+	end
+
+	-- No aircraft
+	if exclude == 2 or exclude == 6 then
+		-- Disable pointless upgrades
+		Player_SetUpgradeAvailability(player, {BP_GetUpgradeBlueprint("air_support_center_us")}, ITEM_REMOVED)
+		--TODO: Disable all aircraft Battlegroup abiliites
+	end
+
+	-- No artillery
+	if exclude == 3 or exclude == 6 then
+		-- Disable production
+		local sbps = BP_GetSquadBlueprintsWithType_Internal({"artillery"}, ANY)
+		Player_SetSquadProductionAvailability(player, sbps, ITEM_REMOVED)
+		-- Disable construction
+		local ebps = BP_GetEntityBlueprintsWithType_Internal({"artillery"}, ANY)
+		Player_SetEntityProductionAvailability(player, ebps, ITEM_REMOVED)
+		-- Remove British base artillery
+		local sg = Player_GetSquads(player)
+		SGroup_Filter(sg, "artillery", FILTER_KEEP)
+		SGroup_DestroyAllSquads(sg)
+		--TODO: Disable off-map artillery Battlegroup abilities?
+	end
+
+	-- No armor
+	if exclude == 4 then
+		-- Disable production
+		local sbps = BP_GetSquadBlueprintsWithType_Internal({"heavy_armor", "medium_armor"}, ANY)
+		Player_SetSquadProductionAvailability(player, sbps, ITEM_REMOVED)
+		--TODO: Disable heavy armor Battlegroup ability call-ins
+	end
+
+	-- No vehicles (includes aircraft and AT guns)
+	if exclude == 5 or exclude == 6 then
+		-- Disable production
+		local sbps = BP_GetSquadBlueprintsWithType_Internal({"vehicle", "at_gun"}, ANY)
+		Player_SetSquadProductionAvailability(player, sbps, ITEM_REMOVED)
+		-- Disable pointless upgrades
+		Player_SetUpgradeAvailability(player, {BP_GetUpgradeBlueprint("mechanized_support_center_us")}, ITEM_REMOVED)
+		--TODO: Disable vehicle Battlegroup ability call-ins
+	end
+end
+
+
+-- Assigns battlegroups based on command line args (e.g. -bg air -bg_ai defense -bg_points 5)
+function Debug_SetBattlegroups()
+	if not Misc_IsDevMode() then
+		return
+	end
+	
+	local _SetBattlegroup = function(player, battlegroup_name)
+		for _, techtree in pairs(BP_GetTechTreeBlueprintsByType("battlegroup")) do
+			if string.find(string.lower(BP_GetName(techtree)), string.lower(battlegroup_name)) then
+				local techtree_info = BP_GetTechTreeBPInfo(techtree)
+				Cmd_InstantUpgrade(player, techtree_info.activation_upgrade)
+				print("Battlegroup for "..Loc_ToAnsi(Player_GetDisplayName(player)).." set to ".. BP_GetName(techtree_info.activation_upgrade))
+				break
+			end
+		end
+	end
+
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		local arg = "bg_ai"
+		if Player_IsHuman(player) then
+			arg = "bg"
+		end
+		if Misc_IsCommandLineOptionSet(arg) and Misc_GetCommandLineString(arg) then
+			_SetBattlegroup(player, Misc_GetCommandLineString(arg))
+		end
+
+		if Misc_IsCommandLineOptionSet("bg_points") then
+			local bg_points = tonumber(Misc_GetCommandLineString("bg_points"))
+			if bg_points and bg_points > 0 then
+				Player_SetResource(player, RT_Command, bg_points)
+			end
+		end
+	end
+
+	-- Show ability use in event queue
+	if Misc_IsCommandLineOptionSet("bg_show") then
+		Rule_AddGlobalEvent(Debug_ShowAbilityUsage, GE_AbilityExecuted)
+	end
+end
+
+
+-- Global event callback for GE_AbilityExecuted.
+-- Indicates battlegroup ability use by AI players through event queue notifications.
+function Debug_ShowAbilityUsage(context)
+	if scartype(context.executer) == ST_PLAYER and not Player_IsHuman(context.executer) then
+		local data_template = "high_priority"
+		local blip_template = "attack_here"
+		if Player_ObserveRelationship(Game_GetLocalPlayer(), context.executer) == R_ALLY then
+			data_template = "medium_priority"
+			blip_template = "defend_here"
+		end
+		local ui_info = BP_GetAbilityUIInfo(context.ability)
+		local title = Loc_FormatText("$11191105", Player_GetDisplayName(context.executer), ui_info.screenName)
+		--local title = Loc_ToAnsi(Player_GetDisplayName(context.executer)).." using "..BP_GetName(context.ability)
+		local target
+		if scartype(context.target) ~= ST_PLAYER then
+			target = context.target
+		end
+		print(title)
+		
+		-- Create clickable event cue using the event queue system in ui.scar
+		local icon = UI_GetAbilityIconName(context.ability)
+		local id = UI_CreateEventCueClickable(-1, 2, 20, 5, 0, 0, title, Loc_Empty(), data_template or "low_priority", icon, sound or "", 255, 255, 255, 255, ECV_Queue, EventCue_InternalManager)
+		local data = {icon = icon, snd = sound, title = title, description = description, lifetime = lifetime, dismissOnClick = dismiss_on_click}
+		_EventCueList[id] = {location = target, hintpoint = hint, extrafunc = callback, lasttrigger = World_GetGameTime(), data = data}
+		if target then
+			if scartype(target) == ST_ENTITY then
+				_EventCueList[id].location = Entity_GetID(target)
+			elseif scartype(target) == ST_SQUAD then
+				_EventCueList[id].location = Squad_GetID(target)
+			end
+			_EventCueList[id].backuplocation = Util_GetPosition(target)
+		end
+		if target and blip_template then
+			UI_CreateMinimapBlip(target, 5.0, blip_template)
+		end
+	end
+end

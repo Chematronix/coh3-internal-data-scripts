@@ -1,0 +1,599 @@
+import("partialsave.scar")
+import("prefabs/schemas/aiprefab.scar") -- Defines the partial save step for ai prefabs
+import("prefabs/schemas/supplyship.scar") -- Defines the partial save step for supplyship prefabs
+import("prefabs/schemas/crowdlife.scar") -- Defines the partial save step for crowdlife prefabs
+import("playbill_save.scar") -- TODO might want to just move playbill save function into the playbill file
+import("objective_save.scar")
+import("training_partial_save.scar")
+import("modifiers.scar") -- Need to initialize this before doing any restore functions in case we need to add modifiers
+import("metamap/metamap_save_migration_base.scar")
+-- PARTIAL SAVE TABLE VERSION:
+------------------------------
+g_PartialSaveVersion = 4
+
+if g_PartialSaveVersion > #__PartialSave_MigrationFunctions then
+	error("g_PartialSaveVersion has been incremented, but no new save data migration has been authored.")	
+elseif g_PartialSaveVersion < #__PartialSave_MigrationFunctions then
+	error("A new save data migration has been authored, but g_PartialSaveVersion has not been incremented.")
+end
+
+-- PREFAB DATA
+--------------
+
+function RestorePrefabInstances(saveTable)
+	-- Passing in saveTable as the optional restore table to restore prefab instance data:
+	Prefab_InitAll(saveTable)
+end
+
+-- MISC SCRIPTED SYSTEMS
+------------------------
+-- Adding in requisite restore functionality to get a MVP scar save
+-- before each system implements it's own save functions correctly
+
+function RestoreMisc(saveTable)
+	-- Since we're not restoring all global variables, these systems will generate
+	-- nil value exceptions if used without being re-initialized because they internally
+	-- access globals that are set on scenario initialization. So we can rerun that
+	-- initialization explicitly to create the right globals.
+	Objective_Init()
+	ScriptablePanel_OnInit()
+	CampaignMapTBS_OnGameRestore()
+	__ScarUtil_Init()
+	Timer_Init()
+	Modifier_Init()
+	AI_Initialize()
+end
+
+-- NARRATIVE
+------------
+
+function PartialSave_SaveNarrative(saveTable)
+	local narrativeData = {
+		g_next_soldier_story = g_next_soldier_story,
+		g_company_story_state = g_company_story_state,
+		g_narrative_intel_pool = g_narrative_intel_pool
+	}
+	saveTable.narrativeData = narrativeData
+end
+
+function PartialSave_RestoreNarrative(saveTable)
+	local narrativeData = saveTable.narrativeData
+
+	g_company_story_state = narrativeData.g_company_story_state
+	g_narrative_intel_pool = narrativeData.g_narrative_intel_pool
+	
+	if narrativeData.g_next_soldier_story ~= nil then
+		g_next_soldier_story = narrativeData.g_next_soldier_story
+	end
+	
+	-- Re-initialize variables by applying old variables (in save file) on top of
+	-- potentially new variable defaults. This accounts for new variables being added
+	-- across save versions properly getting initialized.
+	local old_variables = NarrativeVariables_GetAll()
+	InitializeNarrativeVariables()
+	NarrativeVariables_SetAll(old_variables)
+	
+	-- Apply in-mission narrative / scar variables if present in the datastore
+	local campaign = Game_RetrieveTableData("campaign", false)
+	if campaign ~= nil then
+		
+		if campaign.narrative_variables_out ~= nil then
+			NarrativeVariables_SetAll(campaign.narrative_variables_out)
+		end
+		
+		if campaign.next_soldier_story_data_out ~= nil then
+			g_next_soldier_story = campaign.next_soldier_story_data_out
+		end
+	end
+end
+
+-- STATEMODEL
+-------------
+
+local t_squadBoolStateModelToSave = 
+{ 
+	"campaign_current_partisan_target",
+	"campaign_simultaneous_actions",
+	"cmap_friendly_unit",
+}
+
+local t_squadIntStateModelToSave =
+{
+	"campaign_company_heal_chance", -- random rolled once every turn for heal chance, used for ability_unit_heal_self.rdo 
+	"campaign_faction_trait_select", -- used in campaign_faction_trait_selection.rdo to randomly select a trait when company spawns. Doesn't actually need to be saved but might be good for debugging/record keeping purpose
+	"campaign_detachment_auto_select", -- used in campaign_company_detachment_selection.rdo to randomly assign starting detachments to german companies.
+	"campaign_overwatch_attack_charge",
+	"turns_till_supply_attrition",
+	"campaign_stance_combat_preview", --TODO
+	"campaign_status_effect_combat_preview", -- TODO
+	"platoon_slot_count",
+	"campaign_last_capture_turn",
+	"campaign_supply",
+	"campaign_partisan_group_duration",
+	"temporary_int_count_01",
+}
+
+local t_squadTargetStateModelToSave =
+{
+	"crowdlife_destination",
+	"crowdlife_start",
+	"campaign_spawner_supply_provider_target",
+	"meta_visual_attack_target",
+	"campaign_attachment_owner",
+	"campaign_transport_ship_owner",
+	"campaign_aircraft_home",
+	"campaign_capture_target",
+	"temporary_ability_target_01",
+	"campaign_partisan_group_ability_target",
+	"campaign_partisan_group_spawn_target",
+}	
+
+local t_squadListStateModelToSave =
+{
+	"owned_platoons",
+	"registered_construction_structures",
+	"owned_aircrafts",
+	"ai_airplanes",
+}
+
+local t_entityBoolStateModelToSave = 
+{ 
+	"campaign_supply_cache",
+	"campaign_current_partisan_target",
+	"campaign_point_disabled",
+	"campaign_depot_captured",
+}
+
+local t_entityIntStateModelToSave =
+{
+	"campaign_building_action_point",
+	"campaign_overwatch_attack_charge",
+}
+
+local t_entityTargetStateModelToSave =
+{
+	"meta_visual_attack_target",
+	"flight_plan_target_01",
+	"flight_plan_target_02",
+	"flight_plan_target_03",
+	"flight_plan_target_04",
+	"flight_plan_target_05",
+	"campaign_aircraft_home",
+	"campaign_aircraft_transfer_destination",
+}	
+
+local t_entityListStateModelToSave =
+{
+}
+
+local t_playerBoolStateModelToSave = 
+{ 
+	"cm_mission_requirements_cassino",
+	"cm_narrative_observe_and_report",
+	"cm_narrative_loot_resources",
+	"campaign_tutorial_playthrough",
+	"campaign_use_no_pop_recovery_ability_us",
+}
+
+local t_playerFloatStateModelToSave =
+{
+	"cm_supplyship_manpower_additive",
+	"cm_supplyship_munitions_additive",
+	"cm_supplyship_fuel_additive",
+	"cm_supplyship_manpower_multiplier",
+	"cm_supplyship_munitions_multiplier",
+	"cm_supplyship_fuel_multiplier",
+	"cm_partisan_gain_bonus_multiplier",
+}
+
+local t_playerIntStateModelToSave =
+{
+	"campaign_bombing_run_count",
+	"selected_battle_plan",
+	"campaign_partisan_count",
+}
+
+local t_playerTargetStateModelToSave =
+{
+}	
+
+local t_playerListStateModelToSave =
+{
+	"owned_partisans",
+	"deployed_partisans",
+	"campaign_disabled_points",
+}
+
+-- PLAYER DATA
+function GeneratePartialSavePlayerDataTable(saveTable)
+	local playerGameData = {
+		players = {}
+	}
+	
+	for index = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(index)
+		
+		-- Record upgrades and upgrade counts.
+		local activeUpgrades = Player_GetActiveUpgrades(player)
+		local upgrades = { }
+		for k,v in pairs(activeUpgrades) do
+			table.insert(upgrades, {
+					name = BP_GetName(v),
+					count = Player_NumUpgradeComplete(player, v)
+				})
+		end
+		
+		-- Record available abilities.
+		-- We currently don't record abilities and active states since we don't have any multi-turn abilities for the player.
+		-- May want to revisit this once we implement a solution for saving squad multi-turn abilities.
+		local availableAbilities = Player_GetAvailableAbilities(player)
+		local abilities = { }
+		for k,v in pairs(availableAbilities) do
+			if Player_IsAbilityActive(player, v) then
+				error("Saving the state of active multi-turn abilities is not supported.")
+			end
+			table.insert(abilities, { name = BP_GetName(v) })
+		end
+		
+		local resources = Player_GetResources(player)
+		local startPos = Player_GetStartingPosition(player)
+
+		-- Convert to standard lua table so we aren't dependant on the engine data type binding.		
+		setmetatable(resources, nil)
+		setmetatable(startPos, nil)
+		
+		local data = {
+			playerID = Player_GetID(player),
+			startPos = startPos,
+			resources = resources,
+			popcapOverride = (Player_IsPopCapOverrideSet(player) and Player_GetPopCapOverride(player)) or nil,
+			upgrades = upgrades,
+			abilities = abilities
+		}
+		table.insert(playerGameData.players, data)
+	end
+	saveTable.playerGameData = playerGameData
+end
+
+-- STATEMODEL DATA
+function GeneratePartialSaveStateModelTable(saveTable)
+	local statemodelTable = {
+		version = 1,
+		squad_statemodel_data = {},
+		entity_statemodel_data = {},
+		player_statemodel_data = {},
+	}
+	
+	for index = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(index)
+		
+		SGroup_ForEach(Player_GetSquads(player), function(sgroup, index, squad)
+				local squad_id = Squad_GetID(squad)
+				statemodelTable.squad_statemodel_data[squad_id] =
+				{
+					bool_data = {},
+					int_data = {},
+					target_data = {},
+					list_data = {},
+				}
+				
+				for i = 1, #t_squadBoolStateModelToSave do
+					local stateModelIndex = t_squadBoolStateModelToSave[i]
+					if Squad_HasStateModelBool(squad, stateModelIndex) then
+						local stateModelBool = Squad_GetStateModelBool(squad, stateModelIndex)
+						statemodelTable.squad_statemodel_data[squad_id].bool_data[stateModelIndex] = stateModelBool
+					end
+				end
+				
+				for i = 1, #t_squadIntStateModelToSave do
+					local stateModelIndex = t_squadIntStateModelToSave[i]
+					if Squad_HasStateModelInt(squad, stateModelIndex) then
+						local stateModelInt = Squad_GetStateModelInt(squad, stateModelIndex)
+						statemodelTable.squad_statemodel_data[squad_id].int_data[stateModelIndex] = stateModelInt
+					end
+				end
+				
+				for i = 1, #t_squadTargetStateModelToSave do
+					local stateModelIndex = t_squadTargetStateModelToSave[i]
+					if Squad_HasStateModelTarget(squad, stateModelIndex) then
+						local stateModelTarget = Squad_GetStateModelTarget(squad, stateModelIndex)
+						statemodelTable.squad_statemodel_data[squad_id].target_data[stateModelIndex] = stateModelTarget
+					end
+				end
+				
+				for i = 1, #t_squadListStateModelToSave do
+					local stateModelIndex = t_squadListStateModelToSave[i]
+					if Squad_HasStateModelList(squad, stateModelIndex) then
+						local stateModelList = Squad_GetStateModelListTarget(squad, stateModelIndex)
+						statemodelTable.squad_statemodel_data[squad_id].list_data[stateModelIndex] = stateModelList
+					end
+				end
+			end)
+		
+		local all_entities = Player_GetAllEntities(player)
+		EGroup_ForEach(all_entities, function(sgroup, index, entity)
+				local entity_id = Entity_GetID(entity)
+				statemodelTable.entity_statemodel_data[entity_id] =
+				{
+					bool_data = {},
+					int_data = {},
+					target_data = {},
+					list_data = {},
+				}
+				
+				for i = 1, #t_entityBoolStateModelToSave do
+					local stateModelIndex = t_entityBoolStateModelToSave[i]
+					if Entity_HasStateModelBool(entity, stateModelIndex) then
+						local stateModelBool = Entity_GetStateModelBool(entity, stateModelIndex)
+						statemodelTable.entity_statemodel_data[entity_id].bool_data[stateModelIndex] = stateModelBool
+					end
+				end
+				
+				for i = 1, #t_entityIntStateModelToSave do
+					local stateModelIndex = t_entityIntStateModelToSave[i]
+					if Entity_HasStateModelInt(entity, stateModelIndex) then
+						local stateModelInt = Entity_GetStateModelInt(entity, stateModelIndex)
+						statemodelTable.entity_statemodel_data[entity_id].int_data[stateModelIndex] = stateModelInt
+					end
+				end
+				
+				for i = 1, #t_entityTargetStateModelToSave do
+					local stateModelIndex = t_entityTargetStateModelToSave[i]
+					if Entity_HasStateModelTarget(entity, stateModelIndex) then
+						local stateModelTarget = Entity_GetStateModelTarget(entity, stateModelIndex)
+						statemodelTable.entity_statemodel_data[entity_id].target_data[stateModelIndex] = stateModelTarget
+					end
+				end
+				
+				for i = 1, #t_entityListStateModelToSave do
+					local stateModelIndex = t_entityListStateModelToSave[i]
+					if Entity_HasStateModelList(entity, stateModelIndex) then
+						local stateModelList = Entity_GetStateModelListTarget(entity, stateModelIndex)
+						statemodelTable.entity_statemodel_data[entity_id].list_data[stateModelIndex] = stateModelList
+					end
+				end
+			end)
+		
+		EGroup_Clear(all_entities)
+		
+		local player_id = Player_GetID(player)
+		statemodelTable.player_statemodel_data[player_id] =
+		{
+			bool_data = {},
+			float_data = {},
+			int_data = {},
+			target_data = {},
+			list_data = {},
+		}
+		
+		for i = 1, #t_playerBoolStateModelToSave do
+			local stateModelIndex = t_playerBoolStateModelToSave[i]
+			if Player_HasStateModelBool(player, stateModelIndex) then
+				local stateModelBool = Player_GetStateModelBool(player, stateModelIndex)
+				statemodelTable.player_statemodel_data[player_id].bool_data[stateModelIndex] = stateModelBool
+			end
+		end
+	
+		for i = 1, #t_playerFloatStateModelToSave do
+			local stateModelIndex = t_playerFloatStateModelToSave[i]
+			if Player_HasStateModelFloat(player, stateModelIndex) then
+				local stateModelFloat = Player_GetStateModelFloat(player, stateModelIndex)
+				statemodelTable.player_statemodel_data[player_id].float_data[stateModelIndex] = stateModelFloat
+			end
+		end
+		
+		for i = 1, #t_playerIntStateModelToSave do
+			local stateModelIndex = t_playerIntStateModelToSave[i]
+			if Player_HasStateModelInt(player, stateModelIndex) then
+				local stateModelInt = Player_GetStateModelInt(player, stateModelIndex)
+				statemodelTable.player_statemodel_data[player_id].int_data[stateModelIndex] = stateModelInt
+			end
+		end
+		
+		for i = 1, #t_playerTargetStateModelToSave do
+			local stateModelIndex = t_playerTargetStateModelToSave[i]
+			if Player_HasStateModelTarget(player, stateModelIndex) then
+				local stateModelTarget = Player_GetStateModelTarget(player, stateModelIndex)
+				statemodelTable.player_statemodel_data[player_id].target_data[stateModelIndex] = stateModelTarget
+			end
+		end
+		
+		for i = 1, #t_playerListStateModelToSave do
+			local stateModelIndex = t_playerListStateModelToSave[i]
+			if Player_HasStateModelList(player, stateModelIndex) then
+				local stateModelList = Player_GetStateModelListTarget(player, stateModelIndex)
+				statemodelTable.player_statemodel_data[player_id].list_data[stateModelIndex] = stateModelList
+			end
+		end
+		
+	end
+	
+	
+	saveTable.statemodelTable = statemodelTable
+end
+
+function RestorePartialSaveStateModelTable(saveTable)
+	
+	for squad_id,v in pairs(saveTable.statemodelTable.squad_statemodel_data) do
+		if Squad_IsValid(squad_id) then
+			local squad = Squad_FromID(squad_id)
+			local bool_data = v.bool_data
+			for bool_property, data in pairs(bool_data) do
+				if Squad_HasStateModelBool(squad, bool_property) then
+					Squad_SetStateModelBool(squad, bool_property, data)
+				end
+			end
+			
+			local int_data = v.int_data
+			for int_property, data in pairs(int_data) do
+				if Squad_HasStateModelInt(squad, int_property) then
+					Squad_SetStateModelInt(squad, int_property, data)
+				end
+			end
+			
+			local target_data = v.target_data
+			for target_property, data in pairs(target_data) do
+				if Squad_HasStateModelTarget(squad, target_property) then
+					Squad_SetStateModelTarget(squad, target_property, data)
+				end
+			end
+			
+			local list_data = v.list_data
+			for list_name, list in pairs(list_data) do
+				if Squad_HasStateModelList(squad, list_name) then
+					for index, data in pairs(list) do
+						Squad_SetStateModelListTarget(squad, list_name, data, true)
+					end
+				end
+			end
+		end
+	end
+	
+	for entity_id,v in pairs(saveTable.statemodelTable.entity_statemodel_data) do
+		if Entity_IsValid(entity_id) then
+			local entity = Entity_FromID(entity_id)
+			local bool_data = v.bool_data
+			for bool_property, data in pairs(bool_data) do
+				if Entity_HasStateModelBool(entity, bool_property) then
+					Entity_SetStateModelBool(entity, bool_property, data)
+				end
+			end
+			
+			local int_data = v.int_data
+			for int_property, data in pairs(int_data) do
+				if Entity_HasStateModelInt(entity, int_property) then
+					Entity_SetStateModelInt(entity, int_property, data)
+				end
+			end
+			
+			local target_data = v.target_data
+			for target_property, data in pairs(target_data) do
+				if Entity_HasStateModelTarget(entity, target_property) then
+					Entity_SetStateModelTarget(entity, target_property, data)
+				end
+			end
+			
+			local list_data = v.list_data
+			for list_name, list in pairs(list_data) do
+				if Entity_HasStateModelList(entity, list_name) then
+					for index, data in pairs(list) do
+						Entity_SetStateModelListTarget(entity, list_name, data, true)
+					end
+				end
+			end
+		end
+	end
+	
+	for player_id,v in pairs(saveTable.statemodelTable.player_statemodel_data) do
+		local player = Player_FromId(player_id)
+		local bool_data = v.bool_data
+		for bool_property, data in pairs(bool_data) do
+			if Player_HasStateModelBool(player, bool_property) then
+				Player_SetStateModelBool(player, bool_property, data)
+			end
+		end
+		
+		local float_data = v.float_data
+		for float_property, data in pairs(float_data) do
+			if Player_HasStateModelFloat(player, float_property) then
+				Player_SetStateModelFloat(player, float_property, data)
+			end
+		end
+		
+		local int_data = v.int_data
+		for int_property, data in pairs(int_data) do
+			if Player_HasStateModelInt(player, int_property) then
+				Player_SetStateModelInt(player, int_property, data)
+			end
+		end
+		
+		local target_data = v.target_data
+		for target_property, data in pairs(target_data) do
+			if Player_HasStateModelTarget(player, target_property) then
+				Player_SetStateModelTarget(player, target_property, data)
+			end
+		end
+		
+		local list_data = v.list_data
+		for list_name, list in pairs(list_data) do
+			if Player_HasStateModelList(player, list_name) then
+				for index, data in pairs(list) do
+					Player_SetStateModelListTarget(player, list_name, data, true)
+				end
+			end
+		end
+	end
+	
+end
+
+function RestorePartialSavePlayerDataTable(saveTable)
+	local playerGameData = saveTable.playerGameData
+	if playerGameData == nil then
+		return -- Some informal backwards compatibility to preserve old dev saves.
+	end
+	
+	local pbgVersion = saveTable.blueprintMigrationVersion
+	for i,v in ipairs(playerGameData.players) do
+		local player = Player_FromId(v.playerID)
+		
+		Setup_SetPlayerStartingPosition(player, World_Pos(v.startPos.x, v.startPos.y, v.startPos.z))
+		
+		-- Restore upgrades
+		for i,v in ipairs(v.upgrades) do
+			for i=1, v.count do
+				if BP_UpgradeExists(v.name) then
+					Player_CompleteUpgrade(player, BP_GetUpgradeBlueprint(v.name))
+				end
+			end
+		end
+		
+		-- Restore abilities
+		for i,v in ipairs(v.abilities) do
+			if BP_AbilityExists(v.name) then
+				Player_AddAbility(player, BP_GetAbilityBlueprint(v.name))
+			end
+		end
+		
+		-- Restore resources
+		for k,v in pairs(v.resources) do
+			Player_SetResource(player, World_GetResourceTypeByName(k), v)
+		end
+		
+		-- Restore popcap
+		if v.popcapOverride ~= nil then
+			Player_SetPopCapOverride(player, v.popcapOverride);
+		end
+	end
+end
+
+function RestoreWatchForEventRule(saveTable)
+	Rule_Add(MetaMap_WatchForEvents)
+end
+
+-- SAVE STEPS
+-- ==========
+PartialSave_AddSaveFunction(aiprefab_GeneratePartialSaveTable)
+PartialSave_AddSaveFunction(supplyship_GeneratePartialSaveTable)
+PartialSave_AddSaveFunction(GeneratePartialSavePlayerDataTable)
+PartialSave_AddSaveFunction(GeneratePartialSaveStateModelTable)
+PartialSave_AddSaveFunction(PartialSave_SavePlaybills)
+PartialSave_AddSaveFunction(PartialSave_SaveObjectives)
+PartialSave_AddSaveFunction(PartialSave_SaveNarrative)
+PartialSave_AddSaveFunction(CampaignMapTbs_GenerateSaveTable)
+PartialSave_AddSaveFunction(CMChallenge_Save)
+PartialSave_AddSaveFunction(crowdlife_GeneratePartialSaveTable)
+PartialSave_AddSaveFunction(Training_GeneratePartialSaveTable)
+
+-- RESTORE STEPS
+-- =============
+PartialSave_AddRestoreFunction(RestorePrefabInstances)
+PartialSave_AddRestoreFunction(RestoreMisc)
+PartialSave_AddRestoreFunction(PartialSave_RestorePlaybills)
+PartialSave_AddRestoreFunction(PartialSave_RestoreObjectives)
+PartialSave_AddRestoreFunction(RestorePartialSaveStateModelTable)
+PartialSave_AddRestoreFunction(RestorePartialSavePlayerDataTable)
+PartialSave_AddRestoreFunction(RestoreWatchForEventRule) 
+PartialSave_AddRestoreFunction(PartialSave_RestoreNarrative)
+PartialSave_AddRestoreFunction(CampaignMapTbs_RestoreFromSaveTable)
+PartialSave_AddRestoreFunction(CMChallenge_Restore)
+PartialSave_AddRestoreFunction(Training_RestoreFromSaveTable)

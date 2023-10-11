@@ -1,0 +1,1230 @@
+-------------------------------------------------------------------------
+-- Core Essence Engine setup script
+-- (usually you would import a project-specific script, which in turn imports this)
+-- 
+-- Relic Entertainment 2017
+--
+-- When you see Core_CallDelegateFunctions("<suffix>"), that is a place where the project or the mission can add to this setup script.
+--
+-- It will first call a function called Project_<suffix> if one exists, which should be in the project's main include file (i.e. Cardinal.scar).
+-- Secondly, for all registered modules it will call functions called <modulename>_<suffix> if they exist.
+-- Finally, it will call a function called Mission_<suffix> if that exists, which would be in the individual mission / win condition file.
+--
+-- See: Core SCAR Initialization Framework
+--      http://relicwiki/display/EE/Core+SCAR+Initialization+Framework	(in the EE, you can Control-click on this link to go there)
+-------------------------------------------------------------------------
+
+
+GAMEOVER_PRESENTATION_TIME = 15.0
+GAMEOVER_OBJECTIVE_TIME = 6.5
+
+
+-- Called as the game is setting up
+-- Very little can be done here, just configuring player slots
+function OnGameSetup()
+
+	PLAYERS = {}
+	TEAMS = {}
+	
+	_allow_spectators = true	-- Dictates UI flow when players are eliminated. This is a global variable to make it easier for game mode scripts to change/override it. 
+
+	Core_CallDelegateFunctions("OnGameSetup")	-- in this case, calls Project_OnGameSetup and then Mission_OnGameSetup giving both the project-specific and mission-specific scripts a point to do stuff
+
+end
+
+
+-- Only used for the re-init after a load, work around for no access to engine functions as Scar_AddInit parameters
+function _RestoreComplete()
+	Scar_InitComplete()
+end
+
+-- called before saving scar state when saving the game
+function OnGameSave()
+	if PartialSave_ShouldPerformPartialSave == nil or not PartialSave_ShouldPerformPartialSave() then
+		Core_CallDelegateFunctions("OnGameSave")
+	end
+end
+
+-- Called as the game comes in from a savegame
+function OnGameRestore()
+	
+	if PartialSave_ShouldPerformPartialSave ~= nil and PartialSave_ShouldPerformPartialSave() then
+		-- Setup this file's globals that were setup on Init since we're not restoring them from
+		-- the lua state.
+		PLAYERS = {}
+		TEAMS = {}
+		Core_SetupPlayerTables()
+		-- Call the partial save restore callbacks
+		PartialSave_RestoreFromSaveTable()
+	else
+		
+		Core_CallDelegateFunctions("OnGameRestore")	-- not quite sure why we would need this as the project could just lump stuff in with the GameRestore system, but just in case
+		
+		Game_DefaultGameRestore()
+	end
+
+	Scar_AddInit(_RestoreComplete)
+end
+
+-- Called in response to a UI hotload
+function OnReloadUI()
+
+	Core_CallDelegateFunctions("OnReloadUI")
+
+end
+
+
+
+-- Called as the game starts the initialization process
+-- This should be the first Init function to get called.
+function OnInit()
+
+	Core_SetupPlayerTables()	-- TODO: it would be great to move this into OnGameSetup
+	
+	--Game_FadeToBlack(FADE_OUT, 0)
+end
+
+
+-- User requested to quit out of game - handle any mission stuff and then call World_LeaveGameMatch()
+function OnLeaveGameMatchRequested()
+
+	_OnLeaveGameMatchRequested_HoldReferenceCount = 0
+ 
+	Core_CallDelegateFunctions("OnLeaveGameMatchRequested")
+
+	if _OnLeaveGameMatchRequested_HoldReferenceCount <= 0 then
+		World_LeaveGameMatch()
+	end
+
+end
+
+function OnLeaveGameMatchRequested_Hold()
+	_OnLeaveGameMatchRequested_HoldReferenceCount = _OnLeaveGameMatchRequested_HoldReferenceCount + 1
+end
+
+function OnLeaveGameMatchRequested_ReleaseHold()
+	_OnLeaveGameMatchRequested_HoldReferenceCount = _OnLeaveGameMatchRequested_HoldReferenceCount - 1
+	if 	_OnLeaveGameMatchRequested_HoldReferenceCount <= 0 then
+		World_LeaveGameMatch()
+	end
+end
+
+-- Called when a user requested to surrender
+function OnSurrenderMatchRequested()
+	Core_CallDelegateFunctions("OnSurrenderMatchRequested")
+end
+
+-- Called when a player has been taken over by AI
+function OnPlayerAITakeover(context)
+
+	_OnPlayerAITakeover_HoldReferenceCount = 0
+ 
+	Core_CallDelegateFunctions("OnPlayerAITakeover", context)
+
+	if _OnPlayerAITakeover_HoldReferenceCount <= 0 then
+		DefaultOnPlayerAITakeover(context)
+	end
+
+end
+
+function DefaultOnPlayerAITakeover(context)
+	
+	local humanCount = 0
+	local lastHumanID = nil;
+	
+	-- count all human players
+	for n = 1, World_GetPlayerCount() do 
+		
+		local player = World_GetPlayerAt(n)
+		
+		if Player_IsHuman(player) == true then
+			humanCount = humanCount + 1
+			lastHumanID = player;
+		end
+	end
+	
+	World_SetPlayerLose(context.player)
+	
+	if humanCount <= 1 and lastHumanID ~= nil then
+		World_SetPlayerWin(lastHumanID)
+		Core_CallDelegateFunctions("PreGameOver", WR_NONE)
+		World_SetGameOver(WR_NONE)
+	end
+end
+
+function OnPlayerAITakeover_Hold()
+	_OnPlayerAITakeover_HoldReferenceCount = _OnPlayerAITakeover_HoldReferenceCount + 1
+end
+function OnPlayerAITakeover_ReleaseHold()
+	_OnPlayerAITakeover_HoldReferenceCount = _OnPlayerAITakeover_HoldReferenceCount - 1
+end
+
+-- Main initialization routine. Called after all other init functions have been invoked.
+function OnInit_PartB()	
+	--Game_FadeToBlack(FADE_OUT, 0)
+	
+	if g_missionData == nil then
+		g_missionData = {}
+	end
+	
+	
+	--
+	-- core initialization sequence
+	--
+
+	-- call other OnInit delegates
+	Core_CallDelegateFunctions("PreInit")			-- this is primarily to allow an opportunity for a mission delegate to get in before all other delegates go through "OnInit"
+	Core_CallDelegateFunctions("OnInit")
+	Core_CallDelegateFunctions("PostInit")			-- PostInit is used to allow for two-stage initialization
+	
+
+	-- call all of the mission setup functions (but do it through delegates, so other things can jump in if necessary)
+	Core_CallDelegateFunctions("SetupVariables")	-- usually used to populate the g_missionData table and create sgroups and egroups
+	Core_CallDelegateFunctions("SetDifficulty")		-- usually used to make changes depending on difficulty mode, and set up a t_difficulty table that has difficulty-related variables
+	
+	Prefab_InitAll()								-- done after SetDifficulty, because changing AI difficulty resets encounters
+	
+	Core_CallDelegateFunctions("SetRestrictions")	-- usually used to lock out abilites/upgrades/production that aren't available in the given mission
+	Core_CallDelegateFunctions("Preset")			-- usually used to spawn initial units and set up the initial state
+	
+	Prefab_PresetComplete()
+	-- main initialization is complete
+	Core_CallDelegateFunctions("InitComplete")
+	
+	
+	--
+	-- move on to the mission start presentation sequence
+	--
+	
+	Util_FullscreenMode(DEFAULT_FULLSCREEN_HIDDEN_GAME_COMPONENT_FLAGS)
+	
+	
+	Rule_AddGlobalEvent(OnPlayerAITakeover, GE_AIPlayer_Migrated)
+	
+	if Prefab_HasPreroll() and not (Misc_IsDevMode() and Misc_IsCommandLineOptionSet("debug_preroll")) then
+		local duration = Prefab_GetPrerollDuration()
+		local ticks = 0
+		
+		-- Execute the pre-roll in the background on the loading screen.
+		Setup_AddPrepareStep(function ()
+				if ticks == 0 then
+					Prefab_DoPreroll()
+				end
+				
+				ticks = ticks + 1
+				
+				-- Keep runing the pre-roll for the specified tick duration to let things settle
+				return ticks < duration
+			end)
+	end
+		
+	-- delay the Scar_InitComplete call by at least a tick so that any deferred sim global state tree work spawned by the init has a chance to run	
+	Rule_AddOneShot(_ScarInitComplete, 0)
+end
+
+function _ScarInitComplete()
+	Scar_InitComplete()
+
+	-- Start the mission with or without cheats	
+	if CheatMenu_GetValues() == true then		-- this returns true if values are set (at which point the values will have been loaded into the appropriate globals)
+		
+		-- we've been invoked with a cheat command!
+		
+		Rule_AddOneShot(_StartMissionWithCheat, 1.0)		
+		
+	else
+		
+		g_introSequence = 0
+		_AdvanceIntroSequence()
+				
+	end
+end
+
+Scar_AddInit(OnInit)
+Scar_AddInitOrdered(OnInit_PartB, 1000000) -- We want this to execute last.
+
+function _AdvanceIntroSequence()
+	if g_introSequence == 0 then
+		g_introSequence = g_introSequence + 1 -- Prepare for the next stage
+		if g_missionData.titleCard ~= nil and g_missionData.titleCard ~= "" then			
+			-- If there's a title card - show it now
+			_ShowTitleCard()
+			return
+		end
+	end
+	if g_introSequence == 1 then
+		g_introSequence = g_introSequence + 1 -- Prepare for the next stage
+		if g_missionData.introMovies ~= nil and #g_missionData.introMovies > 0 then	
+			-- If there's an intro movie - play it now
+			_PlayOpeningMovie()
+			return
+		end
+	end
+	if g_introSequence == 2 then
+		g_introSequence = g_introSequence + 1 -- Prepare for the next stage
+		if g_missionData.introNIS ~= nil  then		
+			-- If there's an intro NIS - play it now
+			_PlayOpeningNIS()
+			return
+		end
+	end
+
+	-- Intro Sequence Done --
+	_StartMission()
+end
+
+function _ShowTitleCard()
+
+	print("Showing title card...")
+	
+	local titleCard = g_missionData.titleCard
+	
+	if titleCard ~= nil then
+		UI_ShowTitleCard(titleCard)
+		UI_SetEnablePauseMenu(false)
+		Game_PauseSimulation(SimulationPause_Video)
+		Rule_AddOneShot(_ShowTitleCard_PartB)
+	end
+
+end	
+
+function _ShowTitleCard_PartB()
+	
+	UI_SetEnablePauseMenu(true)
+	UI_ClearTitleCard()
+	_AdvanceIntroSequence()
+
+end
+
+function _PlayOpeningMovie()
+
+	print("Playing opening movie...")
+	
+	local movie = nil
+	if g_missionData.currentIntroMovie <= #g_missionData.introMovies then
+		movie = g_missionData.introMovies[g_missionData.currentIntroMovie]
+	end
+	
+	if movie ~= nil then
+		g_currentMovie = movie
+		UI_PlayFullscreenVideo(movie)
+		UI_SetEnablePauseMenu(false)
+		Game_PauseSimulation(SimulationPause_Video)
+		
+		Rule_Add(_PlayOpeningMovie_PartB)
+	end
+
+end	
+
+function _PlayOpeningMovie_PartB()
+	if (g_currentMovie == nil) or (UI_IsFullscreenVideoPlaying(g_currentMovie)) == false then
+		local flow = Game_RetrieveTableData("flow", false)
+		if flow.inGameVideoPlaceholderPage ~= nil and flow.inGameVideoPlaceholderPage ~= "" then
+			-- Cleanup on statetree did not happen yet, keep waiting
+			return
+		end
+		
+		Rule_RemoveMe()
+		g_missionData.currentIntroMovie = g_missionData.currentIntroMovie + 1		
+		if g_missionData.currentIntroMovie <= #g_missionData.introMovies then
+			_PlayOpeningMovie()
+		else
+			UI_SetEnablePauseMenu(true)
+			g_currentMovie = nil
+			
+			_AdvanceIntroSequence()
+		end		
+	end
+end
+
+function _PlayOutroMovie()
+
+	local movie = nil
+	if g_missionData.currentOutroMovie <= #g_missionData.outroMovies then
+		movie = g_missionData.outroMovies[g_missionData.currentOutroMovie]
+	end
+	
+	if movie ~= nil then
+		g_currentMovie = movie
+		UI_PlayFullscreenVideo(movie)
+		UI_SetEnablePauseMenu(false)
+	end
+	
+	Rule_Add(_CheckIsMoviePlaying)
+end
+
+function _CheckIsMoviePlaying()
+	if (g_currentMovie ~= nil) and (UI_IsFullscreenVideoPlaying(g_currentMovie) == true) then
+		Rule_RemoveMe()
+		Rule_Add(_PlayOutroMovie_PartB)
+	end
+end
+
+function _PlayOutroMovie_PartB()
+	if (g_currentMovie == nil) or (UI_IsFullscreenVideoPlaying(g_currentMovie) == false) then
+		
+		local flow = Game_RetrieveTableData("flow", false)
+		if flow.inGameVideoPlaceholderPage ~= nil and flow.inGameVideoPlaceholderPage ~= "" then
+			-- Cleanup on statetree did not happen yet, keep waiting
+			return
+		end
+		
+		Rule_RemoveMe()
+		g_missionData.currentOutroMovie = g_missionData.currentOutroMovie + 1		
+		if g_missionData.currentOutroMovie <= #g_missionData.outroMovies then
+			_PlayOutroMovie()
+		else
+			UI_SetEnablePauseMenu(true)
+			g_currentMovie = nil
+			Core_CallDelegateFunctions("OnOutroMovieDone")
+		end		
+	end
+end
+
+function _PlayOpeningNIS()
+
+	print("Playing opening NIS...")
+	
+	Util_StartNIS(g_missionData.introNIS)
+	Rule_Add(_PlayOpeningNIS_PartB)
+	
+end
+function _PlayOpeningNIS_PartB()
+	if Event_IsAnyRunning() == false then
+		
+		Rule_RemoveMe()
+		_AdvanceIntroSequence()
+	
+	end
+end
+
+
+
+
+
+function _StartMission()
+	
+	print("Preparing to start mission...")
+	
+	FOW_UIUnRevealAll()
+	
+	-- set the camera to the start location
+	if g_missionData.startCamera ~= nil then
+		Camera_MoveTo(Util_GetPosition(g_missionData.startCamera), false)
+	end
+	
+	
+	-- do a manual fade in if there was no intro NIS (if there was, the NIS wrapper will handle it for us)
+	if g_missionData.introNIS == nil then
+		--used to be a fade-in here
+	end
+	
+	-- run some delegates just after the opening movie and nis, and just before we actually start the mission
+	_StartMission_HoldReferenceCount = 0	
+	
+	Core_CallDelegateFunctions("PreStart")	
+
+	if _StartMission_HoldReferenceCount == 0 then 
+		_StartMission_PartB()		-- carry on to next step if nothing has requested a hold
+	end
+	
+end
+function _StartMission_PartB()
+
+	print("Starting mission...")
+	
+	if g_missionData.introNIS == nil then
+		Rule_AddOneShot(Util_NormalMode, 0.75)
+	end
+
+	Rule_AddOneShot(_StartMission_PartC, 1.0)
+	
+end
+function _StartMission_PartC()
+
+	Core_CallDelegateFunctions("Start")
+	
+end
+
+function StartMission_Hold()
+	_StartMission_HoldReferenceCount = _StartMission_HoldReferenceCount + 1
+end
+
+function StartMission_ReleaseHold()
+	_StartMission_HoldReferenceCount = _StartMission_HoldReferenceCount - 1
+	if 	_StartMission_HoldReferenceCount <= 0 then
+		_StartMission_PartB()
+	end
+end
+
+function _StartMissionWithCheat()
+
+	print("Starting mission with cheat mode "..tostring(_CheatMenuMode)..":"..tostring(_CheatMenuValue).."...")
+	
+	-- revert the screen settings back to game
+	FOW_UIUnRevealAll()
+	Game_FadeToBlack(FADE_IN, 2)
+	Rule_AddOneShot(Util_NormalMode, 0.75)
+
+	CheatMenu_StartWithCheat(_CheatMenuMode, _CheatMenuValue)
+	
+end
+
+
+-- Creates PLAYER and TEAM data tables
+function Core_SetupPlayerTables()
+	
+	assert(#PLAYERS == 0, "Core_SetupPlayerTables() called more than once.")
+	
+	-- create PLAYER entry for each player
+	for i = 1, World_GetPlayerCount() do 
+		
+		local id = World_GetPlayerAt(i)				
+		local player = {
+			index = i,
+			id = id,
+			isHuman = Player_IsHuman(id),
+			isLocal = Game_GetLocalPlayer() == id,
+			playerName = Player_GetDisplayName(id),
+			isEliminated = false,
+			raceName = Player_GetRaceName(id),
+			race = Player_GetRace(id),
+			startingPos = Player_GetStartingPosition(id),
+			slotIndex = Player_GetSlotIndex(id),
+			scarModel = {}
+		}			
+		table.insert(PLAYERS, player)
+		
+	end
+	
+	-- create TEAM entry for each team, and add team references to each player
+	for i, playerA in pairs(PLAYERS) do 
+		
+		if playerA.team == nil then
+
+			playerA.team = {
+				index = Player_GetTeam(playerA.id) + 1, 
+				players = {playerA},
+			}
+
+			for i, playerB in pairs(PLAYERS) do 
+				if playerA ~= playerB and Player_GetTeam(playerA.id) == Player_GetTeam(playerB.id) then
+					table.insert(playerA.team.players, playerB)
+					playerB.team = playerA.team
+				end
+			end
+
+			table.insert(TEAMS, playerA.team)
+		end
+		
+		print(string.format("Player %d (team %d): %s, %s", playerA.index, playerA.team.index, playerA.playerName.LocString, playerA.raceName))	
+	end
+		
+end
+
+
+
+--? @group scardoc;Core
+
+--? @args String name
+--? @shortdesc Registers a script module for delegate invocation. The name should be the prefix used by all of the delegate functions in this module. This needs to be called in *global* scope of a module script with the prefix name of that module; use this instead of Scar_AddInit. 
+--? @extdesc For example, if you call Core_RegisterModule("MySystem") then any delegate functions in your script such as "MySystem_OnGameSetup" or "MySystem_OnInit" will be called at the appropriate time during the game initialization process (after the Project delegates but before the Mission delegates).
+function Core_RegisterModule(name)
+
+	if t_registeredScriptModules == nil then
+		t_registeredScriptModules = {}
+	end
+	
+	if Core_IsModuleRegistered(name) == nil then		
+		print("Registering module "..name)
+		table.insert(t_registeredScriptModules, {name = name, is_enabled = true})
+	end
+end
+
+--? @args String name
+--? @shortdesc Removes a script module from the delegate invocation system.  
+--? @extdesc This is usually used for a module to remove itself if it decided it isn't needed (i.e. a game mode that isn't relevant given the map). Please don't have modules removing each other!
+function Core_UnregisterModule(name)
+
+	if t_registeredScriptModules == nil then
+		t_registeredScriptModules = {}
+	end
+	
+	for _, module in pairs(t_registeredScriptModules) do
+		if module.name == name and module.is_enabled then 		
+			print("Unregistering module " .. name)
+			module.is_enabled = false
+		end		
+	end
+end
+
+--? @args String name
+--? @shortdesc Returns true if a module is registered for delegate invocation, false if delegate invocation is disabled, nil if module not in module registry. 
+--? @result Boolean
+function Core_IsModuleRegistered(name)
+
+	if t_registeredScriptModules == nil then
+		t_registeredScriptModules = {}
+	end
+	
+	for _, module in pairs(t_registeredScriptModules) do
+		if module.name == name then
+			return module.is_enabled
+		end		
+	end
+	return nil
+end
+
+
+-- Find any delegate functions with the given suffix and call them if they exist
+--
+-- Order:
+--   Project_<name>
+--   <module>_<name> for any registered modules
+--   Mission_<name>
+--
+-- Use:
+--   Core_CallDelegateFunctions(String prefix, [arg1], [arg2]...)     - delegates get called with any provided arg parameters
+function Core_CallDelegateFunctions(...)
+	
+	local arg = {...}
+	local name = arg[1]
+	
+	local CallDelegate = function(prefix)
+	
+		local func = _G[tostring(prefix).."_"..name]
+		
+		if scartype(func) == ST_FUNCTION then 
+						
+			if #arg == 1 then 		-- Call the function along with any parameters passed in (shifted by one since arg[1] is the module prefix)
+				func()
+			elseif #arg == 2 then
+				func(arg[2])
+			elseif #arg == 3 then
+				func(arg[2], arg[3])
+			elseif #arg == 4 then
+				func(arg[2], arg[3], arg[4])
+			elseif #arg == 5 then
+				func(arg[2], arg[3], arg[4], arg[5])
+			elseif #arg == 6 then
+				func(arg[2], arg[3], arg[4], arg[5], arg[6])
+			elseif #arg == 7 then
+				func(arg[2], arg[3], arg[4], arg[5], arg[6], arg[7])
+			elseif #arg == 8 then
+				func(arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8])
+			elseif #arg == 9 then
+				func(arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8], arg[9])
+			else
+				fatal("Core_CallDelegateFunctions: Too many parameters! You'll need to add support for more in Core.scar")
+			end			
+		end		
+	end	
+	
+	-- Call a Project-level function if it exists
+	CallDelegate("Project")
+
+	-- Call any Module-level functions if they exist for installed modules 	
+	if t_registeredScriptModules == nil then
+		t_registeredScriptModules = {}
+	end
+	
+	for _, module in pairs(t_registeredScriptModules) do
+		if module.is_enabled then
+			CallDelegate(module.name)
+		end		
+	end
+	
+	-- Call a Mission-level function if it exists 
+	CallDelegate("Mission")
+end
+
+
+
+
+
+--? @args PlayerID player
+--? @shortdesc Returns the table reference of a PLAYERS table entry 
+--? @result players_table
+function Core_GetPlayersTableEntry(playerID)
+	
+	for index, player in pairs(PLAYERS) do
+		if player.id == playerID then
+			return player		
+		end
+	end
+	
+end
+
+--? @args Integer playerIndex
+--? @shortdesc Returns the table reference of a PLAYERS table entry 
+--? @result players_table
+function Core_GetPlayersTableEntryFromIndex(playerIndex)
+	
+	for index, player in pairs(PLAYERS) do
+		if player.index == playerIndex then
+			return player		
+		end
+	end
+	
+end
+
+--? @args PlayerID player
+--? @shortdesc Returns true if the PLAYERS table contains the given player. 
+--? @result Boolean
+function Core_IsPlayersTableEntryValid(playerID)
+	
+	for index, player in pairs(PLAYERS) do
+		if player.id == playerID then
+			return true
+		end
+	end	
+	return false
+	
+end
+
+--? @args PlayerID player
+--? @shortdesc Returns the table reference of a player's TEAMS table entry 
+--? @result teams_table
+function Core_GetPlayerTeamsEntry(playerID)
+	
+	local playerEntry = Core_GetPlayersTableEntry(playerID) 
+	
+	return playerEntry.team 
+	
+end
+
+--? @shortdesc Returns the entry in the Teams table that corresponds to the given teamIndex.
+--? @extdesc NOTE: Use the teams table's .id entry - not the actual index of the table.
+--? @args Integer index 
+--? @result teams_table
+function Core_GetTeamsEntryFromIndex(teamIndex)
+	
+	for index, team in pairs(TEAMS) do
+		if team.index == teamIndex then
+			return team
+		end
+	end
+
+end
+
+--? @shortdesc Returns true if teamIndex is a valid index in the Teams table.
+--? @extdesc NOTE: Use the teams table's .id entry - not the actual index of the table.
+--? @args Integer index 
+--? @result Boolean
+function Core_IsTeamsEntryIndexValid(teamIndex)
+	for index, team in pairs(TEAMS) do
+		if team.index == teamIndex then
+			return true
+		end
+	end	
+	return false
+end
+
+--? @args PlayerID player
+--? @shortdesc Removes a player from player and team tables.  
+--? @result void
+function Core_RemovePlayerFromPlayersTable(playerID)
+	
+	for index, player in pairs(PLAYERS) do 
+		if player.id == playerID then
+			local teamIndex = player.team.index
+			
+			for index2, player2 in pairs(TEAMS[teamIndex].players) do
+				if player2.id == playerID then
+					table.remove(TEAMS[teamIndex].players, index2)
+					
+					-- Remove the team entry if it's now empty
+					if #TEAMS[teamIndex].players == 0 then
+						TEAMS[teamIndex] = nil
+					end
+				end
+			end
+			
+			table.remove(PLAYERS, index)
+			
+		end
+	end
+	
+end
+
+--? @shortdesc Returns the number of non-eliminated teams remaining.  
+--? @result Integer
+function Core_GetActiveTeamCount()
+	
+	local count = 0
+	
+	for i, team in pairs(TEAMS) do
+		if not Core_IsTeamEliminated(team) then
+			count = count + 1	
+		end
+	end
+	
+	return count
+	
+end
+
+--? @args PlayerID player1, PlayerID player2, Integer relationship
+--? @shortdesc Sets the relationship between two players 
+--? @result void
+function Core_SetMutualPlayerRelationship(playerID1, playerID2, relationship)
+
+	Player_SetRelationship(playerID1, playerID2, relationship)
+	Player_SetRelationship(playerID2, playerID1, relationship)
+	
+end
+
+
+--? @shortdesc Sets the relationship between two entries 
+--? @extdesc NOTE: You should generally be setting Team to Team only.
+--? @extdesc Valid Relationships: R_NEUTRAL, R_ALLY, R_ENEMY, R_UNDEFINED
+--? @args PlayerID/Table player/teams_table, PlayerID/Table player/teams_table, Relationship relationship
+--? @result void
+function Core_SetMutualRelationship(entry1, entry2, relationship)
+	
+	local IsATeamTable = function(table)
+		if scartype(table) == ST_TABLE then
+			for i, team in pairs(TEAMS) do
+				if team == table then
+					return true
+				end
+			end
+		end
+	end
+	
+	if scartype(entry1) == ST_PLAYER then 
+	
+		if scartype(entry2) == ST_PLAYER then	
+		
+			Core_SetMutualPlayerRelationship(entry1, entry2, relationship)
+			
+		elseif IsATeamTable(entry2) then
+		
+			for i, player in pairs(entry2.players) do	
+			
+				Core_SetMutalPlayerRelationship(entry1, player.id, relationship)
+				
+			end
+			
+		end
+		
+	elseif IsATeamTable(entry1) then
+	
+		if scartype(entry2) == ST_PLAYER then
+		
+			for i, player in pairs(entry1.players) do
+			
+				Core_SetMutalPlayerRelationship(player.id, entry2, relationship)
+				
+			end
+			
+		elseif IsATeamTable(entry2) then
+		
+			for i, playerA in pairs(entry1.players) do
+			
+				for j, playerB in pairs(entry2.players) do
+				
+					Core_SetMutualPlayerRelationship(playerA.id, playerB.id, relationship)
+					
+				end
+			
+			end		
+	
+		end
+	
+	end
+end
+
+-- Victory
+
+--? @args PlayerID player, function presentationFunction, winReason reason
+--? @shortdesc Sets a player as the match winner. 
+--? @result void
+function Core_SetPlayerVictorious(playerID, presentationFunction, reason)
+	
+	if scartype(presentationFunction) == ST_NIL and _DefaultVictoryPresentation ~= nil then
+		presentationFunction = _DefaultVictoryPresentation
+	end
+	
+	local player = Core_GetPlayersTableEntry(playerID)
+	if player ~= nil --[[and not player.isEliminated]] then
+			
+		print(string.format("Core_SetPlayerVictorious() - Player %d wins. Reason = %d", player.index, reason))
+		
+		player.isEliminated = true
+		
+		World_SetPlayerWin(playerID)
+		
+		Core_CallDelegateFunctions("PreGameOver", reason)
+		
+		if scartype(presentationFunction) == ST_FUNCTION then			
+			presentationFunction(playerID, reason)
+			if not Rule_Exists(Core_DelayedGameOver) then 
+				Rule_AddOneShot(Core_DelayedGameOver, GAMEOVER_PRESENTATION_TIME, {reason=reason})
+			end
+		else			
+			Core_DelayedGameOver("", {reason=reason})				
+		end		
+	end
+end
+
+
+function Core_DelayedGameOver(context, data)
+	print(string.format("Core_DelayedGameOver() - Match end. Reason = %d", data.reason))	
+	World_SetGameOver(data.reason)
+end	
+	
+	
+--? @args function presentationFunction
+--? @shortdesc Sets the default presentation function for victorious players. 
+--? @result void
+function Core_SetDefaultVictoriousPresentation(presentation)
+	_DefaultVictoriousPresentation = presentation
+end
+
+
+--? @args Team teams_table, function presentationFunction, winReason reason
+--? @shortdesc Sets a team as the match winner.  
+--? @result void
+function Core_SetTeamVictorious(team, presentationFunction, reason) 
+	
+	print(string.format("Core_SetTeamVictorious() - Team %d wins. Reason = %d", team.index, reason))
+	
+	for _, player in pairs(team.players) do
+		Core_SetPlayerVictorious(player.id, presentationFunction, reason)
+	end
+end
+
+-- Defeat
+
+--? @args PlayerID player, function presentationFunction, winReason reason 
+--? @shortdesc Sets a player as defeated. 
+--? @result void
+function Core_SetPlayerDefeated(playerID, presentationFunction, reason)
+	
+	World_SetPlayerLose(playerID)
+	World_KillPlayer(playerID, KPR_Lost)	
+	
+	if scartype(presentationFunction) == ST_NIL and _DefaultDefeatPresentation ~= nil then
+		presentationFunction = _DefaultDefeatPresentation
+	end
+	
+	local player = Core_GetPlayersTableEntry(playerID)
+	if player ~= nil --[[and not player.isEliminated]] then
+		 
+		print(string.format("Core_SetPlayerDefeated() - Player %d defeated. Reason = %d", player.index, reason))
+		
+		player.isEliminated = true
+		
+		-- no defeated presentaion and spectator button for replay
+		if not UI_IsReplay() then
+			Rule_AddOneShot(Core_DelayedSetPlayerLose, GAMEOVER_PRESENTATION_TIME, playerID)
+			
+			if scartype(presentationFunction) == ST_FUNCTION then
+				presentationFunction(playerID)			
+			end
+		end
+		
+		Core_CallDelegateFunctions("OnPlayerDefeated", player, reason)
+	end	
+end
+
+
+function Core_SpectateAll()
+	print("Core_SpectateAll")
+	if _data_context_defeated_state ~= nil then
+		
+		-- hide the spectate all button
+		_data_context_defeated_state.spectate_all_visibility = false
+		UI_SetDataContext("DefeatedNavigationUI", _data_context_defeated_state)
+		
+		-- set flow to continue from the defeated state
+		local flowData = Game_RetrieveTableData("flow", false)
+		flowData.defeatComplete = true
+		Game_StoreTableData("flow", flowData)
+				
+		--FOW_UIRevealAll()
+		Game_SetPostGameChatChannel()
+	end
+end
+
+
+function Core_ContinueFromDefeated()
+	print("Core_ContinueFromDefeated")
+	if _data_context_defeated_state ~= nil then
+		
+		-- we always end up in spectator mode when exiting the defeated state, so hide the spectate all button
+		_data_context_defeated_state.spectate_all_visibility = false
+		UI_SetDataContext("DefeatedNavigationUI", _data_context_defeated_state)
+		
+		-- set flow to continue from the defeated state
+		local flowData = Game_RetrieveTableData("flow", false)
+		flowData.defeatComplete = true
+		flowData.matchStatsRequested = true
+		Game_StoreTableData("flow", flowData)
+		
+		--FOW_UIRevealAll()
+		Game_SetPostGameChatChannel()
+	end
+end
+
+
+function Core_DelayedSetPlayerLose(context, playerID)
+	
+	local player = Core_GetPlayersTableEntry(playerID)
+	if player.isLocal then
+		
+		local players_remaining = {}
+		for _, player in pairs(PLAYERS) do
+			if not player.isEliminated then 
+				table.insert(players_remaining, player)
+			end
+		end 
+	
+		-- remove game over message and restore HUD
+		Taskbar_SetVisibility(true)
+		UI_Remove("UIGameOverMessage")
+		
+		-- add a button for player to show stats page, and a button to exit "eliminated/defeated" state and go to spectator state
+		local xaml = [[<StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                xmlns:engineCommands="clr-namespace:WPFGUI.Shared.Commands;assembly=EngineUI"
+                xmlns:utility="clr-namespace:WPFGUI.Shared.Utility;assembly=EngineUI">
+				<ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource SpectatorContinueButton}" />
+			</StackPanel>
+		]]
+			
+		_data_context_defeated_state = 
+		{
+			continue_function = UI_CreateCommand("Core_ContinueFromDefeated"),
+			spectate_all_visibility = player.isEliminated and not World_IsGameOver() and _allow_spectators and #players_remaining > 1,
+			spectate_all_function = UI_CreateCommand("Core_SpectateAll")
+		}
+		
+		UI_AddChild("", "XamlPresenter", "DefeatedNavigationUI", { Xaml = xaml, DataContext = UI_CreateDataContext(_data_context_defeated_state) })
+	end
+end	
+	
+
+--? @args Table presentationTable
+--? @shortdesc Sets the default presentation table for defeated players. 
+--? @result void
+function Core_SetDefaultDefeatPresentation(presentation)
+	_DefaultDefeatPresentation = presentation
+end
+
+--? @args Team teams_table, Table presentationTable
+--? @shortdesc Sets if a team is defeated
+--? @result void
+function Core_SetTeamDefeated(team, presentationFunction, reason)	
+	
+	for index, player in pairs(team.players) do
+		Core_SetPlayerDefeated(player.id, presentationFunction, reason)
+	end
+	
+	print(string.format("Core_SetTeamDefeated() - Team %d defeated", team.index))
+	Core_CallDelegateFunctions("OnTeamDefeated", team, reason)
+end
+
+-- Elimination
+
+--? @args PlayerID player
+--? @shortdesc Returns true if a player is eliminated from the game. 
+--? @result Boolean
+function Core_IsPlayerEliminated(playerID)
+	
+	local playerEntry = Core_GetPlayersTableEntry(playerID) 
+	return playerEntry.isEliminated
+
+end
+
+--? @args Team teams_table
+--? @shortdesc Returns true if a team is eliminated from the game. A team is considered eliminated when all of its players are eliminated. 
+--? @result Boolean
+function Core_IsTeamEliminated(team)
+	 
+	for i, player in pairs(team.players) do
+		if not player.isEliminated then 
+			return false
+		end
+	end
+	return true	
+end
+
+
+--? @shortdesc Call this function to notify other modules (via their ***_OnGameOver() callback) that the match is about to end.
+--? @result void
+--? @extdesc Modules typically implement this for cleanup purposes (i.e. remove rules and UI elements) prior to the match end UI.
+function Core_OnGameOver()
+
+	Core_CallDelegateFunctions("OnGameOver")
+
+end
+
+--? @shortdesc Returns true if the two given players are on the same team.   
+--? @result Boolean
+function Core_IsPlayerOnPlayerTeam(playerID1, playerID2)
+	
+	return Core_GetPlayerTeamsEntry(playerID1) == Core_GetPlayerTeamsEntry(playerID2)
+
+end
+
+
+--? @shortdesc Has a player join a specific team 
+--? @extdesc Will remove the player from his previous team.  If you pass in nil for newTeam, will add to a new empty team
+--? @args PlayerID player, Team teams_table
+--? @result void
+function Core_AddPlayerToTeam(playerID, newTeam)
+
+
+	local Core_RemovePlayerFromTeam = function(playerID)
+		
+		local playerEntry = Core_GetPlayersTableEntry(playerID)
+		local oldTeam = playerEntry.team
+				
+		-- (Re)set relationship with player's current team
+		for i, player in pairs(oldTeam.players) do
+			if player.id ~= playerID then
+				Core_SetMutualPlayerRelationship(player.id, playerID, R_ENEMY)
+			end
+		end
+		
+		-- Remove player from current team table
+		for i, player in pairs(oldTeam.players) do 
+			if player.id == playerID then
+				table.remove(oldTeam.players, i)
+				
+				-- Notify script modules of team change
+				Core_CallDelegateFunctions("OnPlayerLeftTeam", playerEntry, oldTeam)
+			end
+		end			
+	end
+	
+	
+	local Core_GetNewTeamIndex = function()
+		local index = 0
+		local is_index_used = false
+		while (true) do 
+			is_index_used = false
+			index = index + 1
+			for i, team in pairs(TEAMS) do
+				if team.index == index then 
+					is_index_used = true
+					break
+				end
+			end
+			if not is_index_used then 
+				return index
+			end
+		end
+	end
+
+	
+	-- Leave current team
+	Core_RemovePlayerFromTeam(playerID)
+	
+	local playerEntry = Core_GetPlayersTableEntry(playerID)
+	local joinEmptyTeam = true
+	
+	-- If newTeam is not nil, verify it's an actual team
+	if newTeam ~= nil then
+		for i, team in pairs(TEAMS) do
+			if team == newTeam then 
+				-- Found a team, do not join an empty team
+				joinEmptyTeam = false
+			end
+		end
+	end
+	
+	if joinEmptyTeam then
+		-- Now, create a new empty team table
+		local newTeamEntry = {
+			index = Core_GetNewTeamIndex(),
+			players = {playerEntry},
+		}
+		
+		playerEntry.team = newTeamEntry
+		table.insert(TEAMS, newTeamEntry)
+		
+		-- Notify script modules of new team 
+		Core_CallDelegateFunctions("OnTeamCreated", newTeamEntry)
+	else
+		-- Join the player to the new, existing team
+		-- Set relationship with the new Team
+		for i, player in pairs(newTeam.players) do
+			Core_SetMutualPlayerRelationship(player.id, playerID, R_ALLY)
+		end
+		
+		-- Add the player to his new team table
+		table.insert(newTeam.players, playerEntry)
+		
+		-- Update the player's playerEntry team reference
+		playerEntry.team = newTeam
+	end
+	
+	-- Clean up any empty team tables
+	for i, team in pairs(TEAMS) do
+		if #team.players == 0 then
+		
+			table.remove(TEAMS, i)
+			
+			-- Notify script modules of team removal 
+			Core_CallDelegateFunctions("OnTeamRemoved", team)
+		end
+	end
+
+	-- Notify script modules of team change
+	Core_CallDelegateFunctions("OnPlayerJoinedTeam", playerEntry)
+	
+end
+
+
+--? @shortdesc Compare two values using provided comparator
+--? @args Number value1, Number value2, COMPARISON comparator
+--? @result boolean
+function Core_Compare(v1, v2, comparator)
+	if comparator == IS_EQUAL then
+		return v1 == v2
+	elseif comparator == IS_NOT_EQUAL then 
+		return v1 ~= v2
+	elseif comparator == IS_LESS_THAN then 
+		return v1 < v2
+	elseif comparator == IS_LESS_THAN_OR_EQUAL then 
+		return v1 <= v2
+	elseif comparator == IS_GREATER_THAN then
+		return v1 > v2
+	elseif comparator == IS_GREATER_THAN_OR_EQUAL then
+		return v1 >= v2
+	else
+		print("Compare recieved invalid comparator.")
+	end
+end
+
+function Core_ComparisonToString(comparator)
+	if comparator == IS_EQUAL then
+		return "IS_EQUAL"
+	elseif comparator == IS_NOT_EQUAL then 
+		return "IS_NOT_EQUAL"
+	elseif comparator == IS_LESS_THAN then 
+		return "IS_LESS_THAN"
+	elseif comparator == IS_LESS_THAN_OR_EQUAL then 
+		return "IS_LESS_THAN_OR_EQUAL"
+	elseif comparator == IS_GREATER_THAN then
+		return "IS_GREATER_THAN"
+	elseif comparator == IS_GREATER_THAN_OR_EQUAL then
+		return "IS_GREATER_THAN_OR_EQUAL"
+	else
+		print("Compare recieved invalid comparator.")
+	end
+end
+
+--? @shortdesc This function plays mission outro videos, when the player wins a mission
+--? @args none
+--? @result none
+function Core_OnVictory()
+	if (g_missionData ~= nil) and (g_missionData.outroMovies ~= nil) and (#g_missionData.outroMovies > 0) then	
+		_PlayOutroMovie()
+	else
+		Core_CallDelegateFunctions("OnOutroMovieDone")
+	end
+end
+

@@ -1,0 +1,236 @@
+import( 'utility/utility.scar' )
+
+-- All debug-related functionality
+
+
+-- clear debug channels (should be elsewhere)
+for px=1000, 1008 do
+	dr_clear("aidebug"..px)
+end
+
+s_debug_enabled = false
+s_printsummary = true
+s_debug_display_height = 0.02
+
+s_print_skirmish = true
+s_unit_overview = true
+s_build_overview = true
+s_upgrade_overview = true
+s_task_summary = true
+
+if AI_IsRTM() then
+	s_debug_enabled = false
+end
+
+function PrintBuild( str )
+	if( s_build_overview ) then
+		aitrace_ext( "Skirmish", str )
+	end
+end
+
+function PrintUpgrades( str )
+	if( s_upgrade_overview ) then
+		aitrace_ext( "Skirmish", str )
+	end
+end
+
+function PrintUnits( str )
+	if( s_unit_overview ) then
+		aitrace_ext( "Skirmish", str )
+	end
+end
+
+function PrintTasks( str )
+	if( s_task_summary ) then
+		aitrace_ext( "Skirmish", str )
+	end
+end
+
+-- Print a summary of this AI's state 
+function PrintSummary()
+
+	if not s_debug_enabled then
+		return
+	end
+
+	local xval	= 0.05
+	local yval	= s_debug_display_height
+	local ystep	= 14 / Util_GetScreenHeight()
+	ystep = 0.013
+
+	local tab = 0.065
+				
+	if ( s_print_skirmish ) then
+		yval = yval + ystep * 2
+		yval = aitracedump_ext( "Skirmish", xval, yval, ystep )
+	end	
+end
+
+function DebugPrint( x, y, text )
+
+	if not s_debug_enabled then
+		return
+	end
+	
+	-- the selected color of the text:
+	local colour = {255,255,192}
+	
+	dr_text2d( "aidebug"..AI_GetPlayerID(), x, y, text, colour[1], colour[2], colour[3] )
+end
+
+-- Show all debug information for this AI (2D and 3D displays)
+function DebugDisplay()
+
+	dr_setautoclear("aidebug"..AI_GetPlayerID(), 0)
+
+	-- do display if enabled
+	
+	if( s_debug_enabled == false ) then --set in code
+		return 
+	end
+	
+	dr_clear("aidebug"..AI_GetPlayerID())
+	
+	-- show different items based on which debug flags are enabled
+	
+	if (s_printsummary==true) then
+		PrintSummary()
+	end
+		
+	db_table( g_locals )
+	g_locals = {}
+		
+end
+
+function DebugScrollDown()
+	s_debug_display_height = s_debug_display_height - 0.12
+	DebugDisplay()
+end
+
+
+function DebugScrollUp()
+	s_debug_display_height = s_debug_display_height + 0.12
+	DebugDisplay()
+end
+
+------------------------------------------------------
+
+function print_table( tbl, tabstr )
+
+	if (tabstr) then
+		tabstr = tabstr.."--"
+	else 
+		tabstr = "+-"
+	end
+	
+	function print_entry(a,b)
+		
+		if (type(b) == "table" and b ~= _G) then
+			print_table(b, tabstr)
+		elseif (type(b) ~= "function") then
+			print(tabstr..a..":"..tostring(b))
+		end
+	end
+	for k,v in pairs(tbl) do
+		print_entry(k,v)
+	end
+end
+
+function print_G()
+	print_table(_G)
+end
+
+function print_locals()
+
+	print("--DUMPINGLOCALS--")
+	
+	local index = 1
+	repeat
+		a,b = debug.getlocal(2,index)
+		if b then 
+			print( a,b )
+			if (type(b) == "table") then
+				print_table(b)
+			end
+		end
+		index = index + 1
+		
+	until b == nil
+
+	print("------------------")
+end
+
+g_locals = {}
+
+function get_local_tbl( level )
+	
+	-- insert the function name this is from
+	table.insert( g_locals, debug.getinfo( 3, "n" ).name )
+	
+	local index = 1
+	repeat
+		a,b = debug.getlocal(level,index)
+		if (b) then
+			if (type(b) == "table") then
+				table.insert( g_locals, {a,b} )
+			else
+				local txt = a.." = "..tostring(b)
+				table.insert( g_locals, txt )
+			end
+		end
+		index = index + 1
+		
+	until b == nil
+	
+end
+
+function db_table( tbl, tabstr )
+
+	if (tabstr) then
+		tabstr = tabstr.."--"
+	else 
+		tabstr = "+-"
+		db_y = s_debug_display_height + 0.04
+	end
+	
+	function print_entry(a,b)
+		
+		if (type(b) == "table" and b ~= _G) then
+			db_table(b, tabstr, db_y)
+		elseif (type(b) ~= "function") then
+			local txt = tabstr..a.." : "..tostring(b)
+			DebugPrint( 0.6, db_y, txt )
+			db_y = db_y + 0.025
+		end
+		
+	end
+	for k,v in pairs(tbl) do
+		print_entry(k,v)
+	end		
+end
+
+function db()
+	
+	-- get and store a bunch of local vars
+	get_local_tbl(3)
+	
+end
+
+-- temp: this is an example of how to get a bunch of info from lua
+function dinfo()
+	local t = debug.getinfo( 3 )
+	
+	print("--DEBUG INFO--")
+	if (t.name) then
+		print( "name:"..t.name )	
+	end
+	print( "namewhat:"..t.namewhat )
+	print( "what:"..t.what )
+	print( "src:"..t.source )
+	print( "line:"..t.currentline )
+	--print( "nups:"..t.nups )
+	--print( "linedef:"..t.linedefined ) -- line the function is defined
+	--print( "shortscr:"..t.short_src )
+	print("----------------")
+end
+

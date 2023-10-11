@@ -1,0 +1,68 @@
+----------------------------------------------------------------------------------------------------------------
+-- Movie Capture helper functions
+-- Copyright 2016 SEGA Corporation, Developed by Relic Entertainment
+-- Author: Alun Bjorksten
+
+-- The objective of these functions is to facilitate capture of high-quality in-game
+-- footage for marketing and 3rd parties.
+
+----------------------------------------------------------------------------------------------------------------
+-- TO DO to get this to work
+--
+-- add the following line to the ScarUtil.scar file:
+--		import("MovieCapture.scar")
+--
+----------------------------------------------------------------------------------------------------------------
+
+
+
+function _MovieCapture_Init()
+	
+	--[[ PREPARE FOR BEST MANUAL CAPTURE ]]
+	Scar_DebugConsoleExecute("lod_setminlod(100)")
+	Scar_DebugConsoleExecute("DebugRenderShow(false)")
+	Scar_DebugConsoleExecute("app_fixedframerate(30)")
+	Scar_DebugConsoleExecute("capturemoviesavedeferredbuffers(true)")
+	--Scar_DebugConsoleExecute("nis_synchelp")	-- xxxx ALUN not sure what this is for ...?
+	
+	--[[ SET MANUAL START/STOP COMMANDS]]
+	Scar_DebugConsoleExecute("bind(\"ALT+1\", \"capturemoviestart(0)\")")
+	Scar_DebugConsoleExecute("bind(\"ALT+2\", \"capturemoviestop\")")
+		
+	--[[ SET NAME OF CAPTURED FRAMES]]
+	Scar_DebugConsoleExecute("capturemoviesetbasefilename(\"ManualMovieCap\")")
+	Scar_DebugConsoleExecute("dirt_debugset(\"lodsplit\", 1 )")
+	
+	--[[ SET PASSES TO RENDER]]
+	--#PASS_ALBEDO#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Albedo, true)")
+	--#PASS_AMBIENTDIFFUSELIGHTING#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_AmbientDiffuseLighting, true)")
+	--#PASS_AMBIENTOCCLUSION#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_AmbientOcclusion, true)")
+	--#PASS_AMBIENTSPECULARLIGHTING#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_AmbientSpecularLighting, true)")
+	Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Depth, true)")
+	--#PASS_DIFFUSELIGHTING#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_DiffuseLighting, true)")
+	Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_FinalNoPost, true)")
+	Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Fx, true)")
+	--#PASS_GLOSS#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Gloss, true)")
+	--#PASS_NORMAL#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Normal, true)")
+	--#PASS_SKY#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Sky, true)")
+	--#PASS_SPECULAR#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_Specular, true)")
+	--#PASS_SPECULARLIGHTING#Scar_DebugConsoleExecute("capturemovieenablesavebuffer(WSB_SpecularLighting, true)")
+	Scar_DebugConsoleExecute("capturemoviesavedeferredbuffers(true)")
+		
+end
+
+Scar_AddInit(_MovieCapture_Init)
+
+
+
+function ManualMovieCaptureStart()
+
+
+end
+
+function ManualMovieCaptureEnd()
+
+
+end
+
+

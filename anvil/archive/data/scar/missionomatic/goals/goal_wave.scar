@@ -1,0 +1,220 @@
+--
+-- Mission-o-Matic - AI Goal - Wave Defence
+--
+-- Parse, manage, and monitor any wave defence goal in missions
+--
+
+import("anvil.scar")
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+---------------
+ --INITIALIZE--
+function Wave_Start(data)
+	
+	data = data.aigoal
+	
+	player1 = player1 or World_GetPlayerAt(1)
+	g_enemy_team = g_enemy_team or Core_GetTeamsEntryFromIndex(2)
+	player3 = player3 or World_GetPlayerAt(3)
+	
+	local waveData = {}
+	waveData.currentWave = 1
+	waveData.waveDelay = data.next_wave_delay
+	waveData.unitsRemaining = data.next_wave_units_remaining
+	
+	waveData.enemies = data.enemies
+	waveData.unitsGroup = SGroup_CreateUnique("sg_WaveUnits")
+	waveData.waveCheck = data.and_or
+	
+	waveData.reveal = data.reveal_in_fow
+	
+	--consolodates completion check
+	if data.completion == "Timer" then
+		waveData.completionCheck = Wave_TimerCheck
+		waveData.completeTimer = data.duration + World_GetGameTime()
+	elseif data.completion == "Waves" then
+		waveData.completionCheck = Wave_WaveCheck
+	elseif data.completion == "Condition" then
+		waveData.completionCheck = Wave_ConditionCheck
+	end
+	
+	local locations = data.spawn_directions
+	local spawnLocations = {}
+	
+	--sets up locations
+	for i=1, #locations do
+		
+		--determine max units to spawn at this location
+		local loc = locations[i]
+		local radius = Marker_GetProximityRadius(loc.area)
+		local max = math.floor((3.14*radius*radius)/104.6) --math yo
+		if max == 0 then
+			max = 1
+		end
+		loc.max = max
+		loc.current = 1
+		
+		table.insert(spawnLocations, loc)
+		
+	end
+	
+	if data.target_type == "egroup" then
+		waveData.target = EGroup_GetRandomSpawnedEntity(data.egroup)
+	else
+		waveData.target = SGroup_GetRandomSpawnedSquad(data.sgroup)
+	end
+	
+	waveData.spawnLocations = spawnLocations
+	
+	
+	--encounter + goal
+	local encounter = {}
+	waveData.encounter = encounter
+	
+	encounter.player = data.player
+	encounter.name = ""
+	
+	encounter.sgroups = {}
+	
+	local goal = {}
+	encounter.goal = goal
+	
+	goal.name = "Attack"
+	goal.maxTime = -1
+	goal.maxIdleTime = -1
+	
+	encounter.triggerGoalOnEngage = false
+	
+	goal.target = Util_GetPosition(waveData.target)
+	goal.range = 60
+	goal.leashRange = 40
+	
+	Wave_SpawnWave(waveData)
+	Rule_AddInterval(Wave_Manager, 1, waveData)
+	
+end
+
+function Wave_Manager(context, data)
+	
+	--ends this wave goal
+	if data.completionCheck(data) then
+		Rule_RemoveMe()
+	else
+		data.lastWaveTimestamp = data.lastWaveTimestamp or World_GetGameTime()
+		local timeSinceLastWave = World_GetGameTime() - data.lastWaveTimestamp
+		
+		if data.waveCheck == "OR" and (timeSinceLastWave > data.waveDelay or Group_Count(data.unitsGroup) < data.unitsRemaining) then
+			data.currentWave = data.currentWave +1
+			Wave_SpawnWave(data)
+			data.lastWaveTimestamp = World_GetGameTime()
+		elseif data.waveCheck == "AND" and (timeSinceLastWave > data.waveDelay and Group_Count(data.unitsGroup) < data.unitsRemaining) then
+			data.currentWave = data.currentWave +1
+			Wave_SpawnWave(data)
+			data.lastWaveTimestamp = World_GetGameTime()
+		end
+		
+	end
+	
+end
+
+function Wave_SpawnWave(data)
+	
+	local units = data.enemies
+	local currentWave = data.currentWave
+	--if maxSpawn > 3 then maxSpawn = 3 end
+	
+	local locations = Clone(Table_GetShuffledItems(data.spawnLocations))
+	
+	local loc = 1
+	
+	--spawns units
+	for i=1, #units do
+		
+		--makes sure we're supposed to spawn them this wave
+		if currentWave >= units[i].wave_min and (currentWave <= units[i].wave_max or units[i].wave_max == -1) then 
+			
+			for n=1, units[i].number do
+				
+				--if an external sgroup was passed in then use that as well
+				local group = data.unitsGroup
+				if units[i].sgroup ~= nil then
+					group = {units[i].sgroup, data.unitsGroup}
+				end
+				
+				local tempUpgrade = ( units[i].upgrade_pbg == ST_PBG and units[i].upgrade_pbg ) or nil
+				
+				Util_CreateSquads(data.encounter.player, group, units[i].pbg, Util_GetRandomPosition(locations[loc].area), nil, 1, nil, nil, nil, tempUpgrade, Marker_GetDirection(locations[loc].area))
+				
+				--reveals them in FOW
+				if data.reveal == true then
+					FOW_RevealSGroupOnly(data.unitsGroup, -1)
+				end
+				
+				-- remove location if limit reached
+				locations[loc].current = locations[loc].current + 1
+				if #locations > 1 and locations[loc].current > locations[loc].max then
+					 table.remove(locations, loc)
+				else
+					--ensures unit types are spread out
+					loc = loc + 1
+					if loc > #locations or loc > 3 or loc > currentWave then
+						loc = 1
+					end
+				end
+				
+			end
+			
+		end
+		
+	end
+	
+	if SGroup_IsAlive(data.unitsGroup) and SGroup_CountSpawned(data.unitsGroup) >= 1 then
+		Cmd_AttackMove(data.unitsGroup, data.encounter.goal.target, nil, nil, 15)
+		--data.encounterID = Encounter:ConvertSGroup(data.unitsGroup)
+		Rule_AddOneShot(Wave_GiveGoal, 5, data)
+	end
+	
+end
+
+function Wave_GiveGoal(context, data)
+	
+	--if data.goalSet == false then
+		--data.encounterID:SetGoal(data.encounter.goal, true)
+		Rule_AddInterval(Wave_PokeUnit, 10, data)
+	--end
+end
+
+function Wave_PokeUnit(context, data)
+	
+	if SGroup_IsAlive(data.unitsGroup) and SGroup_CountSpawned(data.unitsGroup) >= 1 then
+		if SGroup_IsMoving(data.unitsGroup, ALL) == false then 
+			Cmd_AttackMove(data.unitsGroup, data.encounter.goal.target, nil, nil, 15)
+		end
+	else
+		Rule_RemoveMe()	
+	end	
+	
+end	
+------------
+--Checks--
+function Wave_TimerCheck(data)
+	
+	return World_GetGameTime() > data.completeTimer
+	
+end
+
+function Wave_WaveCheck(data)
+	
+	return data.currentWave > data.wave
+	
+end
+
+function Wave_ConditionCheck(data)
+	
+	return ConditionList_CheckList(data.completeCondition)
+	
+end

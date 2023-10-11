@@ -1,0 +1,147 @@
+-----------------------------------------------------------------------
+-- 'Destroy HQ' Win Condition
+--
+-- (c) Relic Entertainment 2020
+--
+-- Variant of the 'annihilation' win condition. A player is eliminated if they have no entities with 
+-- the "annihilation_condition" type (i.e. the HQ building). A team is eliminated when all players on 
+-- the team are eliminated. The win condition is triggered when all teams but one have been eliminated.
+-- Requires at least one team and that all teams start with at least one "annihilation_condition" entity.
+-----------------------------------------------------------------------
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("DestroyHQ")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by core.scar after opening cinematics and events are complete.
+function DestroyHQ_Start()
+	DestroyHQ_OnRelationshipChanged()
+	
+	-- Verify at least one team
+	if #_destroy_hq.teams == 1 then
+		print("Insufficient teams")
+		_destroy_hq = nil
+		Core_UnregisterModule("DestroyHQ")
+		return
+	end
+
+	-- Verify at least one entity of type "annihilation_condition" exists on each team
+	local entities_by_team = {}
+	for _, team in pairs(_destroy_hq.teams) do
+		if #team.headquarters == 0 then
+			print("Insufficient HQ buildings")
+			_destroy_hq = nil
+			Core_UnregisterModule("DestroyHQ")
+			return
+		else
+			table.insert(entities_by_team, team.headquarters)
+		end
+	end
+
+	-- GE_EntityKilled is not triggered when an HQ is destroyed since it is not technically killed.
+	-- Hence the need to periodically poll HQ health in order to detect eliminated players.
+	Rule_AddInterval(DestroyHQ_CheckWinCondition, 3)
+	
+	-- Link music level to health of annihilation entities
+	Audio_TrackHealth(entities_by_team, ANY)
+end
+
+
+-- Callback (that should be) invoked when a player relationship changes
+function DestroyHQ_OnRelationshipChanged(observer, target)
+	local _GetTeam = function(player)
+		local player_index = World_GetPlayerIndex(player)
+		for _, team in pairs(_destroy_hq.teams) do
+			for _, index in pairs(team.players) do
+				if index == player_index 
+					or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == R_ALLY then
+					return team
+				end
+			end
+		end
+		local team = {
+			players = {},
+			headquarters = {}
+		}
+		table.insert(_destroy_hq.teams, team)
+		return team
+	end
+
+	_destroy_hq = _destroy_hq or {}
+	_destroy_hq.teams = {}
+	for i = 1, World_GetPlayerCount() do
+		local team = _GetTeam(World_GetPlayerAt(i))
+		table.insert(team.players, i)
+		
+		local eg = Player_GetEntities(World_GetPlayerAt(i))
+		for j = 1, EGroup_CountSpawned(eg) do
+			local entity = EGroup_GetSpawnedEntityAt(eg, j)
+			if Entity_IsOfType(entity, "annihilation_condition") then
+				table.insert(team.headquarters, Entity_GetID(entity))
+			end
+		end
+	end
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function DestroyHQ_OnWinConditionTriggered(match_result)
+	if Rule_Exists(DestroyHQ_CheckWinCondition) then
+		Rule_Remove(DestroyHQ_CheckWinCondition)
+	end
+end
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+-- Rule that checks whether any team has lost all of its HQ buildings
+function DestroyHQ_CheckWinCondition(context, data)
+
+	-- Trigger win condition when only one team remains with "annihilation_condition" entities
+	local remaining_teams = {}
+	for _, team in pairs(_destroy_hq.teams) do
+		for _, entity_id in pairs(team.headquarters) do
+			if Entity_IsValid(entity_id) then
+				local entity = Entity_FromID(entity_id)
+				if not World_OwnsEntity(entity) then
+					local owner = Entity_GetPlayerOwner(entity)
+					if Table_Contains(team.players, World_GetPlayerIndex(owner))
+						and Player_IsAlive(owner)
+						and Entity_IsOfType(entity, "annihilation_condition") 
+						and Entity_GetHealth(entity) > 0 
+						and Entity_GetBuildingProgress(entity) == 1 then
+						table.insert(remaining_teams, team)
+						break
+					end
+				end
+			end
+		end
+	end
+	if #remaining_teams == 1 then
+		Rule_RemoveMe()
+		local winning_team = remaining_teams[1]
+		local match_result = {
+			winners = {},
+			losers = {},
+			win_reason = WR_ANNIHILATE,
+			point_of_interest = poi,
+		}
+		for i = 1, World_GetPlayerCount() do
+			if Table_Contains(winning_team.players, i) then
+				table.insert(match_result.winners, i)
+			else
+				table.insert(match_result.losers, i)
+			end
+		end
+		Core_CallDelegateFunctions("OnWinConditionTriggered", match_result)
+	end
+end

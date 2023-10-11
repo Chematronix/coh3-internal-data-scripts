@@ -1,0 +1,238 @@
+--
+-- "Encounter Prototyping"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("anvil.scar")
+import("conditionlist.scar")
+import("actionlist.scar")
+import("playbills.scar")
+
+
+--? @group scardoc;Prefabs
+
+
+-----------------------------
+--GLOBAL VARIABLES--
+-----------------------------
+
+
+
+
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function encounterprototyping_Init(data)
+	
+	local instance = Prefab_GetInstance(data)
+	instance = instance.encounter
+	
+	if player1 == nil then
+		player1 = World_GetPlayerAt(1)
+	end
+	if player2 == nil then
+		player2 = World_GetPlayerAt(2)
+	end
+	
+	if Misc_IsCommandLineOptionSet("no_designer_ai_prefabs") == true then
+		MissionPrint("Disabling Encounter Prototyping Prefab because of command line -no_designer_ai_prefabs")
+		return
+	end
+	MissionPrint("Encounter Prototyping Prefab is Initializing")
+	
+	local enc = {}
+	
+	enc.sgroup = instance.sgroup_encounter or SGroup_CreateUnique("encounter")
+	
+	enc.units = {}
+	for i=1, #instance.units do
+		
+		local unitData = {}
+		
+		local unit = instance.units[i]
+		local spawn = unit.spawn
+		local spawnFacing = Marker_GetDirection(spawn)
+		local destination = nil
+		local destFacing = nil
+		local sgroup = unit.sgroup_unit or SGroup_CreateUnique("unit")
+		local member_loadout = unit.member_loadout
+		
+		if member_loadout <= 0 then
+			member_loadout = nil
+		end
+		
+		--unit moves or garrisons immediately
+		if unit.reposition == "SPAWN" or instance.useIdle == false then
+			
+			if unit.garrison ~= nil then
+				spawn = unit.garrison
+			else
+				destination = unit.destination
+				destFacing = Marker_GetDirection(destination)
+			end
+			
+		end
+		
+		--spawns unit
+		Util_CreateSquads(player2, sgroup, unit.sbp, spawn, destination, 1, member_loadout, false, destFacing, nil, spawnFacing)
+		
+		SGroup_AddGroup(enc.sgroup, sgroup)
+		
+		
+		--sets up data for behaviours
+		unitData.sgroup = sgroup
+		unitData.destination = unit.destination
+		unitData.garrison = unit.garrison
+		unitData.moveInCombat = unit.move_in_combat
+		unitData.reposition = unit.reposition
+		
+		if unit.reposition ~= "SPAWN" and instance.useIdle == true then
+			unitData.idlePosition = spawn
+		else
+			unitData.idlePosition = destination
+		end
+		
+		table.insert(enc.units, unitData)
+		
+	end
+	
+	if Misc_IsCommandLineOptionSet("enable_designer_ai") == false then
+		MissionPrint("Disabling Encounter Prototyping Designer AI behaviour. To enable use command line: -enable_designer_ai")
+		return
+	end
+	
+	--spawn any flares attached to this encounter
+	enc.flares = {}
+	if next(instance.flares) ~= nil then
+		
+		for i=1, #instance.flares do 
+			
+			local egroup = EGroup_CreateUnique("flare")
+			
+			Util_CreateEntities(player2, egroup, EBP.GERMAN.W_TRIP_FLARE_KETTENKRAD_GER, instance.flares[i].flare, 1)
+			table.insert(enc.flares, egroup)
+			
+		end
+		
+	end
+	
+	--put all conditions under one table to check
+	enc.conditions = instance.additionalConditions or {}
+	
+	local sightCondition = {
+		condition = "SGroupCanSee",
+		all = ANY,
+		sgroupA = enc.sgroup,
+		target_all = true,
+		player = player1,
+	}
+	table.insert(enc.conditions, sightCondition)
+	
+	local combatCondition = {
+		condition = "IsUnderAttack",
+		all = ANY,
+		sgroup = enc.sgroup,
+		time_since_last_attack = 5,
+	}
+	table.insert(enc.conditions, combatCondition)
+	
+	enc.conditions = {
+		condition = "Boolean",
+		boolean = ANY,
+		minRequired = 1,
+		subconditions = enc.conditions,
+	}
+	
+	enc.area = instance.area
+	enc.idle = instance.useIdle
+	
+	if enc.idle == true then
+		Rule_AddInterval(encounterprototyping_ManageIdle, 5, enc)
+	else
+		Rule_AddInterval(encounterprototyping_ManageCombat, 3, enc)
+	end
+	
+end
+
+
+function encounterprototyping_ManageIdle(context, data)
+	
+	if SGroup_IsAlive(data.sgroup) then
+	
+		if ConditionList_CheckList(data.conditions, context) then
+			
+			--Set up for combat
+			for i=1, #data.units do
+		
+				local unit = data.units[i]
+				
+				if unit.reposition == "COMBAT" then
+					
+					if unit.garrison ~= nil then
+						AI_LockSquads(World_GetPlayerAt(2), unit.sgroup)
+						Cmd_Garrison(unit.sgroup, unit.garrison)
+					else
+						Cmd_Move(unit.sgroup, unit.destination, false, nil, Marker_GetDirection(unit.destination))
+					end
+					
+				end
+			
+			end
+			
+			--Manage combat
+			Rule_AddInterval(encounterprototyping_ManageCombat, 3, data)
+			Rule_RemoveMe()
+			
+		end
+	
+	end
+	
+end
+
+function encounterprototyping_ManageCombat(context, data)
+	
+	local attackRadius = Marker_GetProximityRadius(data.area) + 10
+	local targetGroup = SGroup_CreateIfNotFound("sg_EncounterPrototypingTarget")
+	Player_GetAllSquadsNearMarker(player1, targetGroup, data.area, attackRadius)
+	
+	for i=1, #data.units do
+		
+		local unit = data.units[i]
+		
+		if unit.moveInCombat == true then
+			
+			if unit.garrison ~= nil then
+				
+				AI_LockSquads(World_GetPlayerAt(2), unit.sgroup)
+				Cmd_Garrison(unit.sgroup, unit.garrison)
+			
+			else			
+			
+				if SGroup_Count(targetGroup) >= 1 then
+					
+					Cmd_Attack(unit.sgroup, targetGroup)
+					
+				end
+			end
+			
+		end
+	
+	end
+	
+	if SGroup_Count(targetGroup) == 0 and SGroup_IsUnderAttack(data.sgroup, ANY, 5) == false then
+		
+		for i=1, #data.units do
+			
+			Cmd_Move(data.units[i].sgroup, data.units[i].idlePosition)
+			
+			--Rule_AddInterval(encounterprototyping_ManageIdle, 5, data)
+			--Rule_RemoveMe()
+			
+		end
+		
+	end
+	
+end

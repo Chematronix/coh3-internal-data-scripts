@@ -1,0 +1,291 @@
+----------------------------------------------------------------------------------------------------------------
+-- Engine level single player scar helper functions
+-- This is a lightweight file for utilities that depend only on the engine and don't require inits or file scar imports
+-- Higher level utils, including systems and utils that depend onother systems, go in scarutil.scar
+-- Copyright 2021 SEGA Corporation, Developed by Relic Entertainment
+
+--? @shortdesc Returns a position from entity/marker/pos/egroup/sgroup/squad
+--? @args Variable var
+--? @result Position
+function Util_GetPosition(variable)
+
+	local type = scartype(variable)
+	
+	if type == ST_ENTITY or type == ST_CONSTENTITY then
+		return Entity_GetPosition(variable)
+	elseif type == ST_MARKER then
+		return Marker_GetPosition(variable)
+	elseif type == ST_SCARPOS then
+		return World_Pos(variable.x, variable.y, variable.z) -- return copy instead of reference
+	elseif type == ST_EGROUP then
+		return EGroup_GetPosition(variable)
+	elseif type == ST_SGROUP then
+		return SGroup_GetPosition(variable)
+	elseif type == ST_SQUAD or type == ST_CONSTSQUAD then
+		return Squad_GetPosition(variable)
+	else
+		error("Util_GetPosition: unsupported type " .. scartype_tostring(variable))
+	end
+end
+
+--? @shortdesc Returns a position that is distance metres from point A, headed in the direction of point B.
+--? @extdesc You can also pass in a percentage (0.0 to 1.0) instead of a distance in metres.
+--? @result Position
+--? @args MarkerID/Pos a, MarkerID/Pos b, Real distance
+function Util_GetPositionFromAtoB(a, b, distance)
+
+	
+	-- if either a or b are markers, convert them to positions
+	if (scartype(a) == ST_MARKER) then
+		a = Marker_GetPosition(a)
+	end
+	if (scartype(b) == ST_MARKER) then
+		b = Marker_GetPosition(b)
+	end
+	
+	if scartype(a) ~= ST_SCARPOS then
+		fatal(string.format("Util_GetPositionFromAtoB: Position A invalid, is %s", scartype_tostring(a)))
+	end
+	if scartype(b) ~= ST_SCARPOS then
+		fatal(string.format("Util_GetPositionFromAtoB: Position B invalid, is %s", scartype_tostring(b)))
+	end
+	if scartype(distance) ~= ST_NUMBER then fatal("Util_GetPositionFromAtoB: No distance specified") end
+	
+	local distbetweenpoints = World_DistancePointToPoint(a, b)
+	
+	if (distbetweenpoints > 0.05) then
+		
+		-- if asked for distance in metres, work out the percentage
+		if (distance >= 1) then
+			distance = (distance / distbetweenpoints)
+		end
+		
+		local deltax = (b.x - a.x) * distance
+		local deltay = (b.y - a.y) * distance
+		local deltaz = (b.z - a.z) * distance
+		
+		return World_Pos((a.x + deltax), (a.y + deltay), (a.z + deltaz))
+		
+	end
+	
+	-- failsafe
+	print("*** WARNING in Util_GetPositionFromAtoB: Positions A and B are too close together to function properly ***")
+	return a
+	
+end
+
+--? @shortdesc Returns the direction heading from point a towards point b
+--? @result Position
+--? @args MarkerID/Pos/Squad/Entity/SGroup/EGroup a, MarkerID/Pos/Squad/Entity/SGroup/EGroup b
+function Util_GetDirectionFromAtoB(a, b)
+	
+	a = Util_GetPosition(a)
+	b = Util_GetPosition(b)
+	
+	local distance = Util_GetDistance(a, b)
+	
+	if distance == 0 then
+	
+		return World_Pos(0, 0, 1)
+				
+	else
+	
+		local deltax = (b.x - a.x) / distance
+		local deltay = (b.y - a.y) / distance
+		local deltaz = (b.z - a.z) / distance
+		
+		return World_Pos(deltax, deltay, deltaz)
+	
+	end
+	
+end
+
+--? @shortdesc Returns the distance between two objects
+--? @args entity/squad/egroup/sgroup/marker/pos Object1, entity/squad/egroup/sgroup/marker/pos Object2
+--? @result Real
+function Util_GetDistance(thing1, thing2)
+
+	local thing1Pos = Util_GetPosition(thing1)
+	local thing2Pos = Util_GetPosition(thing2)
+	
+	return World_DistancePointToPoint(thing1Pos, thing2Pos)
+	
+end
+
+
+--? @shortdesc Returns the _squared_ distance between two objects
+--? @extdesc This is much cheaper to calculate that Util_GetDistance(), and fine for when you're only comparing results against other squared distances (i.e. to find the closest item)
+--? @args entity/squad/egroup/sgroup/marker/pos Object1, entity/squad/egroup/sgroup/marker/pos Object2
+--? @result Real
+function Util_GetDistanceSquared(thing1, thing2)
+
+	local thing1Pos = Util_GetPosition(thing1)
+	local thing2Pos = Util_GetPosition(thing2)
+	
+	return World_DistanceSquaredPointToPoint(thing1Pos, thing2Pos)
+	
+end
+
+--? @shortdesc Returns the player owner for any of: entity, squad, egroup, sgroup, player. for groups, the first item is used. Returns nil for world owned or empty groups
+--? @args entity/squad/egroup/sgroup/player Object
+--? @result PlayerID
+function Util_GetPlayerOwner(thing)
+
+	local original_type = scartype_tostring(thing)
+	
+	if scartype(thing) == ST_SGROUP then
+		if SGroup_CountSpawned(thing) == 0 then
+			return nil
+		end
+		thing = SGroup_GetSpawnedSquadAt(thing, 1)
+	elseif scartype(thing) == ST_EGROUP then
+		if EGroup_CountSpawned(thing) == 0 then
+			return nil
+		end
+		thing = EGroup_GetSpawnedEntityAt(thing, 1)
+	end
+	
+	if scartype(thing) == ST_SQUAD or scartype(thing) == ST_CONSTSQUAD then
+		if World_OwnsSquad(thing) then
+			return nil
+		end
+		thing = Squad_GetPlayerOwner(thing)
+	elseif scartype(thing) == ST_ENTITY or scartype(thing) == ST_CONSTENTITY then
+		if World_OwnsEntity(thing) then
+			return nil
+		end
+		thing = Entity_GetPlayerOwner(thing)
+	end
+	
+	if scartype(thing) ~= ST_PLAYER and scartype(thing) ~= ST_CONSTPLAYER then
+		fatal("Util_GetPlayerOwner: invalid type " .. original_type)
+	end
+	
+	return thing
+	
+end
+
+
+--? @shortdesc Returns the angle (in degrees) between two items
+--? @extdesc The items must of of types that can have a direction resolved on them with Util_GetDirection()
+--? @args Marker/Pos/Entity/EGroup/Squad/SGroup item1, Marker/Pos/Entity/EGroup/Squad/SGroup item2
+--? @result Real
+function Util_GetAngleDifference(a, b)
+
+	a = Util_GetDirection(a)
+	b = Util_GetDirection(b)
+	
+	local dotProductRadians = Util_DotProductRadians(a, b)
+	return math.deg(dotProductRadians)
+	
+end
+
+--? @shortdesc Returns the result of the dot product of two items in radians
+--? @extdesc The params must be 3D vectors
+--? @args Vector vectorA, Vector vectorB
+--? @result Real
+function Util_DotProductRadians(vectorA, vectorB)	
+	
+	vectorA = Vector_Normalize(vectorA)
+	vectorB = Vector_Normalize(vectorB)
+	
+	local dot_product = (vectorA.x * vectorB.x) + (vectorA.z * vectorB.z)
+	dot_product = math.max(math.min(dot_product, 1.0), -1.0)
+	return math.acos(dot_product)
+	
+end
+
+--? @shortdesc Returns the heading of an item.
+--? @args Marker/Pos/Entity/EGroup/Squad/SGroup item
+--? @result Pos
+function Util_GetDirection(thing)
+
+	if scartype(thing) == ST_MARKER then
+		
+		return Marker_GetDirection(thing)
+		
+	elseif scartype(thing) == ST_ENTITY or scartype(thing) == ST_CONSTENTITY then
+		
+		return Entity_GetHeading(thing)
+	
+	elseif scartype(thing) == ST_EGROUP then
+		
+		if EGroup_CountSpawned(thing) >= 1 then
+			return Entity_GetHeading(EGroup_GetSpawnedEntityAt(thing, 1))
+		else
+			fatal("Util_GetDirection: EGroup is empty")
+		end
+	
+	elseif scartype(thing) == ST_SQUAD or scartype(thing) == ST_CONSTSQUAD then
+		
+		return Squad_GetHeading(thing)
+	
+	elseif scartype(thing) == ST_SGROUP then
+		
+		if SGroup_CountSpawned(thing) >= 1 then
+			return Squad_GetHeading(SGroup_GetSpawnedSquadAt(thing, 1))
+		else
+			fatal("Util_GetDirection: SGroup is empty")
+		end
+	
+	elseif scartype(thing) == ST_SCARPOS then
+		return thing
+	
+	end
+	
+	fatal("Util_GetDirection: Invalid object type - must be a Pos, Marker, Entity, Squad, EGroup or SGroup")
+
+end
+
+function Util_BindFunction(func, ...)
+	local arg = {...}
+	return function()
+		if #arg == 0 then
+			func()
+		elseif #arg == 1 then
+			func(arg[1])
+		elseif #arg == 2 then
+			func(arg[1], arg[2])
+		elseif #arg == 3 then
+			func(arg[1], arg[2], arg[3])
+		elseif #arg == 4 then
+			func(arg[1], arg[2], arg[3], arg[4])
+		elseif #arg == 5 then
+			func(arg[1], arg[2], arg[3], arg[4], arg[5])
+		elseif #arg == 6 then
+			func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6])
+		elseif #arg == 7 then
+			func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7])
+		elseif #arg == 8 then
+			func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8])
+		elseif #arg == 9 then
+			func(arg[1], arg[2], arg[3], arg[4], arg[5], arg[6], arg[7], arg[8], arg[9])
+		end
+	end
+end
+
+function Util_GetHealthMax(entityOrSquad)
+	local maxHealth = 0
+	local type = scartype(entityOrSquad)
+	if type == ST_ENTITY then
+		maxHealth = Entity_GetHealthMax(entityOrSquad)
+	elseif type == ST_SQUAD then
+		maxHealth = Squad_GetHealthMax(entityOrSquad)
+	end
+	return maxHealth
+end
+
+function Util_GetHealthPercentage(entityOrSquad)
+	local healthPercent = 0
+	local type = scartype(entityOrSquad)
+	if type == ST_ENTITY then
+		healthPercent = Entity_GetHealthPercentage(entityOrSquad)
+	elseif type == ST_SQUAD then
+		healthPercent = Squad_GetHealthPercentage(entityOrSquad, true)
+	end
+	return healthPercent
+end
+
+function Util_Clamp(value, min, max)
+	return math.min(math.max(value, min), max)
+end

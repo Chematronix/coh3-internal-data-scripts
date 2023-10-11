@@ -1,0 +1,26 @@
+--
+-- Soldier Story Names Data
+-- Generated from Articy project - Soldier Stories
+--
+-- Exported by RE\harrisp
+-- Wednesday, October 6, 2021 8:28:05 AM
+--
+-- Essence Toolkit v1.0.17 - 6 October 2021
+--
+
+g_mission_story_names = {
+    "<none>",
+    "story_msh001_pomigliano_goggles",
+}
+
+g_skirmish_story_names = {
+    "<none>",
+    "story_skr001_first_skirmish",
+    "story_skr001_wasp",
+    "story_skr201_theartist",
+}
+
+g_company_story_names = {
+    "<none>",
+}
+

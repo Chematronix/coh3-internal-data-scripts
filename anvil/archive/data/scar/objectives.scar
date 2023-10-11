@@ -1,0 +1,3115 @@
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+--
+-- OBJECTIVE FUNCTIONS
+-- Provides some wrappers to let us fire-and-forget details about objectives
+-- and bypass the internal workings.
+--
+-- (c) 2005 Relic Entertainment
+--
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- Sept 19 2017 - TEMPORARILY DISABLED Obj_CreateMusicStinger() being referenced in Objective_TriggerTitleCard() - Darwin
+
+--? @group scardoc;Objectives
+
+AT_CIRCLE			 = "icons/minimap/area_circle"
+AT_SQUARE			 = "icons/minimap/area_square"
+
+HIGHLIGHT_PRIMARY	 = {227, 235, 80}
+HIGHLIGHT_SECONDARY  = {189, 189, 189}
+
+PB_LEFT				 = 0
+PB_CENTER			 = 1
+PB_OBJ				 = 2
+
+COUNT_UP			 = 0
+COUNT_DOWN			 = 1
+
+OBJECTIVE_DISAPPEAR_TIME = 5 -- seconds
+
+-- SOUND FILES
+SOUND_MEDAL_OP		 = "ui/stingers/medal_opportunity"
+-------------------------------------------------------------------------
+
+
+
+function Objective_Init()
+
+	__Objective_PresentationLock = false -- this is set to true while it's going through a start / complete / fail / expire / update presentation sequence - other updates get queued behind
+	__Objective_UpdateQueue = {}         -- and this is the queue where pending updates reside
+	
+	__t_Objectives = {}
+	
+	Rule_AddInterval(Objective_Manager, 1)
+	
+end
+Scar_AddInit(Objective_Init)
+
+
+function __ObjectiveNothing()
+	-- this function intentionally left blank
+end
+
+
+
+
+
+
+
+----------------------------------------------
+--
+-- Function to register an objective
+--
+----------------------------------------------
+
+
+--? @shortdesc 'Registers' an objective. Wrapper function for Objective_Create with a few other features.
+--? @extdesc Includes pings as defined by the objective table created in the main scar file. You can pass in a team or player, so that the objective only applies to it.
+--? @args LuaTable objTable[, PlayerID/TeamID owner]
+--? @result ObjectiveID
+function Objective_Register(objTable, owner)
+	
+	if scartype(objTable) ~= ST_TABLE then
+		if MissionPrint ~= nil then MissionPrint("*** WARNING - objective table not valid! ***") end
+		return
+	end
+	
+	-- setup empty tables if necessary
+	if objTable.Pings == nil then objTable.Pings = {} end
+	if objTable.UIElements == nil then objTable.UIElements = {} end
+	
+	objTable.Counter = {}
+	
+	local icon = objTable.Icon
+	
+	if icon == nil then
+		-- set the icon according to the objective type
+		if objTable.Type == OT_Primary then
+			icon = IT_P_Default
+		elseif objTable.Type == OT_Secondary then
+			icon = IT_S_Default
+		elseif objTable.Type == OT_Bonus then
+			icon = IT_B_Default
+		elseif objTable.Type == OT_Information then
+			icon = ""
+		end
+	end
+	
+	local dataTemplate = objTable.DataTemplate
+	
+	if dataTemplate == nil then
+		-- set the dataTemplate according to the objective type
+		if objTable.Parent ~= nil then
+			dataTemplate = DT_SUB_OBJECTIVE -- sub objectives will always have the same dataTemplate
+		elseif objTable.Type == OT_Primary then
+			dataTemplate = DT_PRIMARY_DEFAULT
+		elseif objTable.Type == OT_Secondary then
+			dataTemplate = DT_SECONDARY_DEFAULT
+		elseif objTable.Type == OT_Bonus then
+			dataTemplate = DT_BONUS_DEFAULT
+		elseif objTable.Type == OT_Information then
+			dataTemplate = DT_INFO_DEFAULT
+		end
+	end
+	
+	-- setup cue
+	objTable.Cue = {icon = icon, sound = "General_alert"}
+	
+	objTable.bAlwaysShowTitle = false
+	objTable.bAlwaysShowHintpoints = false
+
+	if objTable.Type == nil then
+		fatal("Objective_Register: objective needs a 'Type' field! Use OT_Primary, OT_Secondary, OT_Bonus or OT_Information")
+	end
+	
+	if owner == nil then
+		
+		-- this must be single player
+		owner = Game_GetLocalPlayer()
+		
+	elseif scartype(owner) == ST_NUMBER then
+		
+		-- assign this objective to the local player on this team
+		local localplayer = Game_GetLocalPlayer()
+		if Team_IsPlayerOnTeam(localplayer, owner) then
+			owner = localplayer
+		else
+			-- if this objective was for the enemy team, then assign it to one of their players so that it doesn't show up for the local player
+			owner = Team_GetPlayers(owner)[1]
+		end
+		
+	end
+
+	-- Auto assign faction if it was not set in the objTable
+	local faction = objTable.Faction
+
+	if faction == nil then
+		faction = Player_GetRaceName(owner)
+	end
+
+	local parentID = 0;
+	if objTable.Parent ~= nil then
+		parentID = objTable.Parent.ID
+	end
+
+	--NOTE: CoH2 does not have a TacMap, and thus the 'Description' field is never used.
+	if objTable.Description == nil then
+		objTable.Description = 0
+	end
+	
+	objTable.ID = Obj_Create(owner, objTable.Title, objTable.Description or Loc_Empty(), icon, dataTemplate, faction, objTable.Type, parentID)
+	objTable.owner = owner
+	
+	objTable.playingIntelStart = false
+	
+	-- register all callbacks
+	Obj_SetObjectiveFunction(objTable.ID, FN_OnShow, __ObjectiveOnShowCallback)
+	Obj_SetObjectiveFunction(objTable.ID, FN_OnSelect, __ObjectiveOnSelectCallback)
+	if objTable.SitRep ~= nil then
+		Obj_SetObjectiveFunction(objTable.ID, FN_OnActivate, __ObjectiveOnActivateCallback)
+	end
+	Obj_SetObjectiveFunction(objTable.ID, FN_LuaTableQuery, __ObjectiveLuaTableQueryCallback)
+	
+	
+	table.insert(__t_Objectives, objTable)
+	
+	return objTable.ID
+	
+end
+
+
+
+
+
+
+
+----------------------------------------------
+--
+-- Functions to SET objective status
+--
+----------------------------------------------
+
+
+--? @shortdesc Shows an objective to the player and activates it
+--? @extdesc Includes pings and FOW as defined by the SetupUI() function. The showTitle and playIntel flags let you control whether the titlecard and Intel_Start event are played (default: true).
+--? @args LuaTable objTable[, Boolean showTitle, Boolean playIntel]
+--? @result Void
+function Objective_Start(obj, showTitleOverride, playIntel)
+
+	if Objective_IsStarted(obj) then
+		return
+	end
+	
+	-- mark the objective as "in the process of starting"
+	obj.isStarting = true
+
+	if obj.turnBased then
+		-- grab the turn that the objective was started on
+		obj.startTurn = World_GetCurrentTurn()
+	end
+	
+	-- create the update and add it to the queue
+	local showTitle = non_nil_value_or(
+		showTitleOverride,
+		non_nil_value_or(
+			obj.showStartTitle,
+			non_nil_value_or(
+				obj.showTitle,
+				true)))
+	local update = {
+		type = "Start",
+		obj = obj,
+		showTitle = showTitle,
+		playIntel = playIntel,
+	}
+	table.insert(__Objective_UpdateQueue, update)
+	
+	-- and prod the manager to make it take immediately if possible
+	__Objective_ProcessUpdateQueue()
+	
+end
+
+
+
+--? @shortdesc Completes an objective and removes it from the list (unless it is a sub-objective, in which case it is marked as complete but stays visible until the parent objective is finished)
+--? @extdesc Automatically removes any elements added with Objective_AddUIElements(). The showTitle and playIntel flags let you control whether the titlecard and Intel_Complete event are played (default: true).
+--? @args LuaTable objTable[, Boolean showTitle, Boolean playIntel]
+--? @result Void
+function Objective_Complete(obj, showTitleOverride, playIntel)
+	
+	if Objective_IsComplete(obj) then
+		return
+	end
+	
+	-- mark the objective as "in the process of completing"
+	obj.isCompleting = true
+	
+	-- create the update and add it to the queue
+	local showTitle = non_nil_value_or(
+		showTitleOverride,
+		non_nil_value_or(
+			obj.showCompletionTitle,
+			non_nil_value_or(
+				obj.showTitle,
+				true)))
+	local update = {
+		type = "Complete",
+		obj = obj,
+		showTitle = showTitle,
+		playIntel = playIntel,
+	}
+	table.insert(__Objective_UpdateQueue, update)
+	
+	-- and prod the manager to make it take immediately if possible
+	__Objective_ProcessUpdateQueue()
+	
+	-- log the time it took to complete
+	if scartype(obj.Title) == ST_NUMBER then
+		local time = Loc_FormatTime_M_S(World_GetGameTime(), true)
+		if MissionPrint ~= nil then MissionPrint("########## Objective Complete - "..Loc_ToAnsi(obj.Title).." - "..Loc_ToAnsi(time)) end
+	end
+	
+end
+
+
+--? @shortdesc Fails an objective and removes it from the list (unless it is a sub-objective, in which case it is marked as failed but stays visible until the parent objective is finished)
+--? @extdesc Automatically removes any elements added with Objective_AddUIElements(). The showTitle and playIntel flags let you control whether the titlecard and Intel_Fail event are played (default: true).
+--? @args LuaTable objTable[, Boolean showTitle, Boolean playIntel]
+--? @result Void
+function Objective_Fail(obj, showTitleOverride, playIntel)
+	
+	if Objective_IsFailed(obj) then
+		return
+	end
+	
+	-- mark the objective as "in the process of failing"
+	obj.isFailing = true
+	
+	-- create the update and add it to the queue
+	local showTitle = non_nil_value_or(
+		showTitleOverride,
+		non_nil_value_or(
+			obj.showFailureTitle,
+			non_nil_value_or(
+				obj.showTitle,
+				true)))
+	local update = {
+		type = "Fail",
+		obj = obj,
+		showTitle = showTitle,
+		playIntel = playIntel,
+	}
+	table.insert(__Objective_UpdateQueue, update)
+	 
+	-- and prod the manager to make it take immediately if possible
+	__Objective_ProcessUpdateQueue()
+	
+end
+
+
+
+--? @shortdesc Expires an objective and removes it from the list (unless it is a sub-objective, in which case it is marked as expired but stays visible until the parent objective is finished)
+--? @extdesc Automatically removes any elements added with Objective_AddUIElements(). The showTitle and playIntel flags let you control whether the titlecard and Intel_Expire event are played (default: true).
+--? @args LuaTable objTable[, Boolean showTitle, Boolean playIntel]
+--? @result Void
+function Objective_Expire(obj, showTitleOverride, playIntel)
+	
+	if Objective_IsExpired(obj) then
+		return
+	end
+	
+	obj.isExpiring = true
+	
+	local showTitle = non_nil_value_or(
+		showTitleOverride,
+		non_nil_value_or(
+			obj.showFailureTitle,
+			non_nil_value_or(
+				obj.showTitle,
+				true)))
+	local update = {
+		type = "Expire",
+		obj = obj,
+		showTitle = showTitle,
+		playIntel = playIntel,
+	}
+	table.insert(__Objective_UpdateQueue, update)
+	
+	__Objective_ProcessUpdateQueue()
+end
+
+
+
+--? @shortdesc Stops an objective that is in progress and puts it back into the waiting-to-start state
+--? @extdesc 
+--? @args LuaTable objTable
+--? @result Void
+function Objective_Stop(obj)
+
+	-- mark the objective as "in the process of stopping"
+	obj.isStopping = true
+	
+	-- create the update and add it to the queue
+	local update = {
+		type = "Stop",
+		obj = obj,
+	}
+	table.insert(__Objective_UpdateQueue, update)
+	
+	-- and prod the manager to make it take immediately if possible
+	__Objective_ProcessUpdateQueue()
+	
+end
+
+
+
+--? @shortdesc Shows or hides an objective from the UI and tactical map
+--? @args LuaTable objective_table, Boolean on/off, Boolean ShowTitle
+--? @result Void
+function Objective_Show(objTable, show, bShowTitle)
+	
+	bShowTitle = bShowTitle or false
+	
+	Obj_SetVisible(objTable.ID, show)
+	
+	if bShowTitle == true and show == true then
+		Obj_CreatePopup(objTable.ID, objTable.Title)
+	end
+	
+end
+
+
+--? @shortdesc Updates the title and description for the objective. If you only want to set one of them, pass in nil for the other
+--? @extdesc Use the immediate flag to make this change happen immediately, bypassing the queue that objective updates normally sit in (i.e. you're updating the objective's title in the middle of its PreStart() function!)
+--? @args LuaTable objTable, LocString new_title, LocString new_description[, Boolean showTitle, Boolean immediate]
+--? @result Void
+function Objective_UpdateText(objTable, new_title, new_description, showTitle, immediate)
+	
+	immediate = immediate or false
+	
+	-- create the update
+	local update = {
+		type = "Update",
+		obj = objTable,
+		new_title = new_title,
+		new_description = new_description,
+		showTitle = showTitle,
+	}
+	
+	if immediate == false then
+		
+		-- add it to the queue and prod the manager to make it take immediately if possible
+		table.insert(__Objective_UpdateQueue, update)
+		__Objective_ProcessUpdateQueue()
+		
+	else
+		
+		-- bypass the queue, just update the objective titles immediately
+		__Objective_UpdateObjectiveList(update)
+		
+	end
+	
+end
+
+
+--? @args none
+--? @shortdesc ONLY CALL THIS FROM INSIDE AN OBJECTIVE'S INTEL START / COMPLETE / FAIL / EXPIRE EVENT. The objective titlecard will present itself at this point inside the event.
+--? @extdesc If you omit this call, the titlecard will appear at the end of the event by default. You also do not have to wrap this with CTRL and WAIT stuff - it does all of the internally.
+function Objective_TriggerTitleCard()
+	
+	if __ObjectiveSpeechEvent_hasPlayedTitlecard == false then
+		
+		__Objective_UpdateObjectiveList()
+		
+		if __ObjectiveSpeechData.showTitle == true then	-- and Event_IsBeingSkipped() == false 
+			
+			Obj_CreatePopup( __ObjectiveSpeechData.obj.ID, __Objective_GetTitleCardText(__ObjectiveSpeechData)) -- trigger the popup...
+			--Obj_CreateMusicStinger() -- temporarily turning this off because sounds aren't in properly		-- ...and the music
+			Play_SFX_ObjectiveStart()
+			
+			CTRL.Event_Delay(5)
+			CTRL.WAIT()
+			
+		end
+		
+		__ObjectiveSpeechEvent_hasPlayedTitlecard = true
+		
+	end
+	
+end
+
+
+
+function Obj_CreateMusicStinger()
+	
+	local data = __ObjectiveSpeechData
+	local obj = data.obj
+	
+	if obj.Type == OT_Primary then
+		
+		if data.type == "Start" or data.type == "Update" then
+			Music_PlayStinger(MUS_STING_PRIMARY_OBJ_START)
+		elseif data.type == "Complete"  then
+			Music_PlayStinger(MUS_STING_PRIMARY_OBJ_COMPLETE)
+		elseif data.type == "Fail" then
+			Music_PlayStinger(MUS_STING_PRIMARY_OBJ_FAIL)
+		elseif data.type == "Expire" then
+			Music_PlayStinger(MUS_STING_PRIMARY_OBJ_EXPIRE)
+		end
+		
+	elseif obj.Type == OT_Bonus then
+		
+		if data.type == "Start" or data.type == "Update" then
+			Music_PlayStinger(MUS_STING_BONUS_OBJ_START)
+		elseif data.type == "Complete"  then
+			Music_PlayStinger(MUS_STING_BONUS_OBJ_COMPLETE)
+		elseif data.type == "Fail" then
+			Music_PlayStinger(MUS_STING_BONUS_OBJ_FAIL)
+		elseif data.type == "Expire" then
+			Music_PlayStinger(MUS_STING_BONUS_OBJ_EXPIRE)
+		end
+		
+	elseif obj.Type == OT_Warning then
+		
+		if data.type == "Start" or data.type == "Update" then
+			Music_PlayStinger(MUS_STING_WARN_OBJ_START)
+		elseif data.type == "Complete"  then
+			-- nothing
+		elseif data.type == "Fail" then
+			Music_PlayStinger(MUS_STING_WARN_OBJ_FAIL)
+		elseif data.type == "Expire" then
+			Music_PlayStinger(MUS_STING_WARN_OBJ_EXPIRE)
+		end
+		
+	end
+	
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+----------------------------------------------
+--
+-- Functions to GET objective status
+--
+----------------------------------------------
+
+
+--? @shortdesc Returns whether an objective is complete or in the process of completing if fullyComplete is false
+--? @extdesc fullyComplete when true will not consider an objective that is in the process of completing (
+--? e.g. playing complete intel) to be complete
+--? @args LuaTable objTable, Boolean fullyComplete
+--? @result Boolean
+function Objective_IsComplete(objTable, fullyComplete)
+	
+	if fullyComplete then
+		return Obj_GetState(objTable.ID) == OS_Complete and (not objTable.isCompleting)
+	else
+		return Obj_GetState(objTable.ID) == OS_Complete or objTable.isCompleting == true
+	end
+
+end
+
+--? @shortdesc Returns whether an objective is failed
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsFailed(objTable)
+
+	if not Objective_IsExpired(objTable) and (Obj_GetState(objTable.ID) == OS_Failed or objTable.isFailing == true) then
+		return true
+	else
+		return false
+	end
+	
+end
+
+--? @shortdesc Returns whether an objective is expired
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsExpired(objTable)
+
+	if objTable.doneExpiring or objTable.isExpiring == true then
+		return true
+	else
+		return false
+	end
+	
+end
+
+--? @shortdesc Is the objective started and not finished or failed.
+--? @args  LuaTable objTable
+--? @result  Boolean
+function Objective_IsActive(objTable)
+	return Objective_IsStarted(objTable) and (not Objective_IsFailed(objTable)) and (not Objective_IsExpired(objTable)) and (not Objective_IsComplete(objTable))
+end
+
+--? @shortdesc Returns whether an objective has been started. Completed and failed / expired objectives will also return true.
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsStarted(objTable)
+
+	if objTable.started == true or objTable.isStarting == true then
+		return true
+	else
+		return false
+	end
+	
+end
+
+--? @shortdesc Returns whether the current turn has surpassed the objective's turn expiry duration in the TBS
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_TurnsExpired(objTable)
+	
+	-- exit early if the objective does not expire
+	if not objTable.expires_after_turns then
+		return false
+	end
+	
+	local expiryTurns = objTable.expiry_turns
+	local expiryInitialTurn = objTable.startTurn
+	
+	return World_GetCurrentTurn() - expiryInitialTurn >= expiryTurns
+	
+end
+
+--? @shortdesc Returns whether an objective is visible or not.
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsVisible(objTable)
+
+	if Obj_GetVisible(objTable.ID) == true then
+		return true
+	else
+		return false
+	end
+	
+end
+
+--? @shortdesc Returns whether an objective is off
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsOff(objTable)
+
+	if Obj_GetState(objTable.ID) == OS_Off then
+		return true
+	else
+		return false
+	end
+	
+end
+
+--? @shortdesc Returns whether all primary objectives have been completed.
+--? @args none
+--? @result Boolean
+function Objective_AreAllPrimaryObjectivesComplete()
+
+	local bAnyPrimaryObjectives = false
+	
+	for k, v in pairs(__t_Objectives) do
+		
+		if v.Type == OT_Primary then
+			
+			bAnyPrimaryObjectives = true
+			if not Objective_IsComplete(v) then
+				return false
+			end
+			
+		end
+		
+	end
+	
+	-- if there were not any primary objectives found, then treat it as not all of them being completed
+	return bAnyPrimaryObjectives
+	
+end
+
+
+
+
+--? @shortdesc Returns a table of all sub-objectives of the given objective
+--? @args LuaTable objTable
+--? @result LuaTable subobjectives
+function Objective_GetSubObjectives(objTable)
+
+	-- Subobjectives go in here
+	local results = {}
+	-- Check each objective, looking for subobjectives of the argument and adding them
+	for index, objective in pairs(__t_Objectives) do
+		-- Sometimes parentage isn't correctly stored in the .Parent property, for complex reasons, so let's double-check through the recipe
+		if objective.Parent == objTable or (scartype(objTable.Recipe) == ST_TABLE and scartype(objective.Recipe) == ST_TABLE and objTable.Recipe.descriptor == objective.Recipe.parent) then 
+			table.insert(results, objective)
+		end
+	end
+	-- Return whatever we found
+	return results
+	
+end
+
+--? @shortdesc Returns whether ALL or ANY sub-objectives of the given objective are complete
+--? @args LuaTable objTable, Boolean all
+--? @result Boolean
+function Objective_AreSubObjectivesComplete(objTable, all)
+
+	-- check each subobjective, looking for exceptions to the default result and early-out if you find one
+	for index, objective in pairs(__t_Objectives) do 
+		if objective.Parent == objTable then 
+			
+			if all == ALL and Objective_IsComplete(objective) == false then 
+				return false 
+			elseif all == ANY and Objective_IsComplete(objective) == true then
+				return true 
+			end
+			
+		end
+	end
+	
+	-- no exception was found that contradicted the default result so return that default (true for ALL, false for ANY)
+	return all
+	
+end
+
+--? @shortdesc Returns whether ALL or ANY sub-objectives of the given objective are failed
+--? @args LuaTable objTable, Boolean all
+--? @result Boolean
+function Objective_AreSubObjectivesFailed(objTable, all)
+
+	-- check each subobjective, looking for exceptions to the default result and early-out if you find one
+	for index, objective in pairs(__t_Objectives) do 
+		if objective.Parent == objTable then 
+			
+			if all == ALL and Objective_IsFailed(objective) == false then 
+				return false 
+			elseif all == ANY and Objective_IsFailed(objective) == true then
+				return true 
+			end
+			
+		end
+	end
+	
+	-- no exception was found that contradicted the default result so return that default (true for ALL, false for ANY)
+	return all
+	
+end
+	
+--? @shortdesc Returns whether ALL or ANY sub-objectives of the given objective are expired
+--? @args LuaTable objTable, Boolean all
+--? @result Boolean
+function Objective_AreSubObjectivesExpired(objTable, all)
+
+	-- check each subobjective, looking for exceptions to the default result and early-out if you find one
+	for index, objective in pairs(__t_Objectives) do 
+		if objective.Parent == objTable then 
+			
+			if all == ALL and Objective_IsExpired(objective) == false then 
+				return false 
+			elseif all == ANY and Objective_IsExpired(objective) == true then
+				return true 
+			end
+			
+		end
+	end
+	
+	-- no exception was found that contradicted the default result so return that default (true for ALL, false for ANY)
+	return all
+	
+end
+
+
+
+
+
+
+
+
+-----------------------------------------
+--
+-- UI elements - pings, highlights, etc
+--
+-----------------------------------------
+
+--? @shortdesc Toggles minimap blips on or off.
+--? @args LuaTable objective_table, Boolean on/off	
+--? @result Void
+function Objective_TogglePings( objTable, boolean )
+
+	__ShowObjectiveBlips(objTable, boolean)
+
+end
+
+--? @shortdesc Adds a map highlight around a specific point
+--? @extdesc AreaType is AT_CIRCLE (the default) or AT_SQUARE. Color is a table with three values for red, green and blue - i.e. {255, 0, 0}.
+--? @args LuaTable objTable, Marker/Position/Group pos[, AreaType areatype, Real scale, Table color, Real alpha]
+--? @result ElementID
+function Objective_AddAreaHighlight(objTable, pos, areaType, scale, colour, alpha)
+	
+	if World_IsMultiplayerGame() and Game_GetLocalPlayer() ~= objTable.owner then
+		return -1
+	end
+	
+	if Player_GetTeam(Game_GetLocalPlayer()) ~= Player_GetTeam(objTable.owner) then
+		return -1
+	end
+	
+	if scartype(pos) ~= ST_SCARPOS then
+		pos = Util_GetPosition(pos)
+	end
+	
+	if areaType == nil then
+		areaType = AT_CIRCLE
+	end
+	
+	if scale == nil then
+		if scartype(pos) == ST_MARKER then
+			scale = Marker_GetProximityRadiusOrDefault(pos, 75)
+		else
+			scale = 75
+		end
+	end
+	
+	if colour == nil then
+		colour = HIGHLIGHT_PRIMARY
+	elseif scartype(colour) ~= ST_TABLE then
+		fatal("Objective_AddAreaHighlight - colour must be table!")
+	end
+	
+	if alpha == nil then
+		alpha = 255
+	end
+	
+	local colour_r = colour[1]
+	local colour_g = colour[2]
+	local colour_b = colour[3]
+	
+	local elementTable = {}
+	elementTable.AreaHighlightID = MapIcon_CreatePosition(pos, areaType, scale, colour_r, colour_g, colour_b, alpha)
+	
+	-- give this group an ID so it can be removed
+	if objTable.NextElementID == nil then
+		objTable.NextElementID = 1
+	end
+	
+	elementTable.ElementID = objTable.NextElementID
+	objTable.NextElementID = objTable.NextElementID + 1
+	
+	table.insert(objTable.UIElements, elementTable)
+	
+	return elementTable.ElementID
+	
+end
+
+--? @shortdesc Adds multiple UI elements on one position. 
+--? @extdesc pos (the target) can be group/entity/squad/marker. 
+--?          worldArrow adds a 3D arrow which points to the target in the world. 
+--?          hintpointText adds a hint point that appears when the target is moused over. 
+--?          If you're adding an arrow or a hintpoint, the target will be among those potentially pointed to by the 2D HUD arrow. 
+--?          objectiveArrowOffset is an offset applied to the arrow's position (you can specify a height offset or a 3D position offset). 
+--?          pingRadius adds a circular area of that radius to the minimap ping.
+--?          reticuleRadius adds a circular reticule (ground overlay) of that radius.
+--? @args LuaTable objTable, Position pos[, Boolean ping, LocString hintpointText, Boolean worldArrow, Float/Position objectiveArrowOffset, Entity/Squad/Position objectiveArrowFacing, HintPointActionType actionType, String iconName, String template, String elementID, Float pingRadius, Float reticuleRadius]
+--? @result ElementID
+function Objective_AddUIElements(objTable, pos, ping, hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, elementID, pingRadius, reticuleRadius)
+
+	if World_IsMultiplayerGame() and Game_GetLocalPlayer() ~= objTable.owner then
+		return -1
+	end
+	
+	if Player_GetTeam(Game_GetLocalPlayer()) ~= Player_GetTeam(objTable.owner) then
+		return -1
+	end
+	
+	if pos == nil then
+		fatal("Objective_AddUIElements: 'pos' is nil!")
+	end
+	
+	ping = ping or false
+	
+	worldArrow = worldArrow or false
+	
+	if scartype(objectiveArrowOffset) == ST_BOOLEAN then
+		fatal("Objective_AddUIElements: Arrow Offset variable (6th value) must be a number or position")
+	end
+	
+	-- set default arrow offset
+	if objectiveArrowOffset == nil then 
+		if (scartype(pos) == ST_SGROUP and World_OwnsSGroup(pos, ANY) == false) or (scartype(pos) == ST_SQUAD and World_OwnsSquad(pos) == false) then
+			objectiveArrowOffset = 3
+		else
+			objectiveArrowOffset = 0
+		end
+	end
+	
+	-- turn height offset into 3d offset
+	if scartype(objectiveArrowOffset) == ST_NUMBER then
+		objectiveArrowOffset = World_Pos(0, objectiveArrowOffset, 0)
+	end
+	
+	--Default actionType set to Objective.
+	if actionType == nil then
+		if objTable.Type == OT_Primary then
+			actionType = HPAT_Objective
+		elseif objTable.Type == OT_Bonus then
+			actionType = HPAT_Bonus
+		else
+			actionType = HPAT_Objective
+		end
+	end
+	
+	--Default icon set
+	if iconName == nil then
+		-- set the icon according to the objective type
+		if objTable.Type == OT_Primary then
+			iconName = IT_P_Default
+		elseif objTable.Type == OT_Secondary then
+			iconName = IT_S_Default
+		elseif objTable.Type == OT_Bonus then
+			iconName = IT_B_Default
+		elseif objTable.Type == OT_Information then
+			iconName = ""
+		end
+	end
+	
+	-- Default ui template
+	template = template or ""
+	
+	if elementID ~= nil then
+		
+		if scartype(elementID) ~= ST_STRING then
+			error("elementID passed is not a string type")
+		end
+		
+		if objTable.ElementsStr ~= nil and Table_Contains(objTable.ElementsStr, elementID) then
+			-- Duplicate UI elements IDs. Don't bother adding another element
+			return elementID
+		end
+		
+	end
+
+	if scartype(reticuleRadius) ~= ST_NUMBER or reticuleRadius <= 0 then
+		reticuleRadius = false
+	end
+
+	-- Default reticule blueprint
+	local reticuleBP = nil
+	if reticuleRadius ~= false then
+		if template == DT_PRIMARY_DEFAULT then
+			reticuleBP = RETICULE_P_DEFAULT
+		elseif template == DT_SECONDARY_DEFAULT then
+			reticuleBP = RETICULE_S_DEFAULT
+		elseif template == DT_BONUS_DEFAULT then
+			reticuleBP = RETICULE_B_DEFAULT
+		elseif template == DT_INFO_DEFAULT then
+			reticuleBP = RETICULE_I_DEFAULT
+		elseif template == DT_THREAT_GROUP_DEFAULT then
+			reticuleBP = RETICULE_TG_DEFAULT
+		elseif template == DT_OBJECTIVE_MARKER then
+			reticuleBP = RETICULE_S_DEFAULT
+		elseif template == DT_TUTORIAL_DEFAULT then
+			reticuleBP = RETICULE_S_DEFAULT
+		end
+	end
+	if reticuleBP ~= nil and scartype(reticuleBP) ~= ST_PBG then
+		reticuleBP = BP_GetReticuleBlueprint(reticuleBP)
+	end
+	
+	local elementTable = {}
+	
+	-- highlight this in the world?
+	elementTable.HighlightedEntities = {} -- stores { eid, hintid }
+	elementTable.HighlightedSquads = {} -- stores { sid, hintid }
+	elementTable.HighlightedPositions = {} -- stores { pos, hintid }
+	
+	local posType = scartype(pos)
+	if posType == ST_ENTITY then
+		
+		__HighlightEntity(objTable, elementTable, pos, hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+		
+	elseif posType == ST_SQUAD then
+		
+		__HighlightSquad(objTable, elementTable, pos, hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+		
+	elseif posType == ST_EGROUP then
+		
+		local _HighlightOneEntity = function(gid, idx, eid)
+			__HighlightEntity(objTable, elementTable, eid, hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+		end
+		EGroup_ForEachEx(pos, _HighlightOneEntity, true, false)
+		
+	elseif posType == ST_SGROUP then
+		
+		local _HighlightOneSquad = function(gid, idx, sid)
+			__HighlightSquad(objTable, elementTable, sid, hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+		end
+		SGroup_ForEachEx(pos, _HighlightOneSquad, true, false)
+		
+	elseif posType == ST_MARKER then
+		
+		-- GTA style "cone of light" ?
+		__HighlightPosition(objTable, elementTable, Marker_GetPosition(pos), hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+		
+	elseif posType == ST_SCARPOS then
+		
+		-- ???
+		__HighlightPosition(objTable, elementTable, pos, hintpointText, worldArrow, objectiveArrowOffset, objectiveArrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+		
+	end
+	
+	-- give this group an ID so it can be removed
+	
+	-- an ID can be passed as an argument
+	if elementID ~= nil then
+		
+		elementTable.ElementID = elementID
+		
+	-- if not passed, it can be generated
+	else
+		
+		if objTable.NextElementID == nil then
+			
+			-- initialize the id to 1
+			objTable.NextElementID = 1
+			
+		end
+		
+		-- convert the element id to string
+		elementTable.ElementID = tostring(objTable.NextElementID)
+		
+		while true do
+			
+			-- check if the element id exists in the table already, if it does increment by 1 and check again
+			if objTable.ElementsStr ~= nil and Table_Contains(objTable.ElementsStr, elementTable.ElementID) then
+				
+				objTable.NextElementID = objTable.NextElementID + 1
+				
+				elementTable.ElementID = tostring(objTable.NextElementID)
+				
+			-- if it does not exist, then it is unique, exit the increment loop
+			else
+				
+				break
+				
+			end
+			
+		end
+		
+		-- set the next element id
+		objTable.NextElementID = objTable.NextElementID + 1
+		
+	end
+	
+	objTable.ElementsStr = objTable.ElementsStr or {}
+	
+	objTable.ElementsStr[#objTable.ElementsStr + 1] = elementTable.ElementID
+	
+	table.insert(objTable.UIElements, elementTable)
+	
+	return elementTable.ElementID
+	
+end
+
+--? @shortdesc Removes a group of UI elements that were added by Objective_AddUIElements
+--? @args LuaTable objTable, Integer elementID
+--? @result Void
+function Objective_RemoveUIElements(objTable, elementID)
+
+	if objTable.UIElements == nil or (#objTable.UIElements) == 0 then
+		return false
+	end
+	
+	for i = (#objTable.UIElements), 1, -1 do
+		
+		local v = objTable.UIElements[i]
+			if v.ElementID == elementID then
+			
+				-- remove world highlights
+				if scartype(v.HighlightedEntities) == ST_TABLE then
+					for j = 1, (#v.HighlightedEntities) do
+						
+						local entityid = v.HighlightedEntities[j].eid
+						if Entity_IsValid(entityid) then
+							local entity = Entity_FromID(entityid)
+							Obj_HighlightEntity(objTable.ID, entity, false)
+						end
+						
+						local hintid = v.HighlightedEntities[j].hintid
+						if hintid ~= nil then
+							HintPoint_Remove(hintid)
+						end
+						local pingid = v.HighlightedEntities[j].pingid
+						if pingid ~= nil then
+							Objective_RemovePing(objTable, pingid)
+						end
+						local reticuleID = v.HighlightedEntities[j].reticuleID
+						if reticuleID ~= nil then
+							UI_DestroyReticule(reticuleID)
+						end
+
+					end
+				end
+				
+				if scartype(v.HighlightedSquads) == ST_TABLE then
+					for j = 1, (#v.HighlightedSquads) do
+						
+						local squadid = v.HighlightedSquads[j].sid
+						if Squad_IsValid(squadid) then
+							local squad = Squad_FromID(squadid)
+							if Squad_Count(squad) > 0 then
+								Obj_HighlightSquad(objTable.ID, squad, false)
+							end
+						end
+						
+						local hintid = v.HighlightedSquads[j].hintid
+						if hintid ~= nil then
+							HintPoint_Remove(hintid)
+						end
+						local pingid = v.HighlightedSquads[j].pingid
+						if pingid ~= nil then
+							Objective_RemovePing(objTable, pingid)
+						end
+						local reticuleID = v.HighlightedSquads[j].reticuleID
+						if reticuleID ~= nil then
+							UI_DestroyReticule(reticuleID)
+						end
+						
+					end
+				end
+				
+				if scartype(v.HighlightedPositions) == ST_TABLE then
+					for j = 1, (#v.HighlightedPositions) do
+						
+						local pos = v.HighlightedPositions[j].pos
+						Obj_HighlightPosition(objTable.ID, pos, false)
+						
+						local hintid = v.HighlightedPositions[j].hintid
+						if hintid ~= nil then
+							HintPoint_Remove(hintid)
+						end
+						local pingid = v.HighlightedPositions[j].pingid
+						if pingid ~= nil then
+							Objective_RemovePing(objTable, pingid)
+						end
+						local reticuleID = v.HighlightedPositions[j].reticuleID
+						if reticuleID ~= nil then
+							UI_DestroyReticule(reticuleID)
+						end
+						
+						local entityid = v.HighlightedPositions[j].entityid
+						if entityid ~= nil then
+							if Entity_IsValid(entityid) then
+								entityid = Entity_FromID(entityid)
+								Entity_Destroy(entityid)
+							end
+						end
+						
+					end
+				end
+				
+				if v.AreaHighlightID ~= nil then
+					MapIcon_Destroy(v.AreaHighlightID)
+				end
+				
+				-- forget all about it
+				table.remove(objTable.UIElements, i)
+				Table_RemoveFirstItem(objTable.ElementsStr, v.ElementID)
+				return true
+				
+			end
+		
+	end
+	
+	return false
+	
+end
+
+
+
+
+--? @shortdesc Bring attention to some UI elements by blinking them. This causes the hintpoint and the off-screen arrow to blink, but leaves the minimap ping and other elements constant.
+--? @args LuaTable objTable, Integer elementID
+--? @result Void
+function Objective_BlinkUIElements(objTable, elementID)
+
+	local data = {
+		objTable = objTable,
+		elementID = elementID,
+	}
+	
+	-- flash the hintpoint / minimap ping (by turning it off and on again, IT crowd style!)
+	local delay = 0
+	for count = 1, 6 do
+		Rule_AddOneShot(__Objective_BlinkUIElements_Off, delay + 0.375, data)
+		Rule_AddOneShot(__Objective_BlinkUIElements_On, delay + 0.75, data)
+		delay = delay + 0.75
+	end
+
+end
+function __Objective_BlinkUIElements_Off(context, data)
+	
+	local objTable = data.objTable
+	local elementID = data.elementID
+	
+	if objTable.UIElements == nil then
+		return
+	end
+	
+	for index, element in pairs(objTable.UIElements) do
+		if element.ElementID == elementID then
+			
+			if scartype(element.HighlightedEntities) == ST_TABLE then
+				for idx, entity in pairs(element.HighlightedEntities) do
+					if entity.hintid ~= nil then
+						HintPoint_Remove(entity.hintid)
+						entity.hintid = nil
+					end
+				end
+			end
+			
+			if scartype(element.HighlightedSquads) == ST_TABLE then
+				for idx, squad in pairs(element.HighlightedSquads) do
+					if squad.hintid ~= nil then
+						HintPoint_Remove(squad.hintid)
+						squad.hintid = nil
+					end
+				end
+			end
+			
+			if scartype(element.HighlightedPositions) == ST_TABLE then
+				for idx, position in pairs(element.HighlightedPositions) do
+					if position.hintid ~= nil then
+						HintPoint_Remove(position.hintid)
+						position.hintid = nil
+					end
+				end
+			end
+			
+		end
+	end
+	
+	
+end
+function __Objective_BlinkUIElements_On(context, data)
+	
+	local objTable = data.objTable
+	local elementID = data.elementID
+	
+	if objTable.UIElements == nil then
+		return
+	end
+	
+	for index, element in pairs(objTable.UIElements) do
+		if element.ElementID == elementID then
+			
+			if scartype(element.HighlightedEntities) == ST_TABLE then
+				for idx, entity in pairs(element.HighlightedEntities) do
+					if Entity_IsValid(entity.eid) then
+						entity.hintid = HintPoint_AddToEntity(Entity_FromID(entity.eid), 1, entity.hintpoint ~= false, __ObjectiveNothing, entity.hintpoint or 0, entity.arrow, entity.arrowOffset, objTable.ID, entity.actionType, entity.iconName, true)
+					end
+				end
+			end
+				
+			if scartype(element.HighlightedSquads) == ST_TABLE then
+				for idx, squad in pairs(element.HighlightedSquads) do
+					if Squad_IsValid(squad.sid) then
+						squad.hintid = HintPoint_AddToSquad(Squad_FromID(squad.sid), 1, squad.hintpoint ~= false, __ObjectiveNothing, squad.hintpoint or 0, squad.arrow, squad.arrowOffset, objTable.ID, squad.actionType, squad.iconName, true)
+					end
+				end
+			end
+			
+			if scartype(element.HighlightedPositions) == ST_TABLE then
+				for idx, position in pairs(element.HighlightedPositions) do
+					position.hintid = HintPoint_AddToPosition(position.pos, 1, position.hintpoint ~= false, __ObjectiveNothing, position.hintpoint or 0, position.arrow, position.arrowOffset, objTable.ID, position.actionType, position.iconName, true)
+				end
+			end
+			
+			
+		end
+	end
+	
+end
+
+
+
+
+--? @shortdesc Adds a tactical map ping to an objective
+--? @extdesc pingRadius will associate a circle area of that radius with this minimap blip
+--? @result PingID
+--? @args LuaTable objectiveTable, Position pos, Float pingRadius
+function Objective_AddPing(objTable, pos, datatemplate, pingRadius)
+	
+	if World_IsMultiplayerGame() and Game_GetLocalPlayer() ~= objTable.owner then
+		return -1
+	end
+	
+	if Player_GetTeam(Game_GetLocalPlayer()) ~= Player_GetTeam(objTable.owner) then
+		return -1
+	end
+	
+	-- convert entities and squads to groups so that their death does not access invalid objects
+	local type = scartype(pos)
+	
+	-- If pos is an entity, and the entity is part of a squad, treat it as a squad
+	if type == ST_ENTITY and Entity_IsPartOfSquad(pos) then
+		local squad = Entity_GetSquad(pos)
+		groupcaller = __GetGroupCaller(squad)
+		local group = groupcaller.CreateIfNotFound("sg_temp_OBJ_" .. objTable.ID .. "_" .. groupcaller.GetID(squad))
+		groupcaller.ClearItems(group)
+		groupcaller.AddItem(group, squad)
+		pos = group
+	elseif type == ST_ENTITY or type == ST_SQUAD then
+		local groupcaller = __GetGroupCaller(pos)
+		local group = groupcaller.CreateIfNotFound("eg_temp_OBJ_" .. objTable.ID .. "_" .. groupcaller.GetID(pos))
+		groupcaller.ClearItems(group)
+		groupcaller.AddItem(group, pos)
+		pos = group
+	end
+	
+	local newPing = { pos = pos, radius = pingRadius }
+	table.insert(objTable.Pings, newPing)
+	
+	-- show it on minimap right away
+	__ShowSingleBlip(objTable, newPing, true, datatemplate)
+	
+	return newPing.BlipID
+end
+
+--? @shortdesc Removes a tactical map ping from an objective
+--? @result Void
+--? @args LuaTable objectiveTable, Integer PingID
+function Objective_RemovePing(objTable, pingID)
+
+	-- delete the minimap blip too
+	-- uhhh, BlipID is stored in the same table entry as the PingID, so we must find it manually in order to retrieve the BlipID
+
+	for i = 1, (#objTable.Pings) do
+		
+		-- find the entry for the ping, and it will have the blip ID as well
+		local entry = objTable.Pings[i]
+		if entry.BlipID ~= nil and entry.BlipID == pingID then
+			
+			UI_DeleteMinimapBlip(entry.BlipID)
+			table.remove(objTable.Pings, i)
+			break
+			
+		end
+	end
+	
+end
+
+--? @shortdesc Adds a Healthbar tied to a squad or entity at a location.  Will update the health bar as the unit's health fluctuates.  Can be removed with Objective_RemoveHealthBar or completing/failing the objective
+--? @args LuaTable objTable, Integer barIndex, Squad/SGroup/Entity/EGroup group, String/LocID name [, Boolean onlyWhenDamaged, Real max_health, String weigh_equally]
+--? @result ElementIDs
+function Objective_AddHealthBar(objTable, barIndex, group, name, onlyWhenDamaged, max_health, weigh_equally)
+	local __Objective_healthBar_storedTotal = 0
+	local __Objective_healthBar_target = nil
+	local __Objective_healthBar_targetType = nil
+	
+	if onlyWhenDamaged == nil then
+		onlyWhenDamaged = false
+	end
+	
+	-- Store the group as the target
+	__Objective_healthBar_target = group
+	
+	-- Store as a 32bit id (safer for checking)
+	-- Also set targetType to appropriate scartype
+
+	if scartype(__Objective_healthBar_target) == ST_STRING then
+		__Objective_healthBar_targetType = ST_STRING
+	elseif scartype(__Objective_healthBar_target) == ST_SGROUP then
+		__Objective_healthBar_targetType = ST_SGROUP
+	elseif scartype(__Objective_healthBar_target) == ST_EGROUP then
+		__Objective_healthBar_targetType = ST_EGROUP
+	elseif scartype(__Objective_healthBar_target) == ST_TABLE then
+		__Objective_healthBar_targetType = ST_TABLE
+	end
+	
+	-- Store the target's max health
+	if __Objective_healthBar_targetType == ST_STRING then
+		__Objective_healthBar_storedTotal = max_health
+	elseif __Objective_healthBar_targetType == ST_SGROUP or __Objective_healthBar_targetType == ST_EGROUP then
+		__Objective_healthBar_storedTotal = __objective_getGroupHealthMax(__Objective_healthBar_target, weigh_equally)
+	elseif __Objective_healthBar_targetType == ST_TABLE then
+		__Objective_healthBar_storedTotal = 0
+		for i=1, #__Objective_healthBar_target do
+			local groupHealth = __objective_getGroupHealthMax(__Objective_healthBar_target[i], weigh_equally)
+			__Objective_healthBar_storedTotal = __Objective_healthBar_storedTotal + groupHealth
+		end
+	end
+	
+	-- Store the health bar data in the obj table
+	if scartype(objTable.healthBarTable) == ST_NIL then
+		objTable.healthBarTable = {}
+	end
+	
+	-- Check if there's an active health bar at the index.  If there is, disable it
+	for k,v in pairs(objTable.healthBarTable) do
+		if v._barIndex == barIndex then
+			v._active = false
+		end
+	end
+	
+	local t = {
+		_targetID = __Objective_healthBar_target,
+		_targetType = __Objective_healthBar_targetType,
+		_storedTotal = __Objective_healthBar_storedTotal,
+		_weighEqually = weigh_equally,
+		_objTable = objTable,
+		_barIndex = barIndex,
+		_name = name,
+		_active = true,
+		_onlyWhenDamaged = onlyWhenDamaged,
+	}
+	
+	ruleID = Rule_Add(__Objective_updateHealthBar, t)
+	
+	t._ruleID = ruleID
+	
+	table.insert(objTable.healthBarTable, t)
+	
+	return t._ruleID
+	
+end
+
+--? @shortdesc Adds a Timer bar for objective timers.  Can be removed with Objective_RemoveTimerBar or completing/failing the objective
+--? @extdesc Requires an Objective_StartTimer to work.
+--? @args LuaTable objTable, Integer barIndex, String/LocID text
+--? @result ElementID
+function Objective_AddTimerBar(objTable, barIndex, text)
+	
+	-- Store the timer bar data in the obj table
+	if scartype(objTable.timerBarTable) == ST_NIL then
+		objTable.timerBarTable = {}
+	end
+	
+	-- Check if there's an active timer bar at the index.  If there is, disable it
+	for k,v in pairs(objTable.timerBarTable) do
+		if v._barIndex == barIndex then
+			v._active = false
+		end
+	end
+	
+	local t = {
+		_objTable = objTable,
+		_barIndex = barIndex,
+		_text = text,
+		_active = true,
+	}
+	
+	ruleID = Rule_Add(__Objective_updateTimerBar, t)
+	
+	t._ruleID = ruleID
+	
+	table.insert(objTable.timerBarTable, t)
+	
+	return t._ruleID
+	
+end
+
+--? @shortdesc Removes a health bar monitor
+--? @result Void
+--? @args LuaTable objectiveTable, Element healthBarID
+function Objective_RemoveHealthBar(objTable, index)
+	
+	for k,v in pairs(objTable.healthBarTable) do
+		if v._barIndex == index then
+			v._active = false
+		end
+	end
+	
+end
+
+--? @shortdesc Removes a timer bar monitor
+--? @result Void
+--? @args LuaTable objectiveTable, Element timerBarID
+function Objective_RemoveTimerBar(objTable, index)
+	
+	for k,v in pairs(objTable.timerBarTable) do
+		if v._barIndex == index then
+			v._active = false
+		end
+	end
+	
+end
+
+--? @shortdesc Adds a Reminder for an objective table (will play every X seconds after the previous reminder completes)
+--? @args LuaTable objTable, Function intelTable, Integer frequency
+--? @result void
+function Objective_SetReminder(objTable, intelTable, frequency)
+	
+	if frequency == nil then
+		frequency = 20
+	end
+	
+	if objTable.reminderRule == nil then
+		local t = {}
+		t.timerID = "t_reminder_"..objTable.ID
+		t.time = frequency
+		t.objTable = objTable
+		t.intel = intelTable
+		
+		objTable.reminderRule = Rule_Add(__Objective_Reminder, t)
+	else
+		if MissionPrint ~= nil then
+			MissionPrint("Objective_SetReminder: Reminder rule already set: Remove first with Objective_EndReminder")
+		end
+	end
+	
+end
+
+--? @shortdesc Adds a Reminder for an objective table (will play whenever the provided condition evaluates to true)
+--? @args LuaTable objTable, LuaTable intel(event_name, [extra_event_name], NarrativeEventCallable), Function conditionFunction, LuaTable conditionData
+--? @result void
+function Objective_SetConditionalReminder(objTable, intel, conditionFunction, conditionData)
+	
+	if objTable.reminderRule == nil then
+		local t = {}
+		t.conditionFunction = conditionFunction
+		t.objTable = objTable
+		t.intel = intel
+		t.conditionData = conditionData
+		
+		objTable.reminderRule = Rule_Add(__Objective_Conditional_Reminder, t)
+	else
+		print("Objective_SetReminder: Reminder rule already set: Remove first with Objective_EndReminder")
+	end
+	
+end
+
+--? @shortdesc Removes a reminder rule
+--? @result Void
+--? @args LuaTable objectiveTable
+function Objective_EndReminder(objTable)
+	
+	if objTable.reminderRule ~= nil then
+		Rule_RemoveWithID(objTable.reminderRule)
+		objTable.reminderRule = nil
+	end
+	
+end
+
+-----------------------------------------
+--
+-- Timers and Counters
+--
+-----------------------------------------
+
+
+--? @shortdesc Starts a timer that is associated with this objective in the UI. Use COUNT_DOWN or COUNT_UP for the 'direction' parameter
+--? @args LuaTable objTable, Integer direction[, Float initialTime, Float flashThreshold]
+--? @result Void
+function Objective_StartTimer(objTable, direction, initialTime, flashThreshold)
+	
+	local previousFlashID = objTable.Counter.FlashID
+	Objective_StopTimer(objTable)
+	objTable.Counter.totalTimer = initialTime
+	objTable.Counter.direction = direction
+	objTable.Counter.TimerID = objTable.ID + 1000
+	objTable.Counter.FlashThreshold = flashThreshold
+	objTable.Counter.FlashID = previousFlashID
+	
+	if direction == COUNT_UP then
+		
+		Obj_SetCounterType(objTable.ID, COUNTER_TimerIncreasing)
+		Timer_Start(objTable.Counter.TimerID, 9999)
+		if initialTime ~= nil then
+			Timer_Advance(objTable.Counter.TimerID, initialTime)
+		end
+		Obj_SetCounterTimerSeconds(objTable.ID, Objective_GetTimerSeconds(objTable))
+		
+	elseif direction == COUNT_DOWN then
+		
+		Obj_SetCounterType(objTable.ID, COUNTER_TimerDecreasing)
+		Timer_Start(objTable.Counter.TimerID, initialTime)
+		Obj_SetCounterTimerSeconds(objTable.ID, Objective_GetTimerSeconds(objTable))
+		
+	else
+		fatal("Objective_StartTimer: 'direction' is not valid; use COUNT_UP or COUNT_DOWN")
+	end
+	
+end
+
+
+--? @shortdesc Pauses the objective's timer. If a timer has not been set, it does nothing.
+--? @args LuaTable objTable
+--? @result Void
+function Objective_PauseTimer(objTable)
+	
+	if Objective_IsTimerSet(objTable) then
+		Timer_Pause(objTable.Counter.TimerID)
+	end
+	
+end
+
+
+--? @shortdesc Resume the objective's timer. If a timer has not been set, it does nothing.
+--? @args LuaTable objTable
+--? @result Void
+function Objective_ResumeTimer(objTable)
+
+	if Objective_IsTimerSet(objTable) then
+		Timer_Resume(objTable.Counter.TimerID)
+	end
+
+end
+
+
+--? @shortdesc Stops the objective's timer. If a timer has not been set, it does nothing.
+--? @args LuaTable objTable
+--? @result Void
+function Objective_StopTimer(objTable)
+
+	if Objective_IsTimerSet(objTable) then
+		Timer_End(objTable.Counter.TimerID)
+		objTable.Counter = {}
+		Obj_SetCounterType(objTable.ID, COUNTER_None)
+	end
+
+end
+
+--? @shortdesc Returns the amount of seconds on the timer (time remaining or time elapsed, based on the type of timer used)
+--? @args LuaTable objTable
+--? @result Integer
+function Objective_GetTimerSeconds(objTable)
+
+	if Obj_GetCounterType(objTable.ID) == COUNTER_TimerIncreasing then
+		
+		return Timer_GetElapsed(objTable.Counter.TimerID)
+		
+	elseif Obj_GetCounterType(objTable.ID) == COUNTER_TimerDecreasing then
+		
+		return Timer_GetRemaining(objTable.Counter.TimerID)
+		
+	else	
+		fatal("Objective_GetTimerSeconds: no timer set!")
+	end
+	
+end
+
+--? @shortdesc Returns true if a timer has been set for this objective
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsTimerSet(objTable)
+	
+	if objTable.Counter == nil then
+		return false
+	end
+	
+	return Obj_GetCounterType(objTable.ID) == COUNTER_TimerIncreasing or Obj_GetCounterType(objTable.ID) == COUNTER_TimerDecreasing
+end
+
+--? @shortdesc Sets a counter that is associated with this objective in the UI. You can provide a 'maximum' so that it shows up as "1 of 5"
+--? @args LuaTable objTable, Float current[, Float maximum]
+--? @result Void
+function Objective_SetCounter(objTable, current, maximum)
+
+	Objective_StopTimer(objTable)
+	
+	if maximum == nil then
+		-- basic counter
+		Obj_SetCounterType(objTable.ID, COUNTER_Count)
+	else
+		-- counter with maximum (ex: 2 of 5)
+		Obj_SetCounterType(objTable.ID, COUNTER_CountUpTo)
+		Obj_SetCounterMax(objTable.ID, maximum)
+	end
+	
+	Obj_SetCounterCount(objTable.ID, current)
+	
+end
+
+--? @shortdesc Increases the counter that is associated with this objective in the UI. You can provide an amount to increase by.
+--? @args LuaTable objTable[, Int amount]
+--? @result Void
+function Objective_IncreaseCounter(objTable, amount)
+	
+	if Objective_IsCounterSet(objTable) then
+		amount = amount or 1
+		local max_count = Obj_GetCounterMax(objTable.ID)
+		if max_count <= 0 then
+			max_count = nil
+		end
+		Objective_SetCounter(objTable, Obj_GetCounterCount(objTable.ID)+amount, max_count)
+	else
+		fatal("Objective_IncreaseCounter: no counter set!")
+	end
+	
+end
+
+--? @shortdesc Stops the objective's counter. If a counter has not been set, it does nothing.
+--? @args LuaTable objTable
+--? @result Void
+function Objective_StopCounter(objTable)
+	
+	if Objective_IsCounterSet(objTable) then
+		objTable.Counter = {}
+		Obj_SetCounterType(objTable.ID, COUNTER_None)
+	end
+	
+end
+
+--? @shortdesc Returns the current count associated with this objective.
+--? @args LuaTable objTable
+--? @result Integer
+function Objective_GetCounter(objTable)
+	
+	if Objective_IsCounterSet(objTable) then
+		return Obj_GetCounterCount(objTable.ID)
+	else
+		fatal("Objective_GetCounter: no counter set!")
+	end
+	
+end
+
+--? @shortdesc Returns true if a counter has been set for this objective
+--? @args LuaTable objTable
+--? @result Boolean
+function Objective_IsCounterSet(objTable)
+	
+	if objTable.Counter == nil then
+		return false
+	end
+	
+	return Obj_GetCounterType(objTable.ID) == COUNTER_Count or Obj_GetCounterType(objTable.ID) == COUNTER_CountUpTo
+	
+end
+
+--? @shortdesc Sets whether this objective always shows detailed text, the HUD arrow, or the hintpoints. There can only be one objective at a time that forces the HUD arrow to show up. If you pass in 'nil' for hud_arrow then its behavior is not affected.
+--? @args LuaTable objTable, Boolean title, Boolean hud_arrow, Boolean hintpoints
+--? @result Void
+function Objective_SetAlwaysShowDetails(objTable, title, hud_arrow, hintpoints)
+
+	objTable.bAlwaysShowTitle = title
+	objTable.bAlwaysShowHintpoints = hintpoints
+	
+	if hud_arrow == true then
+		UI_ForceHudArrowOnObjective(objTable.ID)
+	elseif hud_arrow == false then
+		UI_ForceHudArrowOnObjective(0)
+	end
+	
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------------------
+--
+-- Private functions
+--
+---------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------------------
+
+
+--? @shortdesc This is the called during the player's end turn scripted phase 
+--? @extdesc This checks for expired objectives. If a parent objective
+--?          expired, mark subobjectives as Off
+--? @args none
+--? @result Void
+function Objective_Manager_CheckForExpiredObjectives()
+
+	-- go through each objective in the list, and check if any objective has expired
+	for index, objective in pairs(__t_Objectives) do
+		
+		-- check any supplied IsComplete() or IsFailed() functions
+		if Objective_IsStarted(objective) == true and objective.isStarting ~= true and
+			Objective_IsComplete(objective) == false and
+			Objective_IsFailed(objective) == false and
+			Objective_IsExpired(objective) == false and
+			Objective_IsOff(objective) == false then 
+			-- make sure we have actually started, and aren't already complete / failed / expired (or in the process thereof)
+			
+			if scartype(objective.IsExpired) == ST_FUNCTION and objective.IsExpired(objective) == true then
+				
+				-- Hide subobjectives and mark them as Off if the parent objective expires
+				local subObjectives = Objective_GetSubObjectives(objective)
+				if subObjectives ~= nil then
+					for i, subObj in pairs(subObjectives) do
+						Obj_SetState(subObj.ID, OS_Off)
+						Obj_SetVisible(subObj.ID, false)
+					end
+				end
+				
+				Objective_Expire(objective)
+								
+			end
+			
+		end
+		
+	end
+	
+end
+
+
+--? @shortdesc This is called at the start of a player turn
+--? @extdesc This iterates over active objectives and executes actions
+--?          in the on_player_turn_start list
+--? @args none
+--? @result Void
+function Objective_Manager_OnPlayerTurnStart()
+	
+	-- go through each objective in the list, and call OnTurnStart on active objectives
+	for index, objective in pairs(__t_Objectives) do
+		
+		-- check any supplied IsComplete() or IsFailed() functions
+		if Objective_IsStarted(objective) == true and objective.isStarting ~= true and
+			Objective_IsComplete(objective) == false and
+			Objective_IsFailed(objective) == false and
+			Objective_IsExpired(objective) == false and
+			Objective_IsOff(objective) == false then 
+			-- make sure we have actually started, and aren't already complete / failed / expired (or in the process thereof)
+			
+			if scartype(objective.OnPlayerTurnStart) == ST_FUNCTION then
+				
+				objective.OnPlayerTurnStart(objective)
+				
+			end
+			
+		end
+		
+	end
+	
+end	
+	
+
+--? @shortdesc This is called at the end of a player turn
+--? @extdesc This iterates over active objectives and executes actions
+--?          in the on_player_turn_end list
+--? @args none
+--? @result Void
+function Objective_Manager_OnPlayerTurnEnd()
+	
+	-- go through each objective in the list, and call OnTurnEnd on active objectives
+	for index, objective in pairs(__t_Objectives) do
+		
+		-- check any supplied IsComplete() or IsFailed() functions
+		if Objective_IsStarted(objective) == true and objective.isStarting ~= true and
+			Objective_IsComplete(objective) == false and
+			Objective_IsFailed(objective) == false and
+			Objective_IsExpired(objective) == false and
+			Objective_IsOff(objective) == false then 
+			-- make sure we have actually started, and aren't already complete / failed / expired (or in the process thereof)
+			
+			if scartype(objective.OnPlayerTurnEnd) == ST_FUNCTION then
+				
+				objective.OnPlayerTurnEnd(objective)
+				
+			end
+			
+		end
+		
+	end
+	
+	-- this is run in a scripted turn phase, add rule to check end of scripted phase if not already added
+	if World_IsCampaignMetamapGame() and not Rule_Exists(Playbill_CheckForEndScriptedTurnPhase) then
+		Rule_AddInterval(Playbill_CheckForEndScriptedTurnPhase, 1)
+	end
+	
+end
+
+__objective_pause_count = 0
+function Objective_PauseObjectiveManager()
+	__objective_pause_count = __objective_pause_count + 1
+	g_pauseObjectiveUpdates = true
+end
+
+function Objective_UnpauseObjectiveManager()
+	__objective_pause_count = __objective_pause_count - 1
+	if __objective_pause_count < 1 then
+		g_pauseObjectiveUpdates = false
+	end
+end
+
+function __TestComplete(objective, allowPartialCompletion)
+	local isCampaignMetamapGame = World_IsCampaignMetamapGame()
+	if scartype(objective.IsComplete) == ST_FUNCTION then
+		local checkCompletionConditions = true
+		if isCampaignMetamapGame and (objective.CanCheckForCompletion ~= nil) and scartype(objective.CanCheckForCompletion) == ST_FUNCTION then
+			checkCompletionConditions = objective.CanCheckForCompletion(objective)
+		end
+		if (checkCompletionConditions == true) and (objective.IsComplete(objective, allowPartialCompletion) == true) then
+			return true
+		end
+	end
+	return false
+end
+
+function __TestFailed(objective)
+	if scartype(objective.IsFailed) == ST_FUNCTION then
+		local checkFailureConditions = true
+		if isCampaignMetamapGame and (objective.CanCheckForFailure ~= nil) and scartype(objective.CanCheckForFailure) == ST_FUNCTION then
+			checkFailureConditions = objective.CanCheckForFailure(objective)
+		end
+		if (checkFailureConditions == true) and (objective.IsFailed(objective) == true) then
+			return true
+		end
+	end
+	return false
+end
+
+function non_nil_value_or(value, fallback)
+	if value == nil then
+		return fallback
+	else
+		return value
+	end
+end
+
+--
+-- MAIN LOOP
+-- this is the main manager rule - it runs every so often and updates objectives, associated UI, and checks any built-in IsComplete or IsFailed or IsExpired rules
+--
+function Objective_Manager()
+	
+	local isCampaignMetamapGame = World_IsCampaignMetamapGame()
+	
+	if g_pauseObjectiveUpdates then
+		return
+	end
+	
+	-- go through each objective in the list, and see what needs doing
+	for index, objective in pairs(__t_Objectives) do
+		
+		-- check any supplied IsComplete() or IsFailed() functions
+		if Objective_IsStarted(objective) == true and objective.isStarting ~= true and
+			Objective_IsComplete(objective) == false and
+			Objective_IsFailed(objective) == false and
+			Objective_IsExpired(objective) == false and
+			Objective_IsOff(objective) == false then 
+			-- make sure we have actually started, and aren't already complete / failed / expired (or in the process thereof)
+			
+			if __TestComplete(objective) then
+				Objective_Complete(objective)
+			else
+				if __TestFailed(objective) then
+					Objective_Fail(objective)
+				end
+			end
+		end
+		
+		--
+		-- update any UI elements
+		--
+		
+		-- Push the timer value into the C++ objective system.
+		if Objective_IsTimerSet(objective) then
+			Obj_SetCounterTimerSeconds(objective.ID, Objective_GetTimerSeconds(objective))
+		end
+		
+		-- Update flashing timers
+		if objective.Counter.FlashThreshold then
+			
+			local beyondThreshold = nil
+			
+			-- figure out if we are beyond the threshold at all
+			if Obj_GetCounterType(objective.ID) == COUNTER_TimerIncreasing then
+				
+				if Objective_GetTimerSeconds(objective) >= objective.Counter.FlashThreshold then
+					beyondThreshold = true
+				else
+					beyondThreshold = false
+				end
+				
+			elseif Obj_GetCounterType(objective.ID) == COUNTER_TimerDecreasing then
+				
+				if Objective_GetTimerSeconds(objective) <= objective.Counter.FlashThreshold then
+					beyondThreshold = true
+				else
+					beyondThreshold = false
+				end
+				
+			end
+			
+			-- act on that information
+			if beyondThreshold == true and objective.Counter.FlashID == nil then
+				
+				-- we hit the threshold, so start flashing using widget animation
+				objective.Counter.FlashID = UI_FlashObjectiveCounter(objective.ID)
+				
+			elseif beyondThreshold == false and objective.Counter.FlashID ~= nil then
+				
+				-- if the counter is not beyond the threshold anymore, stop flashing
+				UI_StopFlashing(objective.Counter.FlashID)
+				objective.Counter.FlashID = nil
+				
+			end
+			
+		end
+		
+		
+		
+		
+	end
+	
+	
+end
+
+
+
+
+
+--
+-- Objective Update Queue
+--
+function Objective_AnyUpdatesBeingProcessed()
+	local processing = Rule_Exists(Objective_Manager_StartingObjective) or
+		Rule_Exists(Objective_Manager_CompletingObjective) or
+		Rule_Exists(Objective_Manager_FailingObjective) or
+		Rule_Exists(Objective_Manager_ExpiringObjective) or
+		Rule_Exists(Objective_Manager_UpdatingObjective) or
+		Rule_Exists(Objective_Manager_StoppingObjective)
+	
+	return processing
+end
+
+-- every time an update gets added to the queue, or an update finishes, this function is called to dispatch the next waiting update.
+function __Objective_ProcessUpdateQueue()
+
+	-- look to see if we have any objective updates in the queue
+	if #__Objective_UpdateQueue >= 1 and __Objective_PresentationLock == false then
+		
+		-- get the first update
+		local update = __Objective_UpdateQueue[1]
+		table.remove(__Objective_UpdateQueue, 1)
+		
+		-- resolve the playIntel and showTitle flags
+		if update.playIntel == nil then
+			 update.playIntel = update.obj.playIntel
+			if update.playIntel == nil then
+				 update.playIntel = true
+			end
+		end
+		if update.showTitle == nil then
+			 update.showTitle = update.obj.showTitle
+			if update.showTitle == nil then
+				 update.showTitle = true
+			end
+		end
+		
+		__Objective_PresentationLock = true
+		__Objective_PresentationUpdate = update
+		
+		if update.type == "Start" then
+			Rule_Add(Objective_Manager_StartingObjective, {update = update})
+		elseif update.type == "Complete" then
+			Rule_Add(Objective_Manager_CompletingObjective, {update = update})
+		elseif update.type == "Fail" then
+			Rule_Add(Objective_Manager_FailingObjective, {update = update})
+		elseif update.type == "Expire" then
+			Rule_Add(Objective_Manager_ExpiringObjective, {update = update})
+		elseif update.type == "Update" then
+			Rule_Add(Objective_Manager_UpdatingObjective, {update = update})
+		elseif update.type == "Stop" then
+			Rule_Add(Objective_Manager_StoppingObjective, {update = update})
+		end
+		
+	end
+
+end
+
+
+function __Objective_UpdateFinished()
+
+	-- any update routine must call this at the end
+	
+	__Objective_PresentationLock = false				-- end the presentation lock
+	__Objective_ProcessUpdateQueue()		-- kick off the next item in the list if there is one...
+	
+end
+
+
+
+
+
+
+--
+-- START SEQUENCE
+-- this rule gets added to work through the steps of starting a single objective
+--
+function Objective_Manager_StartingObjective(context, data)
+	
+	local update = data.update
+	local objective = update.obj
+	
+	if data.stage == nil then
+		
+		data.stage = "Pre"
+	
+		-- call PreStart()
+		if scartype(objective.PreStart) == ST_FUNCTION then
+			objective.PreStart(objective)
+		end
+		
+		local visible = objective.visibility ~= "None"
+		if objective.visibility == "Team" then
+			visible = Player_ObserveRelationship(Game_GetLocalPlayer(), objective.visibility_player) == R_ALLY
+		elseif objective.visibility == "Player" then
+			visible = Game_GetLocalPlayer() == objective.visibility_player
+		end
+		if visible then
+			-- play Intel event - also handles the titlecard and actually making the objective visible in the list
+			__Objective_PlayIntelEvent(objective.Intel_Start, update)
+		else
+			__Objective_UpdateObjectiveList(update)
+		end
+		
+		data.stage = "IntelTriggered"
+		
+	end
+	
+	if data.stage == "IntelTriggered" and __Objective_IsIntelEventQueued() == false then
+		
+		data.stage = "Post"
+	
+		-- call OnStart()
+		if scartype(objective.OnStart) == ST_FUNCTION then
+			objective.OnStart(objective)
+		end
+		if MissionDebug_CheckResume then
+			MissionDebug_CheckResume()
+		end
+		
+		-- wrap up
+		objective.isStarting = nil
+		
+		-- finish this update sequence
+		Rule_RemoveMe()
+		__Objective_UpdateFinished()
+		
+	end
+	
+end
+
+function __ParentObjectiveFinishing(objective)
+	if objective.Parent ~= nil then
+		local parentObjective = objective.Parent
+		return __TestComplete(parentObjective, true) or __TestFailed(parentObjective, true)
+	end
+	return false
+end
+
+--
+-- COMPLETE
+-- this rule gets added to work through the steps of completing a single objective
+--
+function Objective_Manager_CompletingObjective(context, data)
+	
+	local update = data.update
+	local objective = update.obj
+	local parent = objective.Parent
+	
+	-- Only show the titlecard if the parent objective would not be finished by this sub objective finishing.
+	if __ParentObjectiveFinishing(objective) then
+		update.showTitle = false
+		update.playIntel = false
+	end
+	
+
+	if data.stage == nil then
+		
+		-- call PreComplete()
+		if scartype(objective.PreComplete) == ST_FUNCTION then
+			objective.PreComplete(objective)
+		end
+		
+		-- stop any counter / timer incrementing
+		Objective_StopCounter(objective)
+		Objective_StopTimer(objective)
+		
+		-- play Intel event - also handles the titlecard and actually making the objective visible in the list
+		__Objective_PlayIntelEvent(objective.Intel_Complete, update)
+		
+		data.stage = "IntelTriggered"
+		
+	end
+	
+	if data.stage == "IntelTriggered" and __Objective_IsIntelEventQueued() == false then
+		
+		-- call OnComplete()
+		if scartype(objective.OnComplete) == ST_FUNCTION then
+			objective.OnComplete(objective)
+		end
+		if MissionDebug_CheckResume then
+			MissionDebug_CheckResume()
+		end
+		
+		-- wrap up
+		objective.isCompleting = nil
+		
+		-- finish this update sequence
+		Rule_RemoveMe()
+		__Objective_UpdateFinished()
+		
+	end
+	
+end
+
+
+
+--
+-- FAIL
+-- this rule gets added to work through the steps of failing a single objective
+--
+function Objective_Manager_FailingObjective(context, data)
+
+	local update = data.update
+	local objective = update.obj
+	local parent = objective.Parent
+	
+	-- Only show the titlecard if the parent objective would not be finished by this sub objective finishing.
+	if __ParentObjectiveFinishing(objective) then
+		update.showTitle = false
+		update.playIntel = false
+	end
+	
+	if data.stage == nil then
+		
+		-- call PreFail()
+		if scartype(objective.PreFail) == ST_FUNCTION then
+			objective.PreFail(objective)
+		end
+		
+		-- play Intel event - also handles the titlecard and actually making the objective visible in the list
+		__Objective_PlayIntelEvent(objective.Intel_Fail, update)
+		
+		data.stage = "IntelTriggered"
+		
+	end
+	
+	if data.stage == "IntelTriggered" and __Objective_IsIntelEventQueued() == false then
+		
+		-- call OnFail()
+		if scartype(objective.OnFail) == ST_FUNCTION then
+			objective.OnFail(objective)
+		end
+		if MissionDebug_CheckResume then
+			MissionDebug_CheckResume()
+		end
+		
+		
+		-- wrap up
+		objective.isFailing = nil
+		
+		-- finish this update sequence
+		Rule_RemoveMe()
+		__Objective_UpdateFinished()
+		
+	end
+	
+end
+
+
+
+--
+-- EXPIRE
+-- this rule gets added to work through the steps of Expiring a single objective
+--
+function Objective_Manager_ExpiringObjective(context, data)
+	
+	local update = data.update
+	local objective = update.obj
+	local parent = objective.Parent
+	
+	-- Only show the titlecard if the parent objective would not be finished by this sub objective finishing.
+	if __ParentObjectiveFinishing(objective) then
+		update.showTitle = false
+		update.playIntel = false
+	end
+	
+	if data.stage == nil then
+		
+		-- call PreExpire()
+		if scartype(objective.PreExpire) == ST_FUNCTION then
+			objective.PreExpire(objective)
+		end
+		
+		-- play Intel event - also handles the titlecard and actually making the objective visible in the list
+		__Objective_PlayIntelEvent(objective.Intel_Expire, update)
+		
+		data.stage = "IntelTriggered"
+		
+	end
+	
+	if data.stage == "IntelTriggered" and __Objective_IsIntelEventQueued() == false then
+		
+		-- call OnExpire()
+		if scartype(objective.OnExpire) == ST_FUNCTION then
+			objective.OnExpire(objective)
+		end
+		if MissionDebug_CheckResume then
+			MissionDebug_CheckResume()
+		end
+		
+		-- wrap up
+		objective.isExpiring = nil
+		objective.doneExpiring = true
+		
+		-- finish this update sequence
+		Rule_RemoveMe()
+		__Objective_UpdateFinished()
+		
+	end
+	
+end
+
+
+
+--
+-- UPDATE
+-- this rule gets added to work through the steps of updating objective text
+--
+function Objective_Manager_UpdatingObjective(context, data)
+	
+	local update = data.update
+	local objective = update.obj
+	
+	if data.stage == nil then
+		
+		-- no actual event to play, but this still shows the titlecard (also updates the titles in the objective system!)
+		__Objective_PlayIntelEvent(nil, update)
+		
+		data.stage = "IntelTriggered"
+		
+	end
+	
+	if data.stage == "IntelTriggered" and __Objective_IsIntelEventQueued() == false then
+		
+		-- wrap up
+		
+		
+		-- finish this update sequence
+		Rule_RemoveMe()
+		__Objective_UpdateFinished()
+		
+	end
+	
+end
+
+
+
+--
+-- STOP
+-- this rule gets added to stop and objective and reset it
+--
+function Objective_Manager_StoppingObjective(context, data)
+	
+	local update = data.update
+	local objective = update.obj
+	
+	__Objective_UpdateObjectiveList(update)
+	
+	Rule_RemoveMe()
+	__Objective_UpdateFinished()
+	
+end
+
+
+
+
+
+
+--
+-- functions for the presentation-side of objective changes - speech events, titlecards, and coordinating associated objective UI elements
+--
+function __ObjectiveSpeechEvent()
+	
+	-- init
+	__ObjectiveSpeechEvent_hasPlayedTitlecard = false
+	
+	-- play the main speech event
+	if __ObjectiveSpeechData.speechEvent ~= nil and Misc_IsCommandLineOptionSet("skip_intel") == false then
+		local speech_event_func = __ObjectiveSpeechData.speechEvent
+		local has_name = false
+		if scartype(speech_event_func) == ST_TABLE then
+			speech_event_func = speech_event_func.NarrativeEventCallable
+			has_name = __ObjectiveSpeechData.speechEvent.event_name ~= nil
+		end
+		if scartype(speech_event_func) == ST_FUNCTION and __ObjectiveSpeechData.playIntel == true then
+			if has_name then
+				local event_name = __ObjectiveSpeechData.speechEvent.event_name
+				local extra_event_name = __ObjectiveSpeechData.speechEvent.extra_event_name
+				speech_event_func(event_name, extra_event_name)
+			else
+				speech_event_func()
+			end
+		end
+	end
+	
+	-- trigger the titlecard if it hasn't been triggered already (it won't do it twice on the same event!)
+	Objective_TriggerTitleCard()
+	
+	-- if we were skipping the event when the popups should have been triggered, trigger a non-event-based replacement popup now
+	if __ObjectiveSpeechEvent_hasPlayedTitlecard == false and __ObjectiveSpeechData.showTitle == true then			-- maybe needs Event_IsBeingSkipped() == true  when that's implemented?
+		Obj_CreatePopup( __ObjectiveSpeechData.obj.ID, __Objective_GetTitleCardText(__ObjectiveSpeechData))
+	end
+	
+	-- wrap up
+	__ObjectiveSpeechEvent_hasPlayedTitlecard = nil
+	__ObjectiveSpeechData = nil
+	
+end
+
+-- this function returns the speechevent passed in, wrapped in some extra stuff to make the titlecard trigger if it hadn't triggered already inside the event
+function __Objective_PlayIntelEvent(speechevent, update)
+	
+	__ObjectiveSpeechData = update
+	__ObjectiveSpeechData.speechEvent = speechevent
+	if World_IsCampaignMetamapGame() then
+		-- The campaign has a secondary narrative event queue which should be respected by the
+		-- titlecard. We may queue objective dynamic narrative which waits for this queue
+		-- and if we don't use that queue to trigger the titlecard then the titlecard could
+		-- sneak into the ScarEventSys before our objective's dynamic narrative has added
+		-- anything to the event queue.
+		ExecuteDynamicNarrativeNode(__ObjectiveSpeechEvent)
+	else
+		Util_StartIntel(__ObjectiveSpeechEvent)
+	end
+	
+end
+
+function __Objective_IsIntelEventQueued()
+	return __ObjectiveSpeechData ~= nil
+end
+
+-- returns the regular Title for an objective, or a specialized TitleStart, TitleComplete, TitleFail or TitleExpire if appropriate
+function __Objective_GetTitleCardText(update)
+	
+	local obj = update.obj
+	local title = obj.Title
+	
+	if update.type == "Start"  then
+	
+		if obj.TitleStart ~= nil then
+			title = obj.TitleStart
+		end
+	
+	elseif update.type == "Complete" then
+	
+		if obj.TitleComplete ~= nil then
+			title = obj.TitleComplete
+		end
+--~ 		return Loc_FormatText(39300, title)	-- LOCDB [39300] 'Objective Completed: %1OBJECTIVE_TITLE%'
+	
+	elseif update.type == "Fail" then
+		
+		if obj.TitleFail ~= nil then
+			title = obj.TitleFail
+		end
+--~ 		return Loc_FormatText(39301, title)	-- LOCDB [39301] 'Objective Failed: %1OBJECTIVE_TITLE%'
+		
+	elseif update.type == "Expire" then
+		
+		if obj.TitleExpire ~= nil then
+			title = obj.TitleExpire
+		end
+		
+	elseif update.type == "Update" then
+		
+		if update.new_title ~= nil then
+			local title = Loc_FormatText(39307, update.new_title)		-- LOCDB [39307] 'Objective Updated: %1OBJECTIVE_TITLE%'
+		end
+		
+	end
+	
+	return title
+	
+end
+
+function __objective_hideObjective(context, data)
+	Obj_SetVisible(data.id, false)	
+end
+
+-- this bit actually updates the internal status of the objective to reflect the change on the objective list. 
+-- This is called when the titlecard displays (or was supposed to play, in cases where it was suppressed with the showTitle flag).
+function __Objective_UpdateObjectiveList(update)
+	
+	update = update or __ObjectiveSpeechData
+	
+	if update.type == "Start" then
+		
+		local visible = update.obj.visibility ~= "None"
+		if update.obj.visibility == "Team" then
+			visible = Player_ObserveRelationship(Game_GetLocalPlayer(), update.obj.visibility_player) == R_ALLY
+		elseif update.obj.visibility == "Player" then
+			visible = Game_GetLocalPlayer() == update.obj.visibility_player
+		end
+		Obj_SetVisible(update.obj.ID, visible)
+		Obj_SetState(update.obj.ID, OS_Incomplete)
+		update.obj.started = true
+		
+		-- Make parent visible
+		if update.obj.Parent ~= nil then
+			Obj_SetVisible(update.obj.Parent.ID, visible or Obj_GetVisible(update.obj.Parent.ID))
+			Obj_SetState(update.obj.Parent.ID, OS_Incomplete)
+		end	
+		
+		-- also call the SetupUI function at this point
+		if scartype(update.obj.SetupUI) == ST_FUNCTION and visible then
+			update.obj.SetupUI()
+		end
+		
+	elseif update.type == "Complete" then
+		
+		__Objective_RemoveAssociatedUI(update.obj)
+		
+		if update.obj.Parent == nil then			-- only if it's a top-level objective do we make it disappear (sub objectives we leave visible)
+			Rule_AddOneShot(__objective_hideObjective, OBJECTIVE_DISAPPEAR_TIME, { id = update.obj.ID })
+		end
+		
+		Obj_SetState(update.obj.ID, OS_Complete)
+		
+	elseif update.type == "Fail" then
+		
+		__Objective_RemoveAssociatedUI(update.obj)
+		
+		if update.obj.Parent == nil then			-- only if it's a top-level objective do we make it disappear (sub objectives we leave visible)
+			Rule_AddOneShot(__objective_hideObjective, OBJECTIVE_DISAPPEAR_TIME, { id = update.obj.ID })
+		end
+		
+		Obj_SetState(update.obj.ID, OS_Failed)
+		
+	elseif update.type == "Expire" then
+		
+		__Objective_RemoveAssociatedUI(update.obj)
+		
+		if update.obj.Parent == nil then			-- only if it's a top-level objective do we make it disappear (sub objectives we leave visible)
+			Obj_SetVisible(update.obj.ID, false)
+		end
+		
+		-- For now, the C++ objective state for expired is the same as failed
+		Obj_SetState(update.obj.ID, OS_Failed)
+		
+	elseif update.type == "Update" then
+		
+		-- make the updates
+		if update.new_title ~= nil then
+			update.obj.Title = update.new_title
+			Obj_SetTitle(update.obj.ID, update.new_title)
+		end
+		
+		if update.new_description ~= nil then
+			update.obj.Description = update.new_description
+			Obj_SetDescription(update.obj.ID, update.new_description)
+		end
+		
+	elseif update.type == "Stop" then
+		
+		__Objective_RemoveAssociatedUI(update.obj)
+		
+		Obj_SetVisible(update.obj.ID, false)
+		Obj_SetState(update.obj.ID, OS_Off)
+		
+		update.obj.started = nil
+		
+	end
+	
+end
+
+
+
+-- removes anything associated with an objective
+function __Objective_RemoveAssociatedUI(objective)
+	
+	-- hide all minimap blips
+	__ShowObjectiveBlips(objective, false)
+	
+	-- remove all UI elements
+	if (#objective.UIElements) > 0 then
+		for i = (#objective.UIElements), 1, -1 do
+			local elementRemoved = Objective_RemoveUIElements(objective, objective.UIElements[i].ElementID)
+			if elementRemoved == false then
+				print("WARNING - __Objective_RemoveAssociatedUI() failed to remove an element properly. Please investigate, this should never happen.")
+				print("---Printing element table for debugging. Element number: " .. i)
+				for key, value in pairs(objective.UIElements[i]) do
+					print("---Key: " .. key .. "; Value: " .. value)
+				end
+			end
+		end
+	end
+
+end
+
+
+
+
+
+
+
+--
+-- Callbacks - used to interact with the objectives in the list (might not be used any more - might have been from the TacMap in CoH1)
+--
+
+function __ObjectiveOnShowCallback(id)
+	
+	local objTable = __FindObjectiveTable(id)
+	
+	-- only show pings for incomplete objectives
+	if Obj_GetState(objTable.ID) ~= OS_Incomplete then
+		return
+	end
+	
+	-- show all pings for this objective
+	for k, v in pairs(objTable.Pings) do
+		
+		if v.TacMapID == nil then
+			-- ignore empty groups
+			if not ((scartype(v.pos) == ST_EGROUP and EGroup_IsEmpty(v.pos)) or (scartype(v.pos) == ST_SGROUP and SGroup_IsEmpty(v.pos))) then
+				v.TacMapID = UI_CreateMinimapBlip( v.pos, -1, objTable.DataTemplate)
+			end
+		end
+		
+	end
+	
+end
+
+function __ObjectiveOnSelectCallback(id)
+	
+	print("SELECT")
+	
+end
+
+function __ObjectiveOnActivateCallback(id)
+	
+	print("ACTIVATE")
+	local objTable = __FindObjectiveTable(id)
+	
+end
+
+function __ObjectiveLuaTableQueryCallback(id, arg1)
+	
+	local objTable = __FindObjectiveTable(id)
+	
+	if arg1 == "always_show_title" then
+		if Game_GetSPDifficulty() == GD_EASY or Game_GetSPDifficulty() == GD_NORMAL then return 1 end
+		if objTable.bAlwaysShowTitle == true then return 1 else return 0 end
+	elseif arg1 == "always_show_hintpoints" then
+		if Game_GetSPDifficulty() == GD_EASY or Game_GetSPDifficulty() == GD_NORMAL then return 1 end
+		if objTable.bAlwaysShowHintpoints == true then return 1 else return 0 end
+	end
+	
+	return -1
+	
+end
+
+
+
+function __FindObjectiveTable(id)
+	
+	if __t_Objectives ~= nil then
+		for k, v in pairs(__t_Objectives) do
+			if v.ID == id then
+				return v
+			end
+		end
+	end
+	
+	-- is this redundant in Lua?
+	return nil
+	
+end
+
+function __GetBlipType(objTable)
+	
+	if objTable.Type == OT_Primary then
+		return "objective_primary"
+	elseif objTable.Type == OT_Secondary then
+		return "objective_secondary"
+	elseif objTable.Type == OT_Bonus then
+		return "objective_bonus"
+	end
+	
+	return "general"
+	
+end
+
+function __ShowSingleBlip(objTable, ping, bShow, datatemplate)
+	
+	if bShow == true then
+		
+		-- only create it if it doesn't exist yet
+		if ping.BlipID == nil then
+			ping.BlipID = UI_CreateMinimapBlip(ping.pos, -1, datatemplate, ping.radius)
+		end
+		
+	else
+		
+		-- only delete it if it already exists
+		if ping.BlipID ~= nil then
+			UI_DeleteMinimapBlip(ping.BlipID)
+			ping.BlipID = nil
+		end
+		
+	end
+	
+end
+
+function __ShowObjectiveBlips(objTable, bShow)
+	
+	for k, v in pairs(objTable.Pings) do
+		__ShowSingleBlip(objTable, v, bShow, objTable.DataTemplate)
+	end
+	
+end
+
+function __HighlightEntity(objTable, elementTable, entity, hintpoint, arrow, arrowOffset, arrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+	
+	local objID = objTable.ID;
+	if hintpoint ~= false or arrow == true then
+		Obj_HighlightEntity(objID, entity, true)
+	end
+	
+	local hintpointLocID = hintpoint
+	if hintpointLocID == false then
+		hintpointLocID = 0
+	end
+	
+	if scartype(arrow) == ST_NUMBER then
+		arrow = true
+	end
+	
+	-- the "3d arrow" is tied to a hintpoint, so if no hintpoint is requested we just create one anyway and hide it.
+	local hintid = HintPoint_AddToEntity(entity, 1, hintpoint ~= false, __ObjectiveNothing, template, hintpointLocID, arrow, arrowOffset, objID, actionType, iconName, true)
+	
+	if arrowFacing ~= nil then
+		if scartype(arrowFacing) == ST_MARKER then
+			arrowFacing = Util_GetPosition(arrowFacing)
+		end
+		
+		if scartype(arrowFacing) == ST_ENTITY then	
+			HintPoint_SetFacingEntity(hintid, arrowFacing)
+		elseif scartype(arrowFacing) == ST_SQUAD then
+			HintPoint_SetFacingSquad(hintid, arrowFacing)
+		elseif scartype(arrowFacing) == ST_SCARPOS then
+			HintPoint_SetFacingPosition(hintid, arrowFacing)
+		end
+	end
+	
+	local pingid = nil;
+	if ping ~= false then
+		pingid = Objective_AddPing(objTable, entity, template, pingRadius)
+	end
+	
+	local reticuleID = nil
+	if reticuleRadius ~= false then
+		if template == DT_OBJECTIVE_MARKER then
+			-- hint point is using the ObjectiveMarkerDataTemplate, so set the hint point's reticule data.
+			-- The UI will then only show the reticule when the hint point is hovered.
+			HintPoint_SetReticleData(hintid, reticuleRadius, reticuleBP)
+		else
+			reticuleID = UI_CreateReticule(entity, reticuleRadius, reticuleBP)
+		end
+	end
+	
+	table.insert(elementTable.HighlightedEntities, { eid = Entity_GetID(entity), hintid = hintid, hintpoint = hintpoint, arrow = arrow, arrowOffset = arrowOffset, actionType = actionType, iconName = iconName, template = template, pingid = pingid, reticuleID = reticuleID } )
+	
+end
+
+function __HighlightSquad(objTable, elementTable, squad, hintpoint, arrow, arrowOffset, arrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+
+	local objID = objTable.ID;
+	if Squad_Count(squad) > 0 then
+		if hintpoint ~= false or arrow == true then
+			Obj_HighlightSquad(objID, squad, true)
+		end
+		
+		local hintpointLocID = hintpoint
+		if hintpointLocID == false then
+			hintpointLocID = 0
+		end
+		
+		if scartype(arrow) == ST_NUMBER then
+			arrow = true
+		end
+		
+		-- the "3d arrow" is tied to a hintpoint, so if no hintpoint is requested we just create one anyway and hide it.
+		local hintid = HintPoint_AddToSquad(squad, 1, hintpoint ~= false, __ObjectiveNothing, template, hintpointLocID, arrow, arrowOffset, objID, actionType, iconName, true) 
+		
+		if arrowFacing ~= nil then
+			if scartype(arrowFacing) == ST_MARKER then
+				arrowFacing = Util_GetPosition(arrowFacing)
+			end
+			
+			if scartype(arrowFacing) == ST_ENTITY then	
+				HintPoint_SetFacingEntity(hintid, arrowFacing)
+			elseif scartype(arrowFacing) == ST_SQUAD then
+				HintPoint_SetFacingSquad(hintid, arrowFacing)
+			elseif scartype(arrowFacing) == ST_SCARPOS then
+				HintPoint_SetFacingPosition(hintid, arrowFacing)
+			end
+		end
+		
+		local pingid = nil;
+		if ping ~= false then
+			pingid = Objective_AddPing(objTable, squad, template, pingRadius)
+		end
+
+		local reticuleID = nil
+		if reticuleRadius ~= false then
+			if template == DT_OBJECTIVE_MARKER then
+				-- hint point is using the ObjectiveMarkerDataTemplate, so set the hint point's reticule data.
+				-- The UI will then only show the reticule when the hint point is hovered.
+				HintPoint_SetReticleData(hintid, reticuleRadius, reticuleBP)
+			else
+				reticuleID = UI_CreateReticule(squad, reticuleRadius, reticuleBP)
+			end
+		end
+		
+		table.insert(elementTable.HighlightedSquads, { sid = Squad_GetID(squad), hintid = hintid, hintpoint = hintpoint, arrow = arrow, arrowOffset = arrowOffset, actionType = actionType, iconName = iconName, template = template, pingid = pingid, reticuleID = reticuleID } )
+	end
+	
+end
+
+function __HighlightPosition(objTable, elementTable, pos, hintpoint, arrow, arrowOffset, arrowFacing, actionType, iconName, template, ping, pingRadius, reticuleRadius, reticuleBP)
+	
+	local objID = objTable.ID;
+	if hintpoint ~= false or arrow == true then
+		Obj_HighlightPosition(objID, pos, true)
+	end
+	
+	local hintpointLocID = hintpoint
+	if hintpointLocID == false then
+		hintpointLocID = 0
+	end
+	
+	local entityID = nil
+	
+	if scartype(arrow) == ST_NUMBER then
+	
+		local obj = __FindObjectiveTable(objID)
+		
+		local faction = obj.Faction
+		if faction == nil then
+			faction = Player_GetRaceName(Game_GetLocalPlayer())
+		end
+		
+		print(faction)
+		print( __Objective_GroundAreaObjects[faction][arrow])
+		-- create a position on the ground
+		local egroup = EGroup_Create("")
+		Util_CreateEntities(nil, egroup, __Objective_GroundAreaObjects[faction][arrow], pos, 1)
+		entityID =  Entity_GetID(EGroup_GetSpawnedEntityAt(egroup, 1))
+		EGroup_Destroy(egroup)
+	
+		arrow = true	-- set arrow back to true for the next step
+		
+	end
+	
+	-- the "3d arrow" is tied to a hintpoint, so if no hintpoint is requested we just create one anyway and hide it.
+	local hintid = HintPoint_AddToPosition(pos, 1, hintpoint ~= false, __ObjectiveNothing, template, hintpointLocID, arrow, arrowOffset, objID, actionType, iconName, true)
+	
+	
+	if arrowFacing ~= nil then
+		if scartype(arrowFacing) == ST_MARKER then
+			arrowFacing = Util_GetPosition(arrowFacing)
+		end
+		
+		if scartype(arrowFacing) == ST_ENTITY then	
+			HintPoint_SetFacingEntity(hintid, arrowFacing)
+		elseif scartype(arrowFacing) == ST_SQUAD then
+			HintPoint_SetFacingSquad(hintid, arrowFacing)
+		elseif scartype(arrowFacing) == ST_SCARPOS then
+			HintPoint_SetFacingPosition(hintid, arrowFacing)
+		end
+	end
+
+	local pingid = nil;
+	if ping ~= false then
+		pingid = Objective_AddPing(objTable, pos, template, pingRadius)
+	end
+	
+	local reticuleID = nil
+	if reticuleRadius ~= false then
+		if template == DT_OBJECTIVE_MARKER then
+			-- hint point is using the ObjectiveMarkerDataTemplate, so set the hint point's reticule data.
+			-- The UI will then only show the reticule when the hint point is hovered.
+			HintPoint_SetReticleData(hintid, reticuleRadius, reticuleBP)
+		else
+			reticuleID = UI_CreateReticule(pos, reticuleRadius, reticuleBP)
+		end
+	end
+	
+	table.insert(elementTable.HighlightedPositions, { pos = pos, hintid = hintid, entityid = entityID, hintpoint = hintpoint, arrow = arrow, arrowOffset = arrowOffset, actionType = actionType, iconName = iconName, template = template, pingid = pingid, reticuleID = reticuleID } )
+	
+end
+
+function __Objective_updateHealthBar(id, data)
+	
+	local show = true
+	if scartype(data._targetID) == ST_SGROUP or scartype(data._targetID) == ST_EGROUP then
+		if __objective_isGroupInvalidOrEmpty(data._targetID) then
+			Obj_SetProgress(data._objTable.ID, (0/data._storedTotal))
+			return
+		end
+	elseif scartype(data._targetID) == ST_TABLE then
+		for k,group in pairs(data._targetID) do
+			if scartype(group) == ST_SGROUP and SGroup_IsValid(group.SGroupID) == false then
+				return
+			elseif scartype(group) == ST_EGROUP and EGroup_IsValid(group.EGroupID) == false then
+				return
+			end
+		end
+	end
+	
+	-- Remove if objective is complete	
+	if Objective_IsComplete(data._objTable) or Objective_IsFailed(data._objTable) or Objective_IsExpired(data._objTable) or data._active == false then
+		Obj_SetProgressVisible(data._objTable.ID, false)
+		Rule_RemoveMe()
+		return
+	end
+	
+	local currHealth = 0
+	if data._targetType == ST_STRING then
+		local id = data._targetID
+		g_MissionOMaticLedger = g_MissionOMaticLedger or {}
+		
+		for i=1, #g_MissionOMaticLedger do
+			local key = g_MissionOMaticLedger[i].key
+			if key == id then	
+				currHealth = g_MissionOMaticLedger[i].value
+				break
+			end
+		end
+	elseif data._targetType == ST_SGROUP or data._targetType == ST_EGROUP then
+		currHealth = __objective_getGroupHealth(data._targetID, data._weighEqually)
+		if data._onlyWhenDamaged then
+			if currHealth >= data._storedTotal then
+				show = false
+			end
+		end
+	elseif data._targetType == ST_TABLE then
+		for i=1, #data._targetID do
+			currHealth  = currHealth  + __objective_getGroupHealth(data._targetID[i], data._weighEqually)
+			if data._onlyWhenDamaged then
+				if currHealth >= data._storedTotal then
+					show = false
+				end
+			end
+		end
+	end
+	
+	if show then
+		Obj_SetProgressVisible(data._objTable.ID, true)
+		Obj_SetProgress(data._objTable.ID, (currHealth/data._storedTotal))
+	else
+		Obj_SetProgressVisible(data._objTable.ID, false)
+	end
+	
+end
+
+function __Objective_updateTimerBar(id, data)
+	
+	local show = true
+	
+	-- Remove if objective is complete	
+	if Objective_IsComplete(data._objTable) or Objective_IsFailed(data._objTable) or Objective_IsExpired(data._objTable) or data._active == false then
+		Obj_SetProgressVisible(data._objTable.ID, false)
+		Rule_RemoveMe()
+		return
+	end
+	
+	if Objective_IsTimerSet(data._objTable) == false then
+		return
+	end
+	
+	local currTime = Objective_GetTimerSeconds(data._objTable)
+	local totalTime = data._objTable.Counter.totalTimer
+	local direction = data._objTable.Counter.direction
+	
+	if show then
+		Obj_SetProgressVisible(data._objTable.ID, true)
+		Obj_SetProgress(data._objTable.ID, (currTime/totalTime))
+	else
+		Obj_SetProgressVisible(data._objTable.ID, false)
+	end
+	
+end
+
+function __Objective_Reminder(id, data)
+	
+	-- if the objective is complete, kill this before it starts
+	if (Objective_IsComplete(data.objTable) or Objective_IsFailed(data.objTable) or Objective_IsExpired(data.objTable)) then
+		Rule_RemoveMe()
+		return
+	end
+	-- handle Timer
+	
+	if Event_IsQueued(data.intel) or Event_IsRunning(data.intel) == false then
+		if Timer_Exists(data.timerID) == false then
+			Timer_Start(data.timerID, data.time)
+		else
+			if Timer_GetRemaining(data.timerID) <= 0 then
+				Timer_End(data.timerID)
+				
+				Util_StartIntel(data.intel)
+			end
+		end
+	end
+	
+end
+
+function __Speech_Reminder()
+		if __ObjectiveSpeechReminderData.speechEvent ~= nil then
+		local speech_event_func = __ObjectiveSpeechReminderData.speechEvent.NarrativeEventCallable
+		if scartype(speech_event_func) == ST_FUNCTION then
+			if __ObjectiveSpeechReminderData.speechEvent.event_name ~= nil then
+				local event_name = __ObjectiveSpeechReminderData.speechEvent.event_name
+				local extra_event_name = __ObjectiveSpeechReminderData.speechEvent.extra_event_name
+				speech_event_func(event_name, extra_event_name)
+			end
+		end
+	end
+end
+
+function __Objective_Conditional_Reminder(id, data)
+	
+	-- if the objective is complete, kill this before it starts
+	if (Objective_IsComplete(data.objTable) or Objective_IsFailed(data.objTable) or Objective_IsExpired(data.objTable)) then
+		Rule_RemoveMe()
+		return
+	end
+
+	if scartype(data.conditionFunction) ~= ST_FUNCTION then
+		fatal("Expected a function for the conditional reminder to check!")
+	else
+		local intel_function = data.intel.NarrativeEventCallable
+		if intel_function ~= nil and scartype(intel_function) == ST_FUNCTION then
+			if Event_IsQueued(intel_function) or Event_IsRunning(intel_function) == false then
+				if data.conditionFunction(data.conditionData) then
+					__ObjectiveSpeechReminderData = data.conditionData
+					__ObjectiveSpeechReminderData.speechEvent = data.intel
+					Util_StartIntel(__Speech_Reminder)
+				end
+			end
+		end
+	end
+end
+
+function __objective_getGroupHealthMax(group, opt_weigh_equally)
+	local sum = 0
+	if scartype(group) == ST_SGROUP then
+		if opt_weigh_equally == "Squad" then
+			sum = SGroup_Count(group)
+		elseif opt_weigh_equally == "Entity" then
+			local countEntities = function(entity)
+				sum = sum + 1
+			end
+			SGroup_CallEntityFunction(group, countEntities)
+		else
+			local sumHealthMax = function(gid,i,sid)
+				sum = sum + Squad_GetHealthMax(sid)
+			end
+			SGroup_ForEach(group, sumHealthMax)
+		end
+	elseif scartype(group) == ST_EGROUP then
+		if opt_weigh_equally == "Squad" then
+			error("Cannot choose Squad with an EGroup!")
+		elseif opt_weigh_equally == "Entity" then
+			sum = EGroup_Count(group)
+		else
+			local sumHealthMax = function(gid,i,eid)
+				sum = sum + Entity_GetHealthMax(eid)
+			end
+			EGroup_ForEach(group, sumHealthMax)
+		end
+	end
+	return sum
+	
+end
+
+function __objective_getGroupHealth(group, opt_weigh_equally)
+	local sum = 0
+	if scartype(group) == ST_SGROUP then
+		if opt_weigh_equally == "Squad" then
+			local sumHealthPercentage = function(gid,i,sid)
+				sum = sum + Squad_GetHealthPercentage(sid, true)
+			end
+			SGroup_ForEach(group, sumHealthPercentage)
+		elseif opt_weigh_equally == "Entity" then
+			local sumHealthPercentage = function(entity)
+				sum = sum + Entity_GetHealthPercentage(entity)
+			end
+			SGroup_CallEntityFunction(group, sumHealthPercentage)
+		else
+			local sumHealth = function(gid,i,sid)
+				sum = sum + Squad_GetHealth(sid)
+			end
+			SGroup_ForEach(group, sumHealth)
+		end
+	elseif scartype(group) == ST_EGROUP then
+		if opt_weigh_equally == "Squad" then
+			error("Cannot choose Squad with an EGroup!")
+		elseif opt_weigh_equally == "Entity" then
+			local f = function(gid,i,eid)
+				sum = sum + Entity_GetHealthPercentage(eid)
+			end
+			EGroup_ForEach(group, f)
+		else
+			local f = function(gid,i,eid)
+				sum = sum + Entity_GetHealth(eid)
+			end
+			EGroup_ForEach(group, f)
+		end
+	end
+	return sum
+	
+end
+
+function __objective_isGroupInvalidOrEmpty(group)
+	
+	if scartype(group) == ST_SGROUP then
+		if SGroup_IsValid(group.SGroupID) == false or SGroup_IsEmpty(group) then
+			return true
+		end
+	elseif scartype(group) == ST_EGROUP then
+		if EGroup_IsValid(group.EGroupID) == false or EGroup_IsEmpty(group) then
+			return true
+		end
+	end
+	return false
+end
+
+
+-----------------------------------------------------------------------------------------------------------------------------
+							--SFX Cues for Italy--
+-----------------------------------------------------------------------------------------------------------------------------
+
+
+function Play_SFX_ObjectiveStart()
+	print("sfx start objective")
+	Sound_Play2D ("sfx_ui_campaign_objective_update_play")
+end
+
+function Play_SFX_ObjectiveComplete()	
+	print("sfx sub objective complete")
+	Sound_Play2D ("sfx_ui_campaign_objective_complete_play")
+end
+
+function Play_SFX_SubObjectiveComplete()
+	print("sfx sub objective complete")
+	Sound_Play2D ("sfx_ui_campaign_objective_left_screen_update_play")
+end
+-- %1NAME% 

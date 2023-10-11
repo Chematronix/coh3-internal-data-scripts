@@ -1,0 +1,404 @@
+--
+-- "AIPrefab Goal"
+--
+--  Prefab Script
+--
+
+--------------
+--IMPORTS--
+--------------
+import("anvil.scar")
+import("conditionlist.scar")
+import("actionlist.scar")
+
+--? @group scardoc;Prefabs
+
+-- Initializer function should ALWAYS be named after the prefab name with _Init appended on the end
+function aiprefab_Init(data)
+	local instance = Prefab_GetInstance(data)
+	local aiplayer = instance.aiplayer
+	local radius = instance.marker and Marker_GetProximityRadiusOrDefault(instance.marker, 0) or 0
+	local behaviour = instance.behaviour
+	local min_difficulty = instance.min_difficulty
+	local max_difficulty = instance.max_difficulty
+	local selection_type = instance.selection_type
+	local intents = instance.intents or {}
+	local name = instance.instanceName
+	local can_reassign = instance.can_reassign or false
+		
+	-- For Behaviour types that cant toggle support/reassignment (Patrol), default it to true
+	if (behaviour == "Patrol") then
+		can_reassign = true
+	end
+	
+	if min_difficulty == nil then
+		min_difficulty = 1
+	end
+	
+	if max_difficulty == nil then
+		max_difficulty = 1
+	end
+	
+	if instance.target_type == nil then
+		instance.target_type = "Position"
+	end
+	
+	assert(min_difficulty >= 1, "Minimum difficulty must be greater or equal to 1")
+	assert(max_difficulty >= min_difficulty, "Maximum difficulty must be greater or equal to minimum difficulty")
+	
+	if (behaviour ~= "Homing" and 
+		behaviour ~= "Plan"	and
+		behaviour ~= "cmap_AttackCompany" and 
+		behaviour ~= "cmap_Defend" and 
+		behaviour ~= "cmap_CaptureAttack" and 
+		behaviour ~= "cmap_CaptureAssault" and 
+		behaviour ~= "cmap_CaptureIgnoreEnemies" and 
+		behaviour ~= "cmap_Garrison") then
+		assert(radius > 0, "Behaviour: "..name.." has no radius set, please update marker radius")
+	end
+	
+	if behaviour == "cmap_Defend" then
+		if instance.area_type == "territory_sector" then
+			radius = 0
+		elseif instance.target_type ~= "Position" then
+			radius = instance.operation_radius
+		else
+			assert(radius > 0, "aiprefab: ".. name .. 
+				"\ncmap_Defend aiprefab with target_type Position and area_type circle_around_target should have nonzero marker radius")
+		end
+	end
+	
+	local id = AI_AddPrefab(aiplayer, name, behaviour, radius, min_difficulty, max_difficulty, can_reassign, false)
+	instance.id = id
+	if (id ~= 0) then
+		MissionPrint("AIPrefab "..behaviour.." added "..name.." ["..id.."]")
+		for i=1, #intents do
+			local result = AI_PushPrefabAIIntent(id, aiplayer, intents[i].intent);
+			MissionPrint("AIPrefab "..name.." intent added: "..intents[i].intent, result)
+			assert(result, "Failed to add intent!");
+		end
+	else
+		MissionPrint("AIPrefab "..behaviour.." not added "..name)
+	end
+end
+
+
+
+function aiprefab_PostInit(data)
+	local instance = Prefab_GetInstance(data)
+	local behaviour = instance.behaviour
+	local target_type = instance.target_type
+	local selection_type = instance.selection_type
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	local active = instance.active
+	local children = instance.children or {}
+
+	MissionPrint("AIPrefab "..name.." post init "..target_type.." ["..id.."]")
+	if (id ~= 0) then
+		-- Assign associated children
+		if (behaviour == "Plan") then
+			for i=1, #children do
+				local childPrefab = Prefab_GetInstance(children[i].aiprefab) or {}
+				local result = AI_PushChildAIPrefab(id, aiplayer, childPrefab.id, children[i].parallel);
+				MissionPrint("AIPrefab "..name.." adding child: "..childPrefab.instanceName, result)
+				assert(result, "Failed to add child: "..childPrefab.instanceName.." to Parent Prefab: "..name.."! Prefabs must be on same player!");
+			end
+		-- Position Targets immediately are set to active and have no associated Rule 
+		elseif (target_type == "Position") then
+			local position = Marker_GetPosition(instance.marker)
+			assert(position ~= nil, "AIPrefab '"..name.."' must have valid position for this target type")
+			local result = AI_SetPrefabTarget_Position(id, aiplayer, position)
+			assert(result, "AI_SetPrefabTarget '"..name.."' Position Failed")
+		-- Waypoint targets are immediately set to active and assume waypoints exists at time of init
+		elseif (target_type == "Waypoints") then
+			local waypoint_name = instance.waypoints
+			assert(waypoint_name ~= nil, "AIPrefab '"..name.."' must have valid waypoint name for this target type")
+			local result = AI_SetPrefabTarget_Waypoints(id, aiplayer, waypoint_name)
+			assert(result, "AI_SetPrefabTarget '"..name.."' Waypoints Failed")
+		-- S/EGroup Targets are set to inactive unless the group exists and we will update their target as their E/SGroup changes 
+		elseif (target_type == "EGroup") then
+			local egroup_target = instance.egroup_target
+			assert(egroup_target ~= nil, "AIPrefab '"..name.."' must have a valid egroup for this target type")
+			local group_count = EGroup_CountSpawned(egroup_target)
+			Rule_GroupCount(aiprefab_UpdateTarget, egroup_target, IS_NOT_EQUAL, group_count, false, data)
+			if (group_count > 0) then
+				local result = AI_SetPrefabTarget_EGroup(id, aiplayer, egroup_target)
+				assert(result, "AI_SetPrefabTarget '"..name.."' EGroup Failed")
+			else
+				active = false;
+			end
+		-- S/EGroup Targets are set to inactive unless the group exists and we will update their target as their E/SGroup changes 
+		elseif (target_type == "SGroup") then
+			local sgroup_target = instance.sgroup_target
+			assert(sgroup_target ~= nil, "AIPrefab '"..name.."' must have a valid sgroup for this target type")
+			local group_count = SGroup_CountSpawned(sgroup_target)
+			Rule_GroupCount(aiprefab_UpdateTarget, sgroup_target, IS_NOT_EQUAL, group_count, false, data)
+			if (group_count > 0) then
+				local result = AI_SetPrefabTarget_SGroup(id, aiplayer, sgroup_target)
+				assert(result, "AI_SetPrefabTarget '"..name.."' SGroup Failed")
+			else
+				active = false;
+			end
+		else
+			assert(false, "AIPrefab '"..name.."' invalid target type supplied "..target_type)
+			return
+		end
+		
+		if (selection_type == "Automatic") then
+			-- Do nothing here, AIPrefab defaults to automatic selection
+		elseif (selection_type == "SGroup") then
+			local sgroup_selection = instance.sgroup_selection
+			assert(sgroup_selection ~= nil, "AIPrefab '"..name.."' must have a valid sgroup for this selection type")
+			local group_count = SGroup_CountSpawned(sgroup_selection)
+			Rule_GroupCount(aiprefab_UpdateSelection, sgroup_selection, IS_NOT_EQUAL, group_count, false, data)
+			-- Regardless of the group count, set the selection style to ensure automatic selection doesnt run
+			local result = AI_SetPrefabSelection_SGroup(id, aiplayer, sgroup_selection)
+			assert(result, "AI_SetPrefabSelection '"..name.."' SGroup Failed")
+		else
+			-- Do nothing here, no selelection type => automatic
+		end
+		
+		-- Selection and Target state setup, activate prefab if needed
+		if (active) then
+			local result = AI_SetPrefabActive(id, aiplayer, active)
+			assert(result, "AI_SetPrefabActive '"..name.."'  Failed")
+		end
+	end
+end
+
+
+--? @args Table/String instance
+--? @shortdesc Update the target and active status of the current Prefab
+function aiprefab_UpdateTarget(data)
+	local instance = Prefab_GetInstance(data)
+	local target_type = instance.target_type
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	local active = instance.active
+	MissionPrint("AIPrefab "..name.." update target "..target_type.." ["..id.."]")
+	if (id ~= 0) then
+		if (target_type == "EGroup") then
+			local egroup_target = instance.egroup_target
+			assert(egroup_target ~= nil, "AIPrefab must have a valid egroup for this type")
+			local group_count = EGroup_CountSpawned(egroup_target)
+			Rule_GroupCount(aiprefab_UpdateTarget, egroup_target, IS_NOT_EQUAL, group_count, false, data)
+			if (group_count > 0) then
+				local result = AI_SetPrefabTarget_EGroup(id, aiplayer, egroup_target)
+				assert(result, "AI_SetPrefabTarget EGroup Failed")
+			else
+				-- EGroup may of been killed
+				active = false;
+			end
+		elseif (target_type == "SGroup") then
+			local sgroup_target = instance.sgroup_target
+			assert(sgroup_target ~= nil, "AIPrefab must have a valid sgroup for this type")
+			local group_count = SGroup_CountSpawned(sgroup_target)
+			Rule_GroupCount(aiprefab_UpdateTarget, sgroup_target, IS_NOT_EQUAL, group_count, false, data)
+			if (group_count > 0) then
+				local result = AI_SetPrefabTarget_SGroup(id, aiplayer, sgroup_target)
+				assert(result, "AI_SetPrefabTarget_SGroup Failed")
+			else
+				-- SGroup may of been killed
+				active = false;
+			end
+		elseif (target_type == "Position") then
+			-- Updated position is expected to still be valid. If intent is to disable, change active status
+			local position = Marker_GetPosition(instance.marker)
+			assert(position ~= nil, "AIPrefab must have valid position for this type")
+			local result = AI_SetPrefabTarget_Position(id, aiplayer, position)
+			assert(result, "AI_SetPrefabTarget Position Failed")
+		elseif (target_type == "Waypoints") then
+			local waypoint_name = instance.waypoints
+			assert(waypoint_name ~= nil, "AIPrefab must have valid waypoint name for this type")
+			assert(_G[waypoint_name] ~= nil, "AIPrefab expects waypoint spline to exist for this type")
+			local result = AI_SetPrefabTarget_Waypoints(id, aiplayer, waypoint_name)
+			assert(result, "AI_SetPrefabTarget Waypoints Failed")
+		else
+			assert(false, "Unsupported target_type requested to be updated: "..target_type)
+		end
+		
+		
+		-- Update our active status to whatever it needs to be now, use tuned active state unless we intend to disable
+		local result =  AI_SetPrefabActive(id, aiplayer, active)
+		assert(result, "no C++ data found for AIPrefab. name: ".. name)
+	end
+end
+
+--? @args Table/String instance
+--? @shortdesc Update the active status of the current Prefab
+function aiprefab_Trigger(data)
+	local instance = Prefab_GetInstance(data)
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	MissionPrint("AIPrefab "..name.." trigger ["..id.."]", true)
+	if (id ~= 0) then
+		local result = AI_SetPrefabActive(id, aiplayer, true)
+		assert(result, "no C++ data found for AIPrefab. name: ".. name)
+		instance.active = true
+	end
+end
+
+--? @args Table/String instance
+--? @result Boolean
+--? @shortdesc Returns true if the prefab is currently active
+function aiprefab_IsActive(data)
+	local instance = Prefab_GetInstance(data)
+	local id = instance.id
+	return id ~= 0 and instance.active
+end
+
+--? @args Table/String instance
+--? @shortdesc Update the active status of the current Prefab
+function aiprefab_Stop(data)
+	local instance = Prefab_GetInstance(data)
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	MissionPrint("AIPrefab "..name.." stop ["..id.."]", false)
+	if (id ~= 0) then
+		local result = AI_SetPrefabActive(id, aiplayer, false)
+		assert(result, "no C++ data found for AIPrefab. name: ".. name)
+		instance.active = false
+	end
+end
+
+--? @args Table/String instance
+--? @shortdesc Update the can reassing state of the current Prefab
+function aiprefab_CanReassign(data, state)
+	local instance = Prefab_GetInstance(data)
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	local behaviour = instance.behaviour
+	MissionPrint("AIPrefab "..name.." reassign ["..id.."]", state)
+	assert(behaviour ~= "Patrol", "Reassign cannot be adjusted on Patrol behaviours '"..name.."'")
+	if (id ~= 0) then
+		local result = AI_SetPrefabCanReassign(id, aiplayer, state)
+		assert(result, "AI_SetPrefabCanReassign '"..name.."' Failed");
+	end
+end
+
+--? @args Table/String instance
+--? @shortdesc Update the target and active status of the current Prefab
+function aiprefab_UpdateSelection(data)
+	local instance = Prefab_GetInstance(data)
+	local selection_type = instance.selection_type
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	local active = instance.active
+	MissionPrint("AIPrefab "..name.." update selection "..selection_type.." ["..id.."]")
+	if (id ~= 0) then
+		if (selection_type == "SGroup") then
+			local sgroup_selection = instance.sgroup_selection
+			assert(sgroup_selection ~= nil, "AIPrefab '"..name.."' must have a valid sgroup for this selection type")
+			local group_count = SGroup_CountSpawned(sgroup_selection)
+			Rule_GroupCount(aiprefab_UpdateSelection, sgroup_selection, IS_NOT_EQUAL, group_count, false, data)
+			if (group_count > 0) then
+				local result = AI_SetPrefabSelection_SGroup(id, aiplayer, sgroup_selection)
+				assert(result, "AI_SetPrefabSelection_SGroup '"..name.."' SGroup Failed")
+			else
+				-- SGroup may of been killed
+				active = false;
+			end
+		elseif (selection_type == "Automatic") then
+			MissionPrint("AIPrefab "..name.." update selection request ignored ["..id.."]")
+		else
+			assert(false, "Unsupported selection_type requested to be updated: "..selection_type)
+		end
+		
+		
+		-- Update our active status to whatever it needs to be now, use tuned state unless we intend to disable
+		local result = AI_SetPrefabActive(id, aiplayer, active)
+		assert(result, "no C++ data found for AIPrefab. name: ".. name)
+	end
+end
+
+--? @args Table/String instance
+--? @shortdesc Change the AIPrefabIntents associated with this AIPrefab
+function aiprefab_ChangeIntents(data, intents)
+	local instance = Prefab_GetInstance(data)
+	local aiplayer = instance.aiplayer
+	local name = instance.instanceName
+	local id = instance.id
+	MissionPrint("AIPrefab "..name.." trigger ["..id.."]", true)
+	if (id ~= 0) then
+		MissionPrint("AIPrefab "..name.." ["..id.."] changing intent")
+		local result = AI_ClearPrefabAIIntents(id, aiplayer)
+		assert(result, "Failed to clear AIPrefab Intent! "..name)
+		for i=1, #intents do
+			local result = AI_PushPrefabAIIntent(id, aiplayer, intents[i].intent);
+			MissionPrint("AIPrefab "..name.." intent added: "..intents[i].intent, result)
+			assert(result, "Failed to add intent!");
+		end
+	end
+end
+
+function aiPrefab_RestoreAll()
+	
+	-- NOTE: This isn't called for partial scar saves on the metamap. OnGameRestore callbacks
+	-- are avoided in favour of the partial save callbacks.
+
+	ConditionalRule_Remove(aiprefab_UpdateSelection) -- these rules are leftover from before save/load and use old dead statsobject ids
+	ConditionalRule_Remove(aiprefab_UpdateTarget)
+	
+	
+	local ai_prefabs = Prefab_GetAllOfType("aiprefab")
+	for _, data in ipairs(ai_prefabs) do
+		aiprefab_Init(data)
+	end	
+	
+	for _, data in ipairs(ai_prefabs) do
+		aiprefab_PostInit(data)
+	end	
+end
+
+-- Partial Save Callback for all ai prefabs
+function aiprefab_GeneratePartialSaveTable(saveTable)
+	
+	local aiPrefabSaveTable = {
+		version = 1,
+		dynamicData = {}, -- dynamic data for each instance
+	}
+	
+	local dynamicData = aiPrefabSaveTable.dynamicData
+	
+	local aiPrefabs = Prefab_GetAllOfType("aiprefab")
+	local aiPrefabCount = #aiPrefabs
+	for i=1, aiPrefabCount do
+		local aiPrefab = aiPrefabs[i]
+		local instanceName = aiPrefab.instanceName
+		local active = aiPrefab.active
+		dynamicData[instanceName] = active
+	end
+	
+	saveTable.aiPrefabSaveTable = aiPrefabSaveTable
+	
+	-- NOTE: There is no symmetric partial save restore
+	-- for AI prefabs. We re-init all prefabs to sanitize,
+	-- apply defaults, and add them back into the active
+	-- prefab table from the worldbuilder data that is
+	-- loaded. Partial save hooks into that process and
+	-- calls <prefabtype>_RestoreFromTable and is passed
+	-- the whole partial save table at that point to
+	-- restore from.
+end
+
+function aiprefab_RestoreFromTable(data, restore_table)
+	-- If initializing as part of the partial save restore, check the
+	-- partial save table for the active boolean to see if it had been
+	-- changed in the savegame we're loading:
+	local instance = Prefab_GetInstance(data)
+	local aiPrefabSaveTable = restore_table.aiPrefabSaveTable
+	local dynamicAIPrefabData = aiPrefabSaveTable.dynamicData
+	local dynamicActive = dynamicAIPrefabData[instance.instanceName]
+	if dynamicActive ~= nil then
+		instance.active = dynamicAIPrefabData[instance.instanceName]
+	end
+end
+
+Game_SetGameRestoreCallback(aiPrefab_RestoreAll)

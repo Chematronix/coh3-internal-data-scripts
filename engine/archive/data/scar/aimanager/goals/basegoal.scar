@@ -1,0 +1,1174 @@
+--? @group scardoc;Encounter
+
+Ai = Ai or fatal("Ai not loaded properly")
+Ai.goals = Ai.goals or {}
+Ai.goals.BaseGoal = {}
+Ai.goals.DefaultGoalData = Ai.goals.DefaultGoalData or {} -- preserve data on soft-reload
+
+local BaseGoal = Ai.goals.BaseGoal
+
+BaseGoal.data = nil
+BaseGoal.encounter = nil
+
+-------------------------
+-- metatable common functions
+-------------------------
+
+function _AIDefaultGoalData_metaAbilityBlackList_findValueByValueInTable(val, tbl)
+	if (val == nil) then
+		return nil
+	end
+	
+	for k, v in pairs(tbl) do
+		if (val == v) then
+			return v
+		end
+	end
+			
+	return nil
+end
+	
+function _AIDefaultGoalData_metaAbilityControlsList_findValueByValueInTable(val, tbl)
+	if (val == nil or scartype(val) ~= ST_TABLE) then
+		return nil
+	end
+	
+	for k, v in pairs(tbl) do
+		if (val.abilityPBG == v.abilityPBG) then
+			return v
+		end
+	end
+			
+	return nil
+end
+	
+function _AIDefaultGoalData_metaTacticControlsList_findValueByValueInTable(val, tbl)
+	if (val == nil or scartype(val) ~= ST_TABLE) then
+		return nil
+	end
+	
+	for k, v in pairs(tbl) do
+		if (val.tacticType == v.tacticType) then
+			return v
+		end
+	end
+	
+	return nil
+end
+
+-------------------------
+-------------------------
+
+function _AIDefaultGoalData_SetDefaultGoalDataMetaData(goalData)
+	if (goalData.abilityBlackList ~= nil and scartype(goalData.abilityBlackList) == ST_TABLE) then
+		local mtbl = getmetatable(goalData.abilityBlackList) or {}
+		mtbl._findValueByValueInTable = _AIDefaultGoalData_metaAbilityBlackList_findValueByValueInTable
+		setmetatable(goalData.abilityBlackList, mtbl)
+	end
+	if (goalData.abilityControlsList ~= nil and scartype(goalData.abilityControlsList) == ST_TABLE) then
+		local mtbl = getmetatable(goalData.abilityControlsList) or {}
+		mtbl._findValueByValueInTable = _AIDefaultGoalData_metaAbilityControlsList_findValueByValueInTable
+		setmetatable(goalData.abilityControlsList, mtbl)
+	end
+	if (goalData.tacticControlsList ~= nil and scartype(goalData.tacticControlsList) == ST_TABLE) then
+		local mtbl = getmetatable(goalData.tacticControlsList) or {}
+		mtbl._findValueByValueInTable = _AIDefaultGoalData_metaTacticControlsList_findValueByValueInTable
+		setmetatable(goalData.tacticControlsList, mtbl)
+	end
+end
+
+function _AIDefaultGoalData_ApplyModifiers(goalData, modifierTable)
+
+	if (goalData == nil or scartype(goalData) ~= ST_TABLE or modifierTable == nil or scartype(modifierTable) ~= ST_TABLE) then
+		return
+	end
+	
+	-- general case
+	for k, v in pairs(goalData) do
+		local k_Mult = tostring(k).."_Multiplier"
+		local v_Mult = modifierTable[k_Mult]
+		
+		if (v_Mult ~= nil and scartype(v_Mult) == ST_NUMBER) then
+			if (scartype(v) == ST_NUMBER) then
+				goalData[k] = v * v_Mult
+			elseif (scartype(v) == ST_TABLE) then
+				for kt, vt in pairs(v) do
+					if (scartype(vt) == ST_NUMBER) then
+						goalData[k][kt] = vt * v_Mult
+					end
+				end
+			end
+		end
+	end
+
+	-- special case - fallback
+	_AIDefaultGoalData_ApplyModifiers(goalData.fallbackParams, modifierTable.fallbackParams)
+	
+	-- special case - ability
+	if (goalData.abilityControlsList ~= nil and modifierTable.abilityControlsList ~= nil) then
+		for k, v in pairs(goalData.abilityControlsList) do
+			local m_v = _AIDefaultGoalData_metaAbilityControlsList_findValueByValueInTable(v, modifierTable.abilityControlsList)
+
+			_AIDefaultGoalData_ApplyModifiers(v, m_v)
+		end
+	end
+	
+	-- special case - tactic
+	if (goalData.tacticControlsList ~= nil and modifierTable.tacticControlsList ~= nil) then
+		for k, v in pairs(goalData.tacticControlsList) do
+			local m_v = _AIDefaultGoalData_metaTacticControlsList_findValueByValueInTable(v, modifierTable.tacticControlsList)
+
+			_AIDefaultGoalData_ApplyModifiers(v, m_v)
+		end
+	end
+end
+
+
+--[[
+-- Default Goal Data Interface
+]]--
+
+--? @shortdesc Adjust default goal data.  Sets the default GoalData to the current defaults plus additionalDefaultGoalData; any values specified are used for unspecified encounter goal values.
+--? @args Table additionalDefaultGoalData
+function AIBaseGoal_AdjustDefaultGoalData(additionalDefaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Adjusting BaseGoal default data...")
+
+	local additionalGoalData = Clone(additionalDefaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(additionalGoalData)
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+	DefaultGoalData.defaultGoalData = MergeCloneTable(DefaultGoalData.defaultGoalData, additionalGoalData)
+
+	Ai:Print("-----------------------------------------------")
+	Ai:Print("additionalDefaultGoalData")
+	Ai:Print(additionalGoalData)
+	Ai:Print("-----------------------------------------------")
+	DebugPrintGoals(DefaultGoalData.defaultGoalData, DefaultGoalData.overrideGoalData, DefaultGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set default goal data.  defaultGoalData is cloned; any values specified are used for unspecified encounter goal values.
+--? @args Table defaultGoalData
+function AIBaseGoal_SetDefaultGoalData(defaultGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting BaseGoal default data...")
+
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+	DefaultGoalData.defaultGoalData = Clone(defaultGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultGoalData.defaultGoalData)
+
+	DebugPrintGoals(DefaultGoalData.defaultGoalData, DefaultGoalData.overrideGoalData, DefaultGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set override goal data.  overrideGoalData is cloned; any values specified are used for encounter goal values.
+--? @args Table overrideGoalData
+function AIBaseGoal_SetOverrideGoalData(overrideGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting BaseGoal override data...")
+
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+	DefaultGoalData.overrideGoalData = Clone(overrideGoalData)
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultGoalData.overrideGoalData)
+
+	DebugPrintGoals(DefaultGoalData.defaultGoalData, DefaultGoalData.overrideGoalData, DefaultGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+--? @shortdesc Set modify goal data.  modifyGoalData is cloned; values specified via keyname_Multiplier are used for the numeric keyname encounter goal value.
+--? @args Table modifyGoalData
+function AIBaseGoal_SetModifyGoalData(modifyGoalData)
+	Ai:Print("===============================================")
+	Ai:Print("Setting BaseGoal modify data...")
+
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+	DefaultGoalData.modifyGoalData = Clone(modifyGoalData) 
+
+	DebugPrintGoals(DefaultGoalData.defaultGoalData, DefaultGoalData.overrideGoalData, DefaultGoalData.modifyGoalData)
+	Ai:Print("===============================================")
+end
+
+
+--[[
+-- Goal Initialize
+]]--
+
+function AIDefaultGoalData_Initialize()
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+
+	print("Initializing Default Goal Data...")
+
+	if(DefaultGoalData.initialized)then
+		return
+	end
+
+	DefaultGoalData.defaultGoalData = 
+	{
+		range = 20,
+		leashRange = nil,
+		abilityControlsList = {},
+		tacticControlsList = {},
+		abilityBlackList = {},
+		tacticTargetPreference = AITacticTargetPreference_NearAndBest,
+		combatRangePolicy = AICombatRangePolicy_Default,
+		spreadAttackers = true,
+		garrison = false,
+		garrisonIdle = false,
+		attackMove = false,
+		attackEngagementMove = true,
+		fallbackParams = nil,
+		primaryCombatTarget = nil,
+		coordinatedSetup = true,
+		useSetupLocations = false,
+		-- DEPRECATED: remove at first opportunity -- defaults should be closer to Skirmish behaviours; 
+		-- added this because campaign couldn't handle when pickup/teamweapon capture/recrew started working great. ;-)
+		pickupWeapons = false,
+	}
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultGoalData.defaultGoalData)
+	
+	DefaultGoalData.overrideGoalData = 
+	{
+		range = nil,
+		leashRange = nil,
+		abilityControlsList = nil,
+		tacticControlsList = nil,
+		abilityBlackList = nil,
+		tacticTargetPreference = nil,
+		combatRangePolicy = nil,
+		spreadAttackers = nil,
+		garrison = nil,
+		garrisonIdle = nil,
+		attackMove = nil,
+		coordinatedSetup = nil,
+		useSetupLocations = nil,
+		attackEngagementMove = nil,
+		fallbackParams = nil,
+		primaryCombatTarget = nil,
+	}
+	_AIDefaultGoalData_SetDefaultGoalDataMetaData(DefaultGoalData.overrideGoalData)
+	
+	DefaultGoalData.modifyGoalData = 
+	{
+		range_Multiplier = 1,
+		leashRange_Multiplier = 1,
+		coordinatedMoveRadius_Multiplier = 1,
+		abilityControlsList = {},
+		tacticControlsList = {},
+	} 
+	
+	DefaultGoalData.initialized = true
+end
+
+--[[ Init ]]
+Scar_AddInit( AIDefaultGoalData_Initialize )
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+local _mergeCloneTableStack = {}
+
+function MergeCloneTable(defaultTable, overrideTable)
+	
+	if (defaultTable == nil and overrideTable == nil) then
+		return nil
+	elseif (defaultTable == nil) then
+		return Clone(overrideTable)
+	elseif (overrideTable == nil) then
+		return Clone(defaultTable)
+	end
+	
+	if( DoesTableContain(_mergeCloneTableStack, defaultTable) or DoesTableContain(_mergeCloneTableStack, overrideTable) ) then
+		fatal( "Recursive Merge Cloning Error Detected." )
+	end    
+    
+	table.insert( _mergeCloneTableStack, defaultTable ) -- push
+	table.insert( _mergeCloneTableStack, overrideTable ) -- push
+	
+	local defaultMetatable = getmetatable(defaultTable)
+	local defaultFindEntry = defaultMetatable and defaultMetatable._findValueByValueInTable or nil
+
+	local tbl = {}
+	for k, dv in pairs(defaultTable) do
+		local ov = nil
+		
+		if (defaultFindEntry ~= nil) then
+			ov = defaultFindEntry(dv, overrideTable)
+		else
+			ov = overrideTable[k]
+		end
+
+		if (ov ~= nil and scartype(dv) ~= scartype(ov)) then
+			print( "Warning in MergeCloneTable - key("..tostring(k)..") - default value("..tostring(dv)..") type("..tostring(type(dv))..
+					") differs from override value("..tostring(ov)..") type("..tostring(type(ov))..")")
+		end
+			
+		if (scartype(dv) ~= ST_TABLE)then 
+			if (ov == nil) then
+				tbl[k] = dv
+			else
+				tbl[k] = Clone(ov)
+			end
+		else
+			tbl[k] = MergeClone(dv, ov)
+		end
+	end
+
+	for k, ov in pairs(overrideTable) do
+		local tv = nil
+		if (defaultFindEntry ~= nil) then
+			tv = defaultFindEntry(ov, tbl)
+		else
+			tv = tbl[k]
+		end
+	
+		-- if tbl has a value, we created it above, so it's already merge-cloned
+		if (tv == nil) then
+			if (defaultFindEntry ~= nil) then
+				table.insert(tbl, Clone(ov))
+			else
+				tbl[k] = Clone(ov)
+			end
+			
+		end
+	end
+	
+	setmetatable(tbl, MergeClone(getmetatable(defaultTable),getmetatable(overrideTable)))
+		
+	table.remove(_mergeCloneTableStack,(#_mergeCloneTableStack)) -- pop
+	table.remove(_mergeCloneTableStack,(#_mergeCloneTableStack)) -- pop
+	
+	return tbl
+end
+
+--? @shortdesc Merge clones two table (recursively) into a single table combining into a new table allowing for unadulterated use of the data
+--? @args Table defaultTable, Table overrideTable
+--? @result Table 
+function MergeClone(defaultTable, overrideTable)
+	if( scartype(defaultTable) == ST_TABLE or scartype(overrideTable) == ST_TABLE ) then
+		return MergeCloneTable(defaultTable, overrideTable)
+	elseif( overrideTable == nil ) then
+		return Clone(defaultTable)
+	else
+		return Clone(overrideTable)
+	end
+end
+
+---------------
+
+function CloneGoal(goal)
+	if (goal ~= nil) then
+		local clonedGoal = Clone(goal)
+		clonedGoal.internalAIEncounterPtr = nil
+		clonedGoal.encounterID = -1;
+		clonedGoal.callbackFn = nil;
+		
+		return clonedGoal
+	end
+	return nil
+end
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+function DebugPrintGoals(defaultGoalData, overrideGoalData, modifyGoalData)
+	Ai:Print("GoalData defaults/overrides/modifiers. Use AI_SetDebugLevel(2) to view details.")
+	Ai:Print("-----------------------------------------------", 2)
+	Ai:Print("defaultGoalData", 2)
+	Ai:Print(defaultGoalData, 2)
+	Ai:Print("overrideGoalData", 2)
+	Ai:Print(overrideGoalData, 2)
+	Ai:Print("modifyGoalData", 2)
+	Ai:Print(modifyGoalData, 2)
+	Ai:Print("-----------------------------------------------", 2)
+end
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+--Creates the goal. Receives data table
+function BaseGoal:Create(encounter, goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+	defaultGoalData = defaultGoalData or DefaultGoalData.defaultGoalData or {}
+	overrideGoalData = overrideGoalData or DefaultGoalData.overrideGoalData or {}
+	modifyGoalData = modifyGoalData or DefaultGoalData.modifyGoalData or {}
+
+	local goal = CloneGoal(self)
+	
+	Ai:Print("Applying GoalData defaults/overrides/modifiers. Use AI_SetDebugLevel(2) to view details.")
+	Ai:Print("===============================================", 2)
+	Ai:Print("BaseGoal:Create:defaultGoalData", 2)
+	Ai:Print(defaultGoalData, 2)
+	Ai:Print("BaseGoal:Create:overrideGoalData", 2)
+	Ai:Print(overrideGoalData, 2)
+	Ai:Print("BaseGoal:Create:modifyGoalData", 2)
+	Ai:Print(modifyGoalData, 2)
+	Ai:Print("BaseGoal:Create:goalData", 2)
+	Ai:Print(goalData, 2)
+
+	Ai:Print("Applying DEFAULT GoalData...")
+	goal.data = MergeClone(defaultGoalData, goalData)
+
+	Ai:Print("BaseGoal:Create:defaults+goalData", 2)
+	Ai:Print(goal.data, 2)
+
+	Ai:Print("Applying OVERRIDE GoalData...")
+	goal.data = MergeClone(goal.data, overrideGoalData)
+	
+	Ai:Print("BaseGoal:Create:goalData+override", 2)
+	Ai:Print(goal.data, 2)
+	
+	goal.encounter = encounter
+	goal.internalAIEncounterPtr = nil
+	goal.hasTriggered = false
+	goal.encounterID = AI_GetAndReserveNextTaskID(self.encounter.data.player)
+	goal.callbackID = EventRule_GetNextUniqueRuleID()
+	goal.callbackFn = nil -- create entry to reference from within function
+	goal.callbackFn = function(contextDataTable)
+						if (contextDataTable.encounterID == goal.callbackID and contextDataTable.notificationType == AIEncounterNotification_Success) then
+							goal:OnSuccess(goal.encounter)
+						elseif (contextDataTable.encounterID == goal.callbackID and contextDataTable.notificationType == AIEncounterNotification_Failure) then
+							goal:OnFailure(goal.encounter) 
+						elseif (contextDataTable.encounterID == goal.callbackID and contextDataTable.notificationType == AIEncounterNotification_Transition) then
+							goal:OnTransition(goal.encounter, contextDataTable.encounterStage) 
+						end
+					end
+	UnsavedEventRule_AddRuleIDEvent(goal.callbackFn, goal.callbackID, GE_AIPlayer_EncounterNotification)
+
+	goal:__InitializeGoalDataDefaults(encounter)
+	
+	Ai:Print("Applying MODIFIERS to GoalData...")
+	_AIDefaultGoalData_ApplyModifiers(goal.data, modifyGoalData)
+	
+	Ai:Print("BaseGoal:Create:goalData+modifiers", 2)
+	Ai:Print(goal.data, 2)
+	Ai:Print("===============================================", 2)
+	
+	
+	return goal
+end
+
+function BaseGoal:UpdateGoalData(goalData, defaultGoalData, overrideGoalData, modifyGoalData)
+	local DefaultGoalData = Ai.goals.DefaultGoalData
+	defaultGoalData = defaultGoalData or DefaultGoalData.defaultGoalData
+	overrideGoalData = overrideGoalData or DefaultGoalData.overrideGoalData
+	modifyGoalData = modifyGoalData or DefaultGoalData.modifyGoalData
+
+	Ai:Print("Applying GoalData defaults/overrides/modifiers. Use AI_SetDebugLevel(2) to view details.")
+	Ai:Print("===============================================", 2)
+	Ai:Print("BaseGoal:UpdateGoalData:defaultGoalData", 2)
+	Ai:Print(defaultGoalData, 2)
+	Ai:Print("BaseGoal:UpdateGoalData:overrideGoalData", 2)
+	Ai:Print(overrideGoalData, 2)
+	Ai:Print("BaseGoal:UpdateGoalData:modifyGoalData", 2)
+	Ai:Print(modifyGoalData, 2)
+	Ai:Print("BaseGoal:UpdateGoalData:goalData", 2)
+	Ai:Print(goalData, 2)
+
+	self.data = MergeClone(defaultGoalData, goalData)
+
+	Ai:Print("BaseGoal:UpdateGoalData:defaults+goalData", 2)
+	Ai:Print(self.data)
+
+	self.data = MergeClone(self.data, overrideGoalData)
+	
+	Ai:Print("BaseGoal:UpdateGoalData:goalData+override", 2)
+	Ai:Print(self.data)
+	
+	self:__InitializeGoalDataDefaults(self.encounter)
+	
+	_AIDefaultGoalData_ApplyModifiers(self.data, modifyGoalData)
+	
+	Ai:Print("BaseGoal:UpdateGoalData:goalData+modifiers", 2)
+	Ai:Print(self.data)
+	Ai:Print("===============================================", 2)
+	
+	if (self.internalAIEncounterPtr ~= nil and AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID)) then
+		self:SetupSkirmishAI()
+	end
+end
+
+--Setup Encounter specific data for created AIEncounter based on common goal data
+-- NOTE: only call from sub-class after AIEncounter is created, and only for enabled AI
+function BaseGoal:SetupEncounterSkirmishAI()
+	assert(self.internalAIEncounterPtr ~= nil)
+	assert(AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID))
+		
+	AIEncounter_SetDebugName(self.internalAIEncounterPtr, self.encounter.data.name)
+
+	-- Resource Guidance -- encounters update this
+	AIEncounter_ResourceGuidance_SquadGroup(self.internalAIEncounterPtr, self.encounter.sgroup)
+	
+	SetupDataDictionary(self.internalAIEncounterPtr, self.data, _SetObjectiveDataDictionaryValueCallBack)
+	
+	SetupUnitDataDictionary(self.encounter.units)
+	
+	self:UpdateSetupLocationOverrides()
+	
+	if self.data.sniper_reactions ~= nil then 
+		-- check if the onSnipedCallback was set from prefab as String
+		if self.data.sniper_reactions.onSnipedCallback ~= nil and  scartype(self.data.sniper_reactions.onSnipedCallback) == ST_STRING then
+			local callback = _G[self.data.sniper_reactions.onSnipedCallback]
+			if callback ~= nill and scartype(callback) == ST_FUNCTION then
+				self.data.sniper_reactions.onSnipedCallback = callback
+			end
+		end
+		
+		if self.data.sniper_reactions.onSnipedCallback ~= nil and scartype(self.data.sniper_reactions.onSnipedCallback) == ST_FUNCTION then
+				self:EnableOnSnipedCallback()
+		end
+	end
+	
+end
+
+--Setup created AIEncounter based on common goal data
+-- NOTE: only call from sub-class after AIEncounter is created, and only for enabled AI
+function BaseGoal:SetupSkirmishAI()
+	assert(self.internalAIEncounterPtr ~= nil)
+	assert(AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID))
+	
+	-- Target Guidance
+	BaseGoal_SetupEncounter_Target(self.internalAIEncounterPtr, self.data.target, self.data.range, self.data.leashRange, self.data.useSetupLocations ~= false)
+	
+	-- Tactics / Abilities Guidance
+	BaseGoal_SetupEncounter_Tactics(self.internalAIEncounterPtr, self.data, self.data.abilityControlsList, self.data.tacticControlsList, self.encounter.units, self.encounter.sgroup)
+	
+	-- Fallback Guidance
+	BaseGoal_SetupEncounter_FallbackParams(self.internalAIEncounterPtr, self.data.fallbackParams, self.data.reinforceParams)
+
+	-- Move Guidance
+	AIEncounter_MoveGuidance_EnableAggressiveMove(self.internalAIEncounterPtr, self.data.attackMove and true or false)
+	
+	if self.data.enableSubCombatEngagementAreas ~= nil then
+		AIEncounter_EngagementGuidance_SetEnableSubEngagementAreas(self.internalAIEncounterPtr, self.data.enableSubCombatEngagementAreas)
+	end
+	
+	if (scartype(self.data.coordinatedMoveRadius) == ST_NUMBER) then
+		AIEncounter_MoveGuidance_SetSquadCoherenceRadius(self.internalAIEncounterPtr, self.data.coordinatedMoveRadius)
+	end
+
+	-- Engagement Guidance
+	AIEncounter_EngagementGuidance_EnableAggressiveEngagementMove(self.internalAIEncounterPtr, self.data.attackEngagementMove and true or false)
+	if (self.data.maxTime) then
+		AIEncounter_EngagementGuidance_SetMaxEngagementTime(self.internalAIEncounterPtr, self.data.maxTime)
+	end
+	
+	AIEncounter_EngagementGuidance_SetCoordinatedSetup(self.internalAIEncounterPtr, self.data.coordinatedSetup ~= false)
+	AIEncounter_EngagementGuidance_SetAllowReturnToPreviousStages(self.internalAIEncounterPtr, self.data.engagementAllowReturnToPreviousStages)
+
+	-- Combat Guidance
+	AIEncounter_CombatGuidance_EnableCombatGarrison(self.internalAIEncounterPtr, self.data.garrison and true or false)
+	BaseGoal_SetupEncounter_PrimaryCombatTarget(self.internalAIEncounterPtr, self.data.primaryCombatTarget)
+	
+	-- needed to enable callbacks	
+	AIEncounter_Notify_SetPlayerEventEncounterID(self.internalAIEncounterPtr, self.callbackID)
+	
+	if self.data.sniper_reactions ~= nil and self.data.sniper_reactions.enable_sniper_reactions  then
+		AIEncounter_EngagementGuidance_SetEnableSniperReactions(self.internalAIEncounterPtr, true)
+		AIEncounter_EngagementGuidance_SetSniperResponderMaxNumber(self.internalAIEncounterPtr, self.data.sniper_reactions.max_number_of_responders or -1)
+		
+		if self.data.sniper_reactions.reaction_delay ~= nil then
+			AIEncounter_EngagementGuidance_SetSniperReactionsDelay(self.internalAIEncounterPtr, self.data.sniper_reactions.reaction_delay)
+		end
+		
+	else
+		AIEncounter_EngagementGuidance_SetEnableSniperReactions(self.internalAIEncounterPtr, false)
+	end
+	
+end
+
+--Skirmish AI goal success callback
+function BaseGoal:OnSuccess(encounter)
+	self.internalAIEncounterPtr = nil  -- onSuccess is a final message; can't assume internalAIEncounterPtr is valid now (could be partial destructed)
+	EventRule_RemoveRuleIDEvent( self.callbackFn, self.callbackID );
+	Ai:Print("Encounter " .. encounter.data.name .. " has succeeded.")
+	
+	if(self.data.onSuccess) then
+		Ai:Print("\t\tCalling onSuccess function...")
+		self.data.onSuccess(encounter)
+	end
+end
+
+--Skirmish AI goal failure callback
+function BaseGoal:OnFailure(encounter)
+	self.internalAIEncounterPtr = nil  -- onFailure is a final message; can't assume internalAIEncounterPtr is valid now (could be partial destructed)
+	EventRule_RemoveRuleIDEvent( self.callbackFn, self.callbackID );
+	Ai:Print("Encounter " .. encounter.data.name .. " has failed.")
+	
+	if(self.data.onFailure) then
+		Ai:Print("\t\tCalling onFailure function...")
+		self.data.onFailure(encounter)
+	end
+end
+
+--Skirmish AI goal was canceled
+function BaseGoal:OnCanceled()
+	self.internalAIEncounterPtr = nil  -- onCanceled can't assume internalAIEncounterPtr is valid beyond now
+	EventRule_RemoveRuleIDEvent( self.callbackFn, self.callbackID );
+	self.callbackFn = nil
+
+	if(self.data.onCanceled) then
+		self.data.onCanceled()
+	end
+end
+
+--Skirmish AI goal transition callback
+function BaseGoal:OnTransition(encounter, encounterStage)
+	if(self.data.onTransition) then
+		self.data.onTransition(encounter, encounterStage)
+	end
+end
+
+function BaseGoal:__InitializeGoalDataDefaults(encounter)
+	--[[ Set defaults ]]
+	self.data.target = self.data.target or encounter.sgroup
+
+	if (self.data.attackEngagementMove == nil) then
+		self.data.attackEngagementMove = true
+	end
+	
+	self.data.tacticTargetPreference = self.data.tacticTargetPreference or AITacticTargetPreference_NearAndBest
+	self.data.combatRangePolicy = self.data.combatRangePolicy or AICombatRangePolicy_Default
+	
+	if (self.data.spreadAttackers == nil) then
+		self.data.spreadAttackers = true
+	end
+
+	if (scartype(self.data.tacticCoverPriority) == ST_BOOLEAN) then
+		self.data.tacticCoverPriority = self.data.tacticCoverPriority and 1000 or -1
+	end
+	
+	if (scartype(self.data.pickupWeapons) == ST_BOOLEAN) then
+		self.data.pickupWeapons = self.data.pickupWeapons and 1000 or -1
+	end
+
+	--range
+	if scartype(self.data.range) == ST_MARKER then
+		self.data.range = Marker_GetProximityRadiusOrDefault(self.data.range, 0)
+	end
+	
+	--if the range was not defined, try getting it from the target
+	if (self.data.range == nil) then
+		if (scartype(self.data.target) == ST_MARKER) then
+			self.data.range = Marker_GetProximityRadiusOrDefault(self.data.target, 20.0)
+		else
+			self.data.range = 20.0
+		end
+	end
+	self.data.range = math.max(10, self.data.range)
+	
+	
+	--leashRange
+	if(scartype(self.data.leashRange) == ST_MARKER) then
+		self.data.leashRange = math.max(5, Marker_GetProximityRadiusOrDefault(self.data.leashRange, 0.0))
+	end
+	
+	if (self.data.engagementAllowReturnToPreviousStages == nil) then
+		self.data.engagementAllowReturnToPreviousStages = false
+	end
+	
+end
+
+--[[ SETUP AI Helper Function]]--
+
+-- for internal use only 
+function BaseGoal_SetupEncounter_Target(objective, target, radius, leashRadius, useSetupLocations)
+	assert(objective ~= nil)
+	assert(AIEncounter_IsValid(objective.AIPlayerID, objective.AIEncounterID))
+	
+	if (scartype(target) == ST_SQUAD) then
+		AIEncounter_TargetGuidance_SetTargetSquad(objective, target)
+	elseif (scartype(target) == ST_ENTITY) then
+		AIEncounter_TargetGuidance_SetTargetEntity(objective, target)
+	elseif scartype(target) == ST_SGROUP then
+		if SGroup_CountSpawned(target) >= 1 then
+			AIEncounter_TargetGuidance_SetTargetSquad(objective, SGroup_GetSpawnedSquadAt(target, 1))
+		end
+	elseif scartype(target) == ST_EGROUP then
+		if EGroup_CountSpawned(target) >= 1 then
+			AIEncounter_TargetGuidance_SetTargetEntity(objective, EGroup_GetSpawnedEntityAt(target, 1))
+		end
+	else
+		AIEncounter_TargetGuidance_SetTargetPosition(objective, Util_GetPosition(target))
+	end	
+	
+	if (radius) then -- if range not set here; leave to previous/default value
+		AIEncounter_TargetGuidance_SetTargetArea(objective, radius)
+	end
+	if (leashRadius) then -- if leash not set here; leave to previous/default value
+		AIEncounter_TargetGuidance_SetTargetLeash(objective, leashRadius)
+	end
+	
+	AIEncounter_EngagementGuidance_EnableSetupLocations(objective, useSetupLocations)
+end
+
+-- for internal use only 
+function BaseGoal_SetupEncounter_Tactics(objective, data, abilityControlsList, tacticControlsList, units, encounterGroup)
+	assert(objective ~= nil)
+	assert(AIEncounter_IsValid(objective.AIPlayerID, objective.AIEncounterID))
+
+	-- resets all tactic / ability guidance before setting tactic / ability filters below
+	AIEncounter_TacticFilter_Reset(objective)
+	
+	-- tacticControlsList takes priority over tacticCoverPriority and pickupWeapons, so do lower priority first
+	if (data.tacticCoverPriority) then
+		AIEncounter_TacticFilter_SetPriority(objective, TACTIC_Cover, data.tacticCoverPriority)
+	end
+	
+	if (data.pickupWeapons) then
+		AIEncounter_TacticFilter_SetPriority(objective, TACTIC_CaptureTeamWeapon, data.pickupWeapons)
+		AIEncounter_TacticFilter_SetPriority(objective, TACTIC_Pickup, data.pickupWeapons)
+		AIEncounter_TacticFilter_SetPriority(objective, TACTIC_Recrew, data.pickupWeapons)
+	end
+	
+	AIEncounter_TacticFilter_SetTargetPolicy(objective, data.tacticTargetPreference)
+	AIEncounter_CombatGuidance_SetCombatRangePolicy(objective, data.combatRangePolicy)
+	AIEncounter_CombatGuidance_SetSpreadAttackers(objective, data.spreadAttackers)
+	
+	AIEncounter_TacticFilter_ResetTargetGuidance(objective)
+	
+	if (abilityControlsList ~= nil) then
+		for i,abilityControls in pairs(abilityControlsList) do
+			if (abilityControls.abilityPBG == nil) then
+				AIEncounter_TacticFilter_SetDefaultAbilityGuidance(objective, 
+											abilityControls.maxCasters or -1, 
+											abilityControls.retryTimeSecs or -1, 
+											abilityControls.waitTimeSecs or -1,
+											abilityControls.waitTimeEncounterSecs or -1, 
+											abilityControls.timeoutTimeSecs or -1,
+											abilityControls.useInitialWaitTime or false,
+											abilityControls.maxRange or 100,
+											abilityControls.castChanceOverride or -1.0)
+			else
+				AIEncounter_TacticFilter_SetAbilityGuidance(objective, 
+											abilityControls.abilityPBG, 
+											abilityControls.maxCasters or -1, 
+											abilityControls.retryTimeSecs or -1, 
+											abilityControls.waitTimeSecs or -1, 
+											abilityControls.waitTimeEncounterSecs or -1, 
+											abilityControls.timeoutTimeSecs or -1,
+											abilityControls.useInitialWaitTime or false,
+											abilityControls.maxRange or 100,
+											abilityControls.castChanceOverride or -1.0)
+				
+				if (abilityControls.priority ~= nil) then
+					AIEncounter_TacticFilter_SetAbilityPriority(objective, abilityControls.abilityPBG, abilityControls.priority)
+				end
+			end
+		end
+	end
+	
+	-- Ability Blacklists, per squad
+	for k, unit in pairs(units) do
+		if (unit.sgroup ~= nil) then
+			if (scartype(unit.data.abilityBlacklist) == ST_PBG) then
+			
+				local _PerSquad = function(gid, idx, sid)
+					AIEncounter_TacticFilter_SetAbilityPriorityForSquad(objective, sid, unit.data.abilityBlacklist, -1)
+				end
+		
+				SGroup_ForEachEx(unit.sgroup, _PerSquad, true, true)
+
+			elseif (scartype(unit.data.abilityBlacklist) == ST_TABLE) then
+				for i, abilityPBG in pairs(unit.data.abilityBlacklist) do
+				
+					local _PerSquad = function(gid, idx, sid)
+						AIEncounter_TacticFilter_SetAbilityPriorityForSquad(objective, sid, abilityPBG, -1)
+					end
+		
+					SGroup_ForEachEx(unit.sgroup, _PerSquad, true, true)
+
+				end
+			end
+		end
+	end	
+	
+	-- Ability blacklist, GLOBAL (set in goal)
+	if(scartype(data.abilityBlacklist) == ST_PBG) then
+		AIEncounter_TacticFilter_SetAbilityPriority(objective, data.abilityBlacklist, -1)
+	elseif(scartype(data.abilityBlacklist) ==  ST_TABLE) then
+		for k, ability in pairs(data.abilityBlacklist) do
+			AIEncounter_TacticFilter_SetAbilityPriority(objective, ability, -1)
+		end
+	end
+	
+	if (tacticControlsList ~= nil) then
+		for i,tacticControls in pairs(tacticControlsList) do
+			if (tacticControls.tacticType == nil) then
+				AIEncounter_TacticFilter_SetDefaultTacticGuidance(objective, 
+											tacticControls.maxUsers or -1, 
+											tacticControls.retryTimeSecs or -1, tacticControls.waitTimeSecs or -1, tacticControls.timeoutTimeSecs or -1,
+											tacticControls.useInitialWaitTime or false,  
+											tacticControls.maxRange or 100)
+			else
+				if (tacticControls.maxUsers or tacticControls.waitTimeSecs or tacticControls.maxRange) then
+					AIEncounter_TacticFilter_SetTacticGuidance(objective, 
+											tacticControls.tacticType, 
+											tacticControls.maxUsers or -1, 
+											tacticControls.retryTimeSecs or -1, tacticControls.waitTimeSecs or -1, tacticControls.timeoutTimeSecs or -1,
+											tacticControls.useInitialWaitTime or false,  
+											tacticControls.maxRange or 100)
+				end
+				
+				if (tacticControls.priority ~= nil) then
+					AIEncounter_TacticFilter_SetPriority(objective, tacticControls.tacticType, tacticControls.priority)
+				end
+			end
+		end
+	end
+end
+
+-- for internal use only 
+function BaseGoal_SetupEncounter_FallbackParams(objective, fallbackParams, reinforceParams)
+	assert(objective ~= nil)
+	assert(AIEncounter_IsValid(objective.AIPlayerID, objective.AIEncounterID))
+	
+	if (fallbackParams ~= nil) then
+		
+		if fallbackParams.fallbackCapacityRatio ~= nil then
+			AIEncounter_FallbackGuidance_SetFallbackCapacityPercentage(objective, fallbackParams.fallbackCapacityRatio)
+		end
+		
+		if fallbackParams.fallbackCombatRatingRatio ~= nil then
+			AIEncounter_FallbackGuidance_SetFallbackCombatRating(objective, fallbackParams.fallbackCombatRatingRatio)
+		end
+		
+		if fallbackParams.fallbackSquadHealthRatioStart ~= nil and fallbackParams.fallbackSquadHealthRatioEnd ~= nil then
+			AIEncounter_FallbackGuidance_SetFallbackSquadHealthPercentage(objective, fallbackParams.fallbackSquadHealthRatioStart, fallbackParams.fallbackSquadHealthRatioEnd)
+		end
+		
+		if fallbackParams.fallbackSquadShieldRatioStart ~= nil and fallbackParams.fallbackSquadShieldRatioEnd ~= nil then
+			AIEncounter_FallbackGuidance_SetFallbackSquadShieldPercentage(objective, fallbackParams.fallbackSquadShieldRatioStart, fallbackParams.fallbackSquadShieldRatioEnd)
+		end
+		
+		if fallbackParams.fallbackVehicleHealthRatioStart ~= nil and fallbackParams.fallbackVehicleHealthRatioEnd ~= nil then
+			AIEncounter_FallbackGuidance_SetFallbackVehicleHealthPercentage(objective, fallbackParams.fallbackVehicleHealthRatioStart, fallbackParams.fallbackVehicleHealthRatioEnd)
+		end
+		
+		if fallbackParams.encounterGlobalFallbackEntitiesRemainingThreshold ~= nil then
+			AIEncounter_FallbackGuidance_SetEntitiesRemainingThreshold(objective, fallbackParams.encounterGlobalFallbackEntitiesRemainingThreshold)
+		end
+		
+		if fallbackParams.encounterGlobalFallbackPercentage ~= nil then
+			AIEncounter_FallbackGuidance_SetGlobalFallbackPercentage(objective, fallbackParams.encounterGlobalFallbackPercentage)
+		end
+		
+		if (fallbackParams.fallbackTargetMarker ~= nil) then 
+		
+			local mkr_fallback = nil
+			
+			local scarType = scartype(fallbackParams.fallbackTargetMarker)
+			
+			if scarType == ST_MARKER then
+			
+				mkr_fallback = fallbackParams.fallbackTargetMarker 
+
+			elseif scarType == ST_STRING then
+			
+				mkr_fallback =  Marker_FromName(fallbackParams.fallbackTargetMarker , "")
+			end 
+			
+			if mkr_fallback ~= nil then
+				AIEncounter_FallbackGuidance_SetTargetPosition(objective, Marker_GetPosition(mkr_fallback))
+			end
+		end
+		
+		-- RETREAT
+		-- Not hooked up 
+		-- AIEncounter_FallbackGuidance_SetRetreatHealthPercentage
+		-- AIEncounter_FallbackGuidance_SetRetreatCapacityPercentage
+		-- AIEncounter_FallbackGuidance_EnableRetreatOnSuppression
+		-- AIEncounter_FallbackGuidance_EnableRetreatOnPinned
+		-- AIEncounter_FallbackGuidance_SetRetreatDelayTime
+		-- AIEncounter_FallbackGuidance_SetGlobalFallbackRetreat
+
+	end
+
+	if reinforceParams ~= nil then
+		
+		if reinforceParams.reinforceDuringCombat ~= nil then
+			AIEncounter_FallbackGuidance_EnableReinforceDuringCombat(objective, reinforceParams.reinforceDuringCombat)
+		end
+		
+		if reinforceParams.reinforceHealthRatio ~= nil then
+			AIEncounter_FallbackGuidance_SetReinforceHealthPercentage(objective, reinforceParams.reinforceHealthRatio)
+		end
+		
+		if reinforceParams.reinforceMaxDistance ~= nil then
+			AIEncounter_FallbackGuidance_SetReinforceMaxDistance(objective, reinforceParams.reinforceMaxDistance)
+		end
+		
+		if reinforceParams.reinforceMinHealthRatioToReachReinforcePoint ~= nil then
+			AIEncounter_FallbackGuidance_SetReinforceMinHealthRatioToReachReinforcePoint(objective, reinforceParams.reinforceMinHealthRatioToReachReinforcePoint)
+		end
+		
+	end
+	
+end
+
+-- Internal. Updates what squads and abilities are available for the objective to use
+function BaseGoal:UpdateResourceGuidance()
+	assert(self.internalAIEncounterPtr ~= nil)
+	assert(AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID))
+	
+	-- Resource Guidance
+	-- Returns false if the squad group hasn't changed from the previous one
+	local squadGroupNeedsUpdate = not (AIEncounter_ResourceGuidance_IsSquadGroupEqual(self.internalAIEncounterPtr, self.encounter.sgroup))
+
+	AIEncounter_ResourceGuidance_SquadGroup(self.internalAIEncounterPtr, self.encounter.sgroup)
+	
+	SetupDataDictionary(self.internalAIEncounterPtr, self.data, _SetObjectiveDataDictionaryValueCallBack)
+	
+	SetupUnitDataDictionary(self.encounter.units)
+	
+	self:UpdateSetupLocationOverrides()
+	
+	-- Tactics / Abilities Guidance
+	-- Reinit the tactics only if the squad group changed
+	if squadGroupNeedsUpdate then
+		BaseGoal_SetupEncounter_Tactics(self.internalAIEncounterPtr, self.data, self.data.abilityControlsList, self.data.tacticControlsList, self.encounter.units, self.encounter.sgroup)
+	end
+	
+end
+
+function BaseGoal:TriggerGoal()
+	if self.internalAIEncounterPtr ~= nil and (not self.hasTriggered) and AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID) then
+		self.hasTriggered = true
+		AIEncounter_Trigger(self.internalAIEncounterPtr)
+	end
+end 
+
+function BaseGoal:HasGoalTriggered()
+	return self.internalAIEncounterPtr ~= nil and self.hasTriggered
+end
+
+function BaseGoal:RelocateGoal(trigger_position)
+	if self.internalAIEncounterPtr ~= nil and trigger_position ~= nil and AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID) then
+		self.data.pre_relocation_target = self.data.target
+		self.data.target =  trigger_position
+
+		BaseGoal_SetupEncounter_Target(self.internalAIEncounterPtr, self.data.target, self.data.range, self.data.leashRange, self.data.useSetupLocations ~= false)
+	end
+end
+
+function BaseGoal:ResetGoalRelocation()
+	if self.internalAIEncounterPtr ~= nil and self.data.pre_relocation_target ~= nil and AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID) then
+		self.data.target = self.data.pre_relocation_target
+		self.data.pre_relocation_target = nil
+		
+		BaseGoal_SetupEncounter_Target(self.internalAIEncounterPtr, self.data.target, self.data.range, self.data.leashRange, self.data.useSetupLocations ~= false)
+	end
+end
+
+-- for internal use only 
+function BaseGoal_SetupEncounter_PrimaryCombatTarget(objective, target)
+	assert(objective ~= nil)
+	assert(AIEncounter_IsValid(objective.AIPlayerID, objective.AIEncounterID))
+	
+	if (scartype(target) == ST_SQUAD) then
+		AIEncounter_CombatGuidance_AddForcedCombatTargetSquad(objective, target)
+	elseif (scartype(target) == ST_ENTITY) then
+		AIEncounter_CombatGuidance_AddForcedCombatTargetEntity(objective, target)
+	elseif (scartype(target) == ST_SGROUP and  SGroup_CountSpawned(target) >= 1) then
+		AIEncounter_CombatGuidance_AddForcedCombatTargetSGroup(objective, target)
+	elseif (scartype(target) == ST_EGROUP and EGroup_CountSpawned(target) >= 1) then
+		AIEncounter_CombatGuidance_AddForcedCombatTargetEGroup(objective, target)
+	end	
+end
+
+function SetupUnitDataDictionary(units)
+
+	for k,unit in pairs(units) do
+		
+		local _PerSquad = function(gid, idx, sid)
+	
+			SetupDataDictionary(sid, unit.data, _SetSquadDataDictionaryValueCallBack)
+		end
+		
+		SGroup_ForEachEx(unit.sgroup, _PerSquad, true, true)
+		
+	end	
+end
+	
+function SetupDataDictionary(object, dataRoot, callback)
+	
+	if (aiDataDictionaryRegisteredNames == nil or object == nil or dataRoot == nil) then
+		return
+	end
+	
+	for key, tokensTable in next, aiDataDictionaryRegisteredNames do
+		
+		local tokensCount = (#tokensTable)
+		
+		local currentTable = dataRoot
+		
+		local varNameFull = ""
+		
+		for i = 1, tokensCount, 1 do
+			
+			local currentVarName = tokensTable[i]
+			
+			varNameFull = varNameFull .. currentVarName
+			
+			if currentTable[currentVarName] ~= nil then
+				if i == tokensCount then
+					
+					callback(object, varNameFull, currentTable[currentVarName])
+				else
+					currentTable = currentTable[currentVarName]
+					
+					varNameFull = varNameFull .. "."
+				end
+			else
+				break
+			end
+		end
+	end
+end
+
+function _SetSquadDataDictionaryValueCallBack(squad, varName, value)
+		
+	if scartype(value) == ST_BOOLEAN then
+		AI_SquadDataDictionarySetBool(squad, varName, value)
+	elseif scartype(value)	== ST_NUMBER then
+		AI_SquadDataDictionarySetNumber(squad, varName, value)
+	elseif scartype(value)	== ST_PBG then
+		AI_SquadDataDictionarySetPBG(squad, varName, value)
+	end
+
+end
+
+function _SetObjectiveDataDictionaryValueCallBack(objective, varName, value)
+
+	if scartype(value) == ST_BOOLEAN then
+		AIEncounter_DataDictionarySetBool(objective, varName, value)
+	elseif scartype(value)	== ST_NUMBER then
+		AIEncounter_DataDictionarySetNumber(objective, varName, value)
+	elseif scartype(value)	== ST_PBG then
+		AIEncounter_DataDictionarySetPBG(objective, varName, value)
+	end
+
+end
+
+function BaseGoal:UpdateSetupLocationOverrides()
+	assert(self.internalAIEncounterPtr ~= nil)
+	
+	AIEncounter_EngagementGuidance_ClearSetupLocationOverrides(self.internalAIEncounterPtr)
+	
+	-- Setup Locations Squad Location Overrides
+	for k,unit in pairs(self.encounter.units) do
+	
+		local _PerSquad = function(gid, idx, sid)
+	
+			local setupMarker = nil
+			
+			local scarType = scartype(unit.data.setupLocationMarker)
+			
+			if scarType == ST_MARKER then
+			
+				setupMarker = unit.data.setupLocationMarker
+
+			elseif scarType == ST_STRING then
+			
+				setupMarker =  Marker_FromName(unit.data.setupLocationMarker, "")
+			end 
+			
+			if setupMarker ~= nil then
+				
+				local setupPos = Marker_GetPosition(setupMarker)
+				local setupDir = Marker_GetDirection(setupMarker)
+				
+				AIEncounter_EngagementGuidance_SetSquadSetupLocation(self.internalAIEncounterPtr, sid, setupPos,  setupDir)
+			end
+		end
+		
+		SGroup_ForEachEx(unit.sgroup, _PerSquad, true, true)
+
+	end
+
+	-- Setup Location Encounter Overrides
+	if self.data.setupLocationMarkers ~= nil and scartype(self.data.setupLocationMarkers) == ST_TABLE then
+		
+		local entryCount = (#self.data.setupLocationMarkers)
+		
+		for i = 1, entryCount, 1 do 
+		
+			local setupMarker = nil
+			
+			local scarType = scartype(self.data.setupLocationMarkers[i])
+			
+			if scarType == ST_MARKER then
+			
+				setupMarker = self.data.setupLocationMarkers[i]
+
+			elseif scarType == ST_STRING then
+			
+				setupMarker =  Marker_FromName(self.data.setupLocationMarkers[i], "")
+			end
+			
+			if setupMarker ~= nil then
+			
+				local setupPos = Marker_GetPosition(setupMarker)
+				local setupDir = Marker_GetDirection(setupMarker)
+			
+				AIEncounter_EngagementGuidance_AddEncouterSetupLocation(self.internalAIEncounterPtr, setupPos,  setupDir)
+			end
+		end
+	end 
+	
+	-- Sbp Priority Overrides
+	if self.data.setupLocationSbpPriorityOverride ~= nil then
+		local priorityOverrideCount = (#self.data.setupLocationSbpPriorityOverride)
+		for i = 1, priorityOverrideCount, 1 do 
+			
+			local entry = self.data.setupLocationSbpPriorityOverride[i]
+			
+			AIEncounter_EngagementGuidance_SetSetupLocationSbpPriority(self.internalAIEncounterPtr, entry.blueprint, entry.priority)
+		end
+	end
+	
+end
+
+function BaseGoal:SetOnSnipedCallback(callback)
+	
+	if self.data.sniper_reactions == nil then
+		self.data.sniper_reactions = {}
+	end
+	
+	if callback ~= nil and scartype(callback) == ST_FUNCTION then
+		self.data.sniper_reactions.onSnipedCallback = callback
+		self:EnableOnSnipedCallback()
+	else
+		self.data.sniper_reactions.onSnipedCallback = nil
+		self:DisableOnSnipedCallback()
+	end
+end
+
+function BaseGoal:EnableOnSnipedCallback()
+
+	if self.internalAIEncounterPtr ~= nil and AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID) then
+		AIEncounter_Notify_SetEnableSnipedCallbacks(self.internalAIEncounterPtr, true)
+	end
+	
+	if self.sniperCallbackFn == nil then
+		
+		self.sniperCallbackFn = function(contextDataTable)
+			if (contextDataTable.encounterID == self.callbackID and contextDataTable.sniperTable  ~= nil) then
+				if self.data.sniper_reactions.onSnipedCallback ~= nil and scartype(self.data.sniper_reactions.onSnipedCallback ) == ST_FUNCTION then
+					self.data.sniper_reactions.onSnipedCallback(self.encounter, contextDataTable.sniperTable)
+				end
+			end
+		end
+		
+		UnsavedEventRule_AddRuleIDEvent(self.sniperCallbackFn, self.callbackID, GE_AIPlayer_EncounterSniped)
+	end
+end
+
+function BaseGoal:DisableOnSnipedCallback()
+		if self.internalAIEncounterPtr ~= nil and AIEncounter_IsValid(self.internalAIEncounterPtr.AIPlayerID, self.internalAIEncounterPtr.AIEncounterID) then
+			AIEncounter_Notify_SetEnableSnipedCallbacks(self.internalAIEncounterPtr, false)
+		end
+		
+		if self.sniperCallbackFn ~= nil then
+			EventRule_RemoveRuleIDEvent(self.sniperCallbackFn, self.callbackID)
+			self.sniperCallbackFn = nil
+		end
+end
+

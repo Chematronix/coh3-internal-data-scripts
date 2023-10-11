@@ -1,0 +1,186 @@
+-- metamap_save_migrations.scar
+--
+-- This file maintains all migration functions for CoH3 campaign save data.
+--
+-- Any change or batch of changes made to either the campaign systems or the campaign scenario
+-- itself must be accompanied by an update to the g_PartialSaveVersion in metamap_save.scar
+-- Additionally, a new migration function must be added at the end of this file to adjust
+-- old save data according to the changes that were made.
+--
+-- Every new migration function index should be equal to the corresponding
+-- incremented value of g_PartialSaveVersion
+--
+
+import("metamap/metamap_save_migration_helpers.scar")
+import("missionomatic/missionomatic.scar")
+
+__PartialSave_MigrationFunctions = {}
+
+__PartialSave_MigrationFunctions[1] = function()
+	-- SAMPLE MIGRATION - this migration does not run on any save files. It is just for demonstration purposes.
+	
+    -- Helper functions have been provided to simplify basic operations.
+	MigrateSave_RenamePlayerStateModelBool('old_bool_name', 'new_bool_name')
+	MigrateSave_RenamePlayerStateModelInt('old_int_name', 'new_int_name')
+	MigrateSave_RenamePlayerStateModelTarget('old_target_name', 'new_target_name')
+	
+	-- This part of the migration only affects saves on the italy_base cmap scenario
+	if Game_GetScenarioFileName() == 'italy_base' then
+		-- Find all companies that are located inside some new no-go zone and move them out of it.
+		MigrateSave_EvacuateSquadsAroundMarker(Game_GetLocalPlayer(), 'mkr_calabria_spawn')
+		
+		-- Rename a playbill to match a character being renamed
+		MigrateSave_RenamePlaybill('fab_na004_taube_hunt_buckram_request', 'fab_na004_geisler_hunt_buckram_request')
+		
+		-- Remove a playbill that we no longer want in the campaign.
+		if MigrateSave_RemovePlaybill('fab_some_old_objective_playbill') then
+			-- Potentially queue up a dialogue line here to inform the player of the removed objective
+			-- and/or give the player the rewards they would have gotten had they completed the objective.
+		end
+	end
+end
+
+__PartialSave_MigrationFunctions[1] = function()
+	-- Empty migration since there is no version that comes before the initial version.
+	-- Mainly kept here so that version-to-index mapping lines up properly and so
+	-- the lua table can be counted properly.
+end
+
+__PartialSave_MigrationFunctions[2] = function()
+	-- Pre-launch migration for objective rework in CL 3927157
+	-- This CL added a new sub objective and changed the type of a sub objective which means when
+	-- attempting to restore the "capture" info, if there was a save made before that then there would
+	-- be no capture targets available to the initialization flow from the save data.
+	
+	if Game_GetScenarioFileName() ~= "italy_base" then
+		return
+	end
+	
+	local objectiveSaveData = PartialSaveTable.objectiveSave.objectiveSaveData
+	local count = #objectiveSaveData
+	for i=1, count do
+		local objectiveSaveInfo = objectiveSaveData[i]
+		if objectiveSaveInfo.objectiveID == "salerno_beachhead" then
+			local beachheadSubObjectives = objectiveSaveInfo.subObjectiveSaveData
+			local subObjectiveCount = #beachheadSubObjectives
+			-- NOTE: Because the incompatible data changes did not increment the version, we have
+			-- to conditionally clear the sub objective data only if we're actually from the previous
+			-- data which had only 2 sub objectives for the beach head objective. We may want to always
+			-- increment the version in the future even if there is no migration assumed to be necessary.
+			if subObjectiveCount == 2 then
+				-- Ignore the existing save info for the sub objectives and add fake save info indicating
+				-- that each new sub objective has been completed already.
+				-- In general this isn't a "full fidelity" approach to migrating objective save info but it's
+				-- the simplest in this case to avoid locking up the sub objectives in the new layout which
+				-- have unique triggers and narrative action state required for completion.
+				-- For saves where the beachhead objective was already completed this will not be noticed,
+				-- and saves where this objective was in progress will just complete the beachhead objective
+				-- after loading, running completion dialogue for the parent objective only (skipping
+				-- on_complete of the sub objectives themselves)
+				objectiveSaveInfo.subObjectiveSaveData = {
+					{
+						context = {},
+						targetGroups = {},
+						objectiveID = "salerno_capturetowns",
+						objectiveIsExpired = false,
+						objectiveIsStarted = false,
+						objectiveState = "complete",
+						objectivePrefabDataPath = {
+							"fab_salerno_breakout",
+							"playbills",
+							1,
+							"actions",
+							1,
+							"objectiveVariants",
+							1,
+							"sub_objectives",
+							1
+						}
+					},
+					{
+						context = {},
+						objectiveID = "defend_salerno",
+						objectiveIsExpired = false,
+						objectiveIsStarted = false,
+						objectiveState = "complete",
+						objectivePrefabDataPath = {
+							"fab_salerno_breakout",
+							"playbills",
+							1,
+							"actions",
+							1,
+							"objectiveVariants",
+							1,
+							"sub_objectives",
+							2
+						}
+					},
+					{
+						context = {},
+						targetGroups = {},
+						objectiveID = "recapture_salerno",
+						objectiveIsExpired = false,
+						objectiveIsStarted = false,
+						objectiveState = "complete",
+						objectivePrefabDataPath = {
+							"fab_salerno_breakout",
+							"playbills",
+							1,
+							"actions",
+							1,
+							"objectiveVariants",
+							1,
+							"sub_objectives",
+							3
+						}
+					},
+				}
+			end
+		end
+	end
+end
+
+__PartialSave_MigrationFunctions[3] = function()
+	
+	if Game_GetScenarioFileName() == "italy_base" then
+		Rule_AddOneShot(___ClearOrphanedFoggiaPlanes, 0.125)
+	end
+	
+end
+
+function ___ClearOrphanedFoggiaPlanes()
+	
+	local foggiaplanes = {
+		"sg_FoggiaPlanes_01",
+		"sg_FoggiaPlanes_02",
+		"sg_FoggiaPlanes_03",
+		"sg_FoggiaPlanes_04",
+		"sg_FoggiaPlanes_05"
+	}
+	
+	for i, group in pairs(foggiaplanes) do
+		if SGroup_CountSpawned(SGroup_FromName(group)) > 0 then
+			if not SGroup_IsInHoldEntity(group, ALL) then
+				SGroup_DestroyAllSquads(group)
+			end
+		end
+	end
+	
+end
+
+__PartialSave_MigrationFunctions[4] = function()
+	if Game_GetScenarioFileName() ~= "italy_base" then
+		return
+	end
+	local active_playbills = PartialSaveTable.playbillSaveTable.playbills
+	local wasActive = Table_RemoveIf(
+		active_playbills,
+		#active_playbills,
+		function(info) return info.instanceName == "fab_anzio_bombardments" end)
+	if wasActive then
+		Rule_AddOneShot(__RestartAnzioBombardments)
+	end
+end
+function __RestartAnzioBombardments()
+	Prefab_Trigger("fab_anzio_bombardments")
+end

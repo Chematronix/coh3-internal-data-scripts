@@ -1,0 +1,204 @@
+-----------------------------------------------------------------------
+-- Ticket loss due to Victory Point control
+--
+-- (c) Relic Entertainment 2020
+--
+-- Decrements the tickets of the team(s) controlling the least number of victory points.
+-----------------------------------------------------------------------
+
+
+-----------------------------------------------------------------------
+-- Script framework 
+-----------------------------------------------------------------------
+
+Core_RegisterModule("VictoryPoint")
+
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar.
+function VictoryPoint_OnInit()
+	_vp = {
+		ticket_update_interval = 3.0,	-- interval (in seconds) that the victory point difference is checked
+		tickets_per_vp = 1.0,			-- number of tickets to decrement per victory point ownership difference between teams
+		is_paused = false,				-- controls whether the victory point check is performed when triggered
+	}
+end
+
+
+-- Called by core.scar after all OnInit() callbacks are finished.
+-- Verifies that at least one VP exists.
+function VictoryPoint_PostInit()
+	local vp_count = 0
+	local eg = EGroup_CreateUnique()
+	World_GetStrategyPoints(eg, true)
+	EGroup_ForEach(eg, function(egroup, index, entity)
+			if Entity_IsSpawned(entity) and Entity_IsVictoryPoint(entity) then
+				vp_count = vp_count + 1
+			end
+		end)
+	EGroup_Destroy(eg)
+
+	if vp_count == 0 then
+		print("Map contains no victory points")
+		Core_CallDelegateFunctions("OnMaxTicketsChanged", 0)
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnMaxTicketsChanged") to set max ticket count.
+function VictoryPoint_OnMaxTicketsChanged(max_tickets, player)
+	if not max_tickets or max_tickets <= 0 then
+		_vp = nil
+		Core_UnregisterModule("VictoryPoint")
+		return
+	end
+
+	if not _vp.teams then 
+		_vp.teams = {}
+		for i = 1, World_GetPlayerCount() do
+			local team = VictoryPoint_GetTeam(World_GetPlayerAt(i))
+			if team then
+				table.insert(team.players, i)
+			else
+				table.insert(_vp.teams, { players = {i}, vps = 0 })
+			end
+		end
+	end
+
+	if player then
+		local team = VictoryPoint_GetTeam(player)
+		team.max_tickets = max_tickets
+	else
+		for _, team in pairs(_vp.teams) do
+			team.max_tickets = max_tickets
+		end
+	end
+	_vp.max_tickets_set = true
+end
+
+
+-- Called by core.scar after opening cinematics and events are complete.
+function VictoryPoint_Start()
+	if _vp and _vp.max_tickets_set and #_vp.teams > 1 then
+		-- Set initial ticket count if not already done elsewhere.
+		for _, team in pairs(_vp.teams) do
+			if not team.tickets then
+				Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), team.max_tickets)
+			end
+		end
+		Rule_AddInterval(VictoryPoint_UpdateTickets, _vp.ticket_update_interval)
+	else
+		_vp = nil
+		Core_UnregisterModule("VictoryPoint")
+	end
+end
+
+
+-- Called by core.scar when a game is loaded. Restores the ticket count.
+function VictoryPoint_OnGameRestore()
+	for _, team in pairs(_vp.teams) do
+		-- Only notify tickets changed if they have already been set (if you save too early then the initialization on Start()
+		-- has yet to occur, so we can wait for that to restore the UI)
+		if team.tickets ~= nil then
+			Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), team.tickets)
+		end
+	end
+end
+
+
+-- Called via Core_CallDelegateFunctions("OnTicketsChanged") signalling the ticket count for a team has changed.
+function VictoryPoint_OnTicketsChanged(player, tickets, previous_tickets, silent)
+	-- Save the new ticket count
+	local team = VictoryPoint_GetTeam(player)
+	team.tickets = math.min(math.max(0, tickets), team.max_tickets)
+end
+
+
+-- Called when a win condition has been met signalling that the match is ready to end.
+-- Clean up UI and rules associated with this script module.
+function VictoryPoint_OnWinConditionTriggered(match_result)	
+	if Rule_Exists(VictoryPoint_UpdateTickets) then 
+		Rule_Remove(VictoryPoint_UpdateTickets)
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Rules
+-----------------------------------------------------------------------
+
+-- Rule that decrements the ticket count of team(s) controlling the fewest victory points.
+function VictoryPoint_UpdateTickets()
+	if not _vp.is_paused then
+		local most_vps = 0
+		for _, team in pairs(_vp.teams) do
+			team.vps = Player_GetNumVictoryPoints(World_GetPlayerAt(team.players[1]))
+			most_vps = math.max(most_vps, team.vps)
+		end
+		for _, team in pairs(_vp.teams) do
+			if team.tickets > 0 then
+				if team.vps ~= most_vps then
+					local new_ticket_count = math.max(0, team.tickets - math.floor((most_vps - team.vps) * _vp.tickets_per_vp))
+					if new_ticket_count ~= team.tickets then
+						Core_CallDelegateFunctions("OnTicketsChanged", World_GetPlayerAt(team.players[1]), new_ticket_count, team.tickets)
+					end
+				end
+			end
+		end
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Internal/private functions
+-----------------------------------------------------------------------
+
+function VictoryPoint_GetTeam(player)
+	local player_index = World_GetPlayerIndex(player)
+	for _, team in pairs(_vp.teams) do
+		for _, index in pairs(team.players) do
+			if index == player_index or Player_ObserveRelationship(player, World_GetPlayerAt(index)) == R_ALLY then
+				return team
+			end
+		end
+	end
+end
+
+
+-----------------------------------------------------------------------
+-- Public interface
+-----------------------------------------------------------------------
+
+--Start/pause/resume ticket update.
+function VictoryPoint_Pause(pause)
+	_vp.is_paused = pause 
+end
+
+
+-- Returns a table containing the settings parameters and their values.
+function VictoryPoint_GetParameters()
+	return {
+		ticket_update_interval = _vp.ticket_update_interval,
+		tickets_per_vp = _vp.tickets_per_vp
+	}
+end
+
+
+-- Overrides default behavior.
+function VictoryPoint_SetParameters(params)
+	if scartype(params) == ST_TABLE then
+		if scartype(params.ticket_update_interval) == ST_NUMBER and _vp.ticket_update_interval ~= params.ticket_update_interval then
+			_vp.ticket_update_interval = params.ticket_update_interval
+			if Rule_Exists(VictoryPoint_UpdateTickets) then 
+				Rule_Remove(VictoryPoint_UpdateTickets)
+				Rule_AddInterval(VictoryPoint_UpdateTickets, _vp.ticket_update_interval)
+			end
+		end
+		if scartype(params.tickets_per_vp) == ST_NUMBER then
+			_vp.tickets_per_vp = params.tickets_per_vp
+		end
+	end
+end

@@ -1,0 +1,36 @@
+-----------------------------------------------------------------------
+--
+-- Hint Point Action Type enum utilities
+--
+-- (c) Relic Entertainment 2022
+--
+-----------------------------------------------------------------------
+
+HPAT_NAMES = {"None",
+				"Objective",
+				"Hint",
+				"Critical",
+				"Movement",
+				"Attack",
+				"FormationSetup",
+				"RallyPoint",
+				"DeepSnow",
+				"Artillery",
+				"CoverGreen",
+				"CoverYellow",
+				"CoverRed",
+				"Detonation",
+				"Vaulting",
+				"Bonus",
+				"MovementLooping",
+				"AttackLooping",
+				"PinPrimary",
+				"PinSecondary"}
+
+function GetHPATEnumValFromString(HPAT_name)
+  return _G["HPAT_"..HPAT_name]
+  -- this will concat the HPAT_ prefix to the string
+  -- so you get something like HPAT_Movement, and then
+  -- it looks up the global variable with that name (from the
+  -- global table, _G)
+end

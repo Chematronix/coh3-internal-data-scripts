@@ -1,0 +1,4 @@
+
+function InitializeAIWorld()
+	print("InitializeAIWorld")
+end

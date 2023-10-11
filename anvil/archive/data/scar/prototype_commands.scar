@@ -1,0 +1,280 @@
+
+function GeneralIdleStandGuard(context, data)
+	
+	if SGroup_CountSpawned(data.sgroup) >= 1 and data.idlePos == nil then
+		data.idleBehaviour = true
+		data.idlePos = SGroup_GetPosition(data.sgroup)
+	end
+	
+	Rule_AddInterval(GeneralAttackCycle, 3, data)
+end
+
+function GeneralIdleMove(context, data)
+	
+	if SGroup_CountSpawned(data.sgroup) >= 1 and data.idlePos == nil then
+		data.idleMove = true
+		data.idlePos = SGroup_GetPosition(data.sgroup)
+	end
+	
+	Rule_AddInterval(GeneralIdleAttackedMoveTo, 3, data)
+end
+
+function GeneralPatrolMarker(context, data)	
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsIdle(data.sgroup, ANY) == true then
+	
+	--restore below
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsMoving(data.sgroup, ALL) == false and SGroup_IsUnderAttack(data.sgroup, ALL, 5) == false then
+
+		--Cmd_SquadPatrolMarker(data.sgroup, data.marker)	
+	--end
+	
+	Rule_AddInterval(GeneralAttackCycle, 3, data)
+end
+
+
+function GeneralPatrolAndMoveToMarker(context, data)
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsIdle(data.sgroup, ANY) == true then
+	
+	--restore below
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsMoving(data.sgroup, ALL) == false and SGroup_IsUnderAttack(data.sgroup, ALL, 5) == false then
+
+		--Cmd_SquadPatrolMarker(data.sgroup, data.marker)	
+	--end
+	
+	Rule_AddInterval(GeneralMoveToMarkerStay, 3, data)
+end	
+
+
+
+function GeneralPatrolPath(context, data)
+	
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsIdle(data.sgroup, ANY) == true then
+	
+	
+	--restore below
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsMoving(data.sgroup, ALL) == false and SGroup_IsUnderAttack(data.sgroup, ALL, 5) == false then
+	
+		--Cmd_SquadPath(data.sgroup, data.pathName, true, true, false, 5)	
+	--end
+	
+	Rule_AddInterval(GeneralAttackCycle, 3, data)
+end
+
+
+function GeneralAttackCycle(context, data)
+	if SGroup_CountSpawned(data.sgroup) >= 1 then
+		if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ANY, 5) and data.underAttack ~= true then
+			local sgroupLastAttacker = SGroup_CreateIfNotFound("sgroupLastAttacker")
+			SGroup_GetLastAttacker(data.sgroup, sgroupLastAttacker, 5)
+			
+			Cmd_Attack(data.sgroup, sgroupLastAttacker)		
+			SGroup_Clear(sgroupLastAttacker)
+			data.underAttack = true
+		else
+			
+			if data.underAttack == true then
+				
+				if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ALL, 5) == false then
+					--revert to original behaviour here
+					data.underAttack = false
+					
+					if data.followingPath == true then
+						Rule_AddOneShot(GeneralPatrolPath, 1, data)
+					elseif data.idleBehaviour == true then
+						if data.idlePos ~= nil and Prox_AreSquadMembersNearMarker(data.sgroup, data.idlePos, ANY, 5) then
+							Cmd_Move(data.sgroup, data.idlePos)
+						end
+						Rule_AddOneShot(GeneralIdleStandGuard, 1, data) -- move back to original position
+					else
+					
+						Rule_AddOneShot(GeneralPatrolMarker, 1, data)
+					end
+					Rule_RemoveMe()			
+				end
+			end
+		end
+	else
+		Rule_RemoveMe()
+	end
+end
+
+function GeneralIdleAttackedMoveTo(context, data)
+	if SGroup_CountSpawned(data.sgroup) >= 1 then 
+		if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ANY, 5) and data.underAttack ~= true then
+			data.underAttack = true
+			if data.destination ~= nil and Prox_MarkerSGroup(data.destination, data.sgroup, PROX_SHORTEST) >= 5 then
+				Cmd_Move(data.sgroup, data.destination, nil, nil, nil, nil, nil, 10)
+			end
+			
+			if data.teamWeapon == true then
+				Rule_AddInterval(GeneralTeamWeaponSetup, 2, data)
+			end
+			
+			Rule_AddOneShot(GeneralIdleMove, 1, data)
+			Rule_RemoveMe()	
+		end
+	end	
+end
+
+function GeneralMoveToMarkerStay(context, data)
+	if SGroup_CountSpawned(data.sgroup) >= 1 then 
+		if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ANY, 5) and data.underAttack ~= true then
+			data.underAttack = true
+			if data.destination ~= nil and Prox_MarkerSGroup(data.destination, data.sgroup, PROX_SHORTEST) >= 5 then
+				Cmd_Move(data.sgroup, data.destination, nil, nil, nil, nil, nil, 10)
+			end
+			if data.teamWeapon == true then
+				Rule_AddInterval(GeneralTeamWeaponSetup, 2, data)
+			end
+			
+			Rule_RemoveMe()	
+		end
+	end		
+end
+
+
+function GeneralTeamWeaponSetup(context, data)
+	
+	if SGroup_CountSpawned(data.sgroup) >= 1 then
+		
+		if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ANY, 5) and data.underAttack ~= true then
+		
+			local attacker = SGroup_CreateIfNotFound("attacker")
+			
+			SGroup_GetLastAttacker(data.overgroup, attacker, 5)	
+					
+			if data.destination ~= nil and Prox_MarkerSGroup(data.destination, data.sgroup, PROX_SHORTEST) >= 5 then
+				
+				if SGroup_CountSpawned(attacker) >= 1 then
+				
+					SGroup_FacePosition(data.overgroup, SGroup_GetPosition(attacker))
+					
+					Cmd_InstantSetupTeamWeapon(data.sgroup)
+					Rule_RemoveMe()
+					
+				end
+				
+			end
+		end
+	end	
+end
+
+
+function GeneralPatrolGarrison(context, data)
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsIdle(data.sgroup, ALL) == true then
+	
+	--restore below
+	--if SGroup_CountSpawned(data.sgroup) >= 1 and SGroup_IsMoving(data.sgroup, ALL) == false and SGroup_IsUnderAttack(data.sgroup, ALL, 5) == false then
+		--Cmd_SquadPatrolMarker(data.sgroup, data.marker)	
+	--end
+	
+	Rule_AddInterval(GeneralGarrison, 3, data)
+end
+
+function GeneralIdleGarrison(context, data)
+	-- do nothing except garrison if something happens	
+	Rule_AddInterval(GeneralGarrison, 3, data)
+end
+
+function GeneralGarrison(context, data)
+	if SGroup_CountSpawned(data.sgroup) >= 1 then
+		
+		if data.garrisonTriggered ~= true then
+		
+			if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ANY, 5) then
+				data.garrisonTriggered = true
+			end
+		end
+		
+		if data.garrisonTriggered == true then
+			if data.garrisoned ~= true then
+				
+				if data.garrison ~= nil and EGroup_CountSpawned(data.garrison) >= 1 then 
+			
+					if SGroup_IsInHoldEntity(data.sgroup, ALL) ~= true then
+						
+						Cmd_Garrison(data.sgroup, data.garrison)
+					else		
+						data.garrisoned = true
+					end
+					
+				else
+					-- release unit from garrisoning and go to general patrolling if no building egroup -- marker only
+			
+					Rule_AddOneShot(GeneralPatrolMarker, 1, data)
+					Rule_RemoveMe()
+				end
+			elseif data.garrisoned == true then
+			
+				-- unit will stay in garrisoned building until time to retreat
+				Rule_AddInterval(GeneralRetreat, 1, data)
+				Rule_RemoveMe()				
+			end
+		end
+
+	else
+		
+		Rule_RemoveMe()
+	end
+end
+
+
+function GeneralRetreat(context, data)	
+	if SGroup_CountSpawned (data.sgroup) >= 1 then
+		if SGroup_CountSpawned(data.overgroup) <= 2 and SGroup_CountSpawned(data.overgroup) > 0 then
+			
+			if Prox_MarkerSGroup(data.retreatPoint, data.overgroup, PROX_SHORTEST) >= 15 then 
+				
+				local checkGarrison = function( sgroupid, itemindex, squadID )
+					if Squad_IsInHoldEntity(squadID) then
+						local ungarrisonTemp = SGroup_CreateIfNotFound("ungarrisonTemp")
+						SGroup_Add(ungarrisonTemp, squadID)
+						
+						if SGroup_CountSpawned(ungarrisonTemp) >= 1 then
+							Cmd_UngarrisonSquad(ungarrisonTemp)
+						end
+						SGroup_Clear(ungarrisonTemp)
+					end
+				end
+				
+					
+				SGroup_ForEach(data.sgroup, checkGarrison)
+				
+				Cmd_Retreat(data.sgroup, Marker_GetPosition(data.retreatPoint))	
+				
+			else
+				-- change patrol marker to retreatPoint, or if no patrol marker exists, make it the retreatPoint, then apply a patrol
+				
+				data.marker = data.retreatPoint			
+				Rule_AddOneShot(GeneralIdleStandGuard, 15, data)
+				--Rule_AddOneShot(GeneralPatrolMarker, 15, data)
+				Rule_RemoveMe()
+			end
+		end
+	else
+		Rule_RemoveMe()
+	end
+end
+
+
+function GeneralSpawnReinforcementsInit(context, data)
+	
+	if SGroup_CountSpawned(data.overgroup) >=1 and SGroup_IsUnderAttack(data.overgroup, ANY, 5) then 
+		data.underAttack = true
+		Rule_AddOneShot(GeneralSpawnReinforcementsAction, data.time_to_spawn, data)
+		Rule_RemoveMe()	
+		
+	end	
+end	
+	
+function GeneralSpawnReinforcementsAction(context, data)
+	if data.reinforced ~= true then
+		-- Spawn here
+		Util_CreateSquads(World_GetPlayerAt(2), data.sgroup, data.sbp, data.spawnLoc, data.destLoc, 1, nil, false, nil, data.upgrades, nil)
+		data.reinforced = true
+		Rule_AddOneShot(GeneralPatrolMarker, 15, data)		
+		
+	end
+end	
+	
+	

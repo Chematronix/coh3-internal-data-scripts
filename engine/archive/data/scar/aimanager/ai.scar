@@ -1,0 +1,358 @@
+--[[
+-- AI MANAGER
+]]--
+
+Ai = {}
+Ai.behaviors = {}
+Ai.goals = {}
+
+Ai.updateFirstHalf = true
+
+import("aimanager/Unit.scar")
+import("aimanager/Encounter.scar")
+--Goals
+import("aimanager/Goals/BaseGoal.scar")
+import("aimanager/Goals/DefendGoal.scar")
+import("aimanager/Goals/AttackGoal.scar")
+import("aimanager/Goals/MoveGoal.scar")
+import("aimanager/Goals/AbilityGoal.scar")
+import("aimanager/Goals/FormationAttackGoal.scar")
+import("aimanager/Goals/FormationDefendAreaGoal.scar")
+import("aimanager/Goals/TownLifeGoal.scar")
+
+
+Import_Once("PrintOnScreen.scar")
+
+
+--------------------------------------------------------
+-- AI constants
+--------------------------------------------------------
+--Types of goals
+GOAL_ATTACK = "Attack"
+GOAL_DEFEND = "Defend"
+GOAL_MOVE = "Move"
+GOAL_ABILITY = "Ability"
+GOAL_FORMATION_ATTACK = "FormationAttack"
+GOAL_FORMATION_DEFEND = "FormationDefend"
+GOAL_TOWNLIFE = "TownLife"
+	
+
+--? @group scardoc;Encounter
+
+--------------------------------------------------------
+-- AI Initialize
+--------------------------------------------------------
+function AI_Initialize()
+	Ai:Initialize()
+	Game_SetGameRestoreCallback(AI_RestartEncounters)
+	EventRule_AddEvent(AI_OnAIMigrated, GE_AIPlayer_Migrated)
+end
+
+function Ai:Initialize()
+	print("Initializing AI Manager...")
+
+	if(self.initialized)then
+		return
+	end
+	
+	__AI_encounterCounter = 0
+	AI_encountersList = {}
+	g_AIManagerDifficulty = Game_GetSPDifficulty()
+	
+	--Guard against the case where there is only one player
+	__defaultEnemyPlayer = nil
+	local enemyTeam = Core_GetTeamsEntryFromIndex(2)
+	if enemyTeam ~= nil then
+		__defaultEnemyPlayer = enemyTeam.players[1].id
+	end
+	
+	self.initialized = true
+	
+	Rule_AddInterval(AI_Loop, 1, nil, RuleGroup.AI)
+	
+	--Debug
+	__AI_debugLevel = 2
+	
+	if(Misc_IsCommandLineOptionSet("ai_debug")) then
+		__AI_enableDebugPrint = true
+		__AI_enableDebugData = true
+	else
+		__AI_enableDebugPrint = false
+		__AI_enableDebugData = false
+	end
+end
+
+Scar_AddInit( AI_Initialize )
+
+
+--------------------------------------------------------
+-- AI member functions
+--------------------------------------------------------
+function Ai:AddEncounter(encounter)
+	table.insert(AI_encountersList, encounter)
+	
+	if Misc_IsCommandLineOptionSet("dev") then
+		--Restart rule if for some reason it's not running. Usually because of Rule_RemoveAll() during debug.
+		if(not Rule_Exists(AI_Loop)) then
+			Rule_AddInterval(AI_Loop, 1, nil, RuleGroup.AI)
+		end
+	end
+end
+
+function Ai:SpawnEncounter(encounter)
+end
+
+function Ai:Print(data, level)
+	if(__AI_enableDebugPrint and (level == nil or level <= __AI_debugLevel)) then
+		PrintObject(data)
+	end
+end
+
+--? @shortdesc Toggle printing console debug information for encounters.
+--? @result Void
+function AI_ToggleDebugPrint()
+	__AI_enableDebugPrint = not __AI_enableDebugPrint
+end
+
+--? @shortdesc Toggle encounter/goal debug information on screen.
+--? @result Void
+function AI_ToggleDebugData()
+	if(__AI_enableDebugData) then
+		Scar_DebugConsoleExecute( "AILockStatus(World_GetPlayerAt( 2 ), false)" )
+	else
+		Scar_DebugConsoleExecute( "AILockStatus(World_GetPlayerAt( 2 ), true)" )
+	end
+	
+	__AI_enableDebugData = not __AI_enableDebugData
+end
+
+--? @shortdesc Set the level of debug information shown but Ai:Print().
+--? @result Void
+function AI_SetDebugLevel(num)
+	if(scartype(num) == ST_NUMBER) then 
+		__AI_debugLevel = num
+	else
+		fatal("Invalid Debug Level. Must be a number.")
+	end
+end
+
+--? @shortdesc Finds all encounters that contain ANY or ALL squads within the given sgroup.
+--? @args SGroup sgroup, ANY/ALL all
+--? @result Table
+function Ai:GetEncountersBySGroup(sgroup, any)
+	any = any or ANY
+	local encounters = {}
+	for k,v in pairs(AI_encountersList) do 
+		if(SGroup_ContainsSGroup(sgroup, v.sgroup, any))then
+			table.insert(encounters, v)
+		end
+	end
+	
+	return encounters
+end
+
+--? @shortdesc Finds all encounters that contain ANY or ALL squads within the given sgroup.
+--? @args Squad squad
+--? @result Table
+function Ai:GetEncountersBySquad(squad)
+	local encounters = {}
+	for k,v in pairs(AI_encountersList) do 
+		if SGroup_ContainsSquad(v.sgroup, Squad_GetID(squad), false) then
+			table.insert(encounters, v)
+		end
+	end
+	
+	return encounters
+end
+
+function Ai:RemoveFromAllEncounters(toRemove)
+	local aiEncs = {}
+	if scartype(toRemove) == ST_SQUAD then
+		aiEncs = Ai:GetEncountersBySquad(toRemove)
+		
+		if (#aiEncs) > 0 then
+			for k,enc in ipairs(aiEncs) do
+				enc:RemoveUnitBySquad(toRemove)
+			end
+		end
+	elseif scartype(toRemove) == ST_SGROUP then
+		local _checkSquads = function(gid, idx, sid)
+			aiEncs = Ai:GetEncountersBySquad(sid)
+		
+			if (#aiEncs) > 0 then
+				for k,enc in ipairs(aiEncs) do
+					enc:RemoveUnitBySquad(sid)
+				end
+			end
+		end
+		
+		SGroup_ForEach(toRemove, _checkSquads)
+	end	
+end
+
+--? @shortdesc Returns the number of alive encounters currently managed by the AI manager.
+--? @result Int
+function AI_GetNumEncounters()
+	return #(AI_encountersList)
+end
+
+--? @shortdesc Returns a table with all active (not dead) encounters.
+--? @result Table
+function AI_GetActiveEncounters()
+	return AI_encountersList
+end
+
+--? @shortdesc Clears goals on all encounters, then empties the encounter list. Can also issue a stop command to all units.
+--? @args Boolean stopAll,
+--? @result Void
+function AI_RemoveAllEncounters(stopAll)
+	for k,enc in ipairs(AI_encountersList) do
+		enc:ClearGoal()
+		if(stopAll) then
+			Cmd_Stop(enc:GetSGroup())
+		end
+	end
+	AI_encountersList = {}
+end
+
+--? @shortdesc Disables all encounters
+--? @result Void
+function AI_DisableAllEncounters()
+	for k,enc in ipairs(AI_encountersList) do
+		enc:Disable()
+	end
+end
+
+--? @shortdesc Enables all encounters
+--? @result Void
+function AI_EnableAllEncounters()
+	for k,enc in ipairs(AI_encountersList) do
+		enc:Enable()
+	end
+end
+
+--? @shortdesc Overrides the current difficulty setting (only for the AI Manager). Pass 'nil' to reset to Game_GetSPDifficulty() value
+--? @args Int level 
+--? @result Void
+function AI_OverrideDifficulty(level)
+	if(level == nil) then
+		g_AIManagerDifficulty = Game_GetSPDifficulty()
+	else
+		g_AIManagerDifficulty = level
+	end
+end
+
+
+--? @shortdesc Returns True if the current AI_Manager difficulty matches any in a given list.
+--? @args Int/Table difficultyList
+--? @result Boolean
+function AI_IsMatchingDifficulty(difficultyList)
+	if(difficultyList == nil) then
+		return true
+	elseif(scartype(difficultyList) == ST_NUMBER) then
+		return difficultyList == g_AIManagerDifficulty
+	else
+		for k,diff in pairs(difficultyList) do
+			if(diff == g_AIManagerDifficulty) then
+				return true
+			end
+		end
+		return false
+	end
+end
+
+
+--? @shortdesc Sets the default player to use when creating an encounter.
+--? @args PlayerID player
+--? @result Void
+function AI_SetDefaultEnemyPlayer(player)
+	__defaultEnemyPlayer = player
+end
+
+
+--------------------------------------------------------
+-- AI_* functions
+--------------------------------------------------------
+
+-- Main AI loop
+function AI_Loop()
+
+	local startIndex = 1
+	local endIndex = #(AI_encountersList)
+
+	--
+	-- Find region of encounters table to process this frame
+	--
+	if(#(AI_encountersList) > 2) then
+		--Check what frame we're currently updating. Splits encounter update loop in 2
+		if(Ai.updateFirstHalf) then
+			--Update first half
+			startIndex = 1
+			endIndex = math.floor(#(AI_encountersList)/2)
+			--~	print("Updating first half: " .. startIndex .."-".. endIndex) 
+		else
+			--Update second half
+			startIndex = math.ceil(#(AI_encountersList)/2)
+			if(startIndex == 0) then startIndex = 1 end
+		
+			endIndex = #(AI_encountersList)
+			--~ print("Updating second half: " .. startIndex .."-".. endIndex) 
+		end
+	end
+
+	--
+	-- Update and process subset of encounters
+	--
+	for i = endIndex, startIndex, -1 do
+		
+		if(AI_encountersList[i]:IsEnabled() and not AI_encountersList[i].wasKilled) then
+			AI_encountersList[i]:Update()
+		elseif(AI_encountersList[i].wasKilled and (AI_encountersList[i].goal == nil or AI_encountersList[i].goal.internalAIEncounterPtr == nil)) then
+			table.remove(AI_encountersList, i)
+		end
+
+	end
+
+	
+	
+	Ai.updateFirstHalf = not Ai.updateFirstHalf
+end
+
+
+function AI_RestartEncounters()
+	for k,enc in pairs(AI_encountersList) do
+		Encounter_OnLoadRestart(enc)
+	end
+end
+
+function AI_OnAIMigrated(player)
+	for k,enc in pairs(AI_encountersList) do 
+		enc:__OnAIMigrated(player)
+	end
+end
+
+function AI_ConvertAIEncounterPtrToLUAEncounter(aiEncounterPtr)
+	
+	if aiEncounterPtr ~= nil then
+		
+		local count = #(AI_encountersList)
+		
+		for i = 1, count do
+			if (AI_encountersList[i] ~= nil and
+			AI_encountersList[i].goal ~= nil and 
+			 AI_encountersList[i].goal.internalAIEncounterPtr == aiEncounterPtr) then
+				return AI_encountersList[i]
+			end
+		end
+	end
+	
+	return nil
+end
+
+--DEPRECATED FUNCTION STUBS USED BY OLD SAVE GAMES
+function AI_SetCaptureImportance( player, entity, importanceBonus )
+	AI_SetCaptureImportanceBonus( player, entity, importanceBonus )
+end
+function AI_ClearCaptureImportance( player, entity )
+	AI_ClearCaptureImportanceBonus( player, entity )
+end

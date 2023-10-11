@@ -1,0 +1,211 @@
+--
+-- WorldBuilder prefab
+-- "encountergoal"
+--
+
+
+-- Schema
+
+encountergoal_schema = {		-- schema ALWAYS named the prefab name with schema on the end
+	
+	type = "Prefab",
+	name = "encountergoal",																						-- name the prefab uses to identify itself
+	description = "encountergoal",																				-- name to display for this prefab
+	script = "encountergoal.scar",																		-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/gameplay/designer_objects/placeholder_templates/encounter_a",				-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = {
+	
+		------------------------
+		------------------------ ENCOUNTER GOAL
+		------------------------
+		{
+			type = ST_TABLE,
+			name = "aigoal",
+			description = "Grabs all spawns in the area and groups them into an attack direction.",
+			multiplicity = "single",
+			itemSchema = {
+				{
+					type = ST_STRING,
+					name = "goal",
+					description = "What is the goal we're giving to the AI.",
+					options = {"Wave"},
+					default = "Wave",
+					category = "General",
+				},
+				
+				{
+					type = ST_STRING,
+					name = "completion",
+					description = "What is the goal we're giving to the AI.",
+					options = {"Timer", "Waves", "Condition"},
+					default = "Timer",
+					requirement = {"goal", "Wave"},
+					category = "General",
+				},
+				{
+					type = ST_NUMBER,
+					name = "duration",
+					description = "How long the waves will last before this goal ends.",
+					default = 120,
+					requirement = {"completion", "Timer", "Waves"},
+					category = "General",
+				},
+				{
+					type = ST_PLAYER,
+					name = "player",
+					description = "The player owner the units will spawn as.",
+					default = "Player2",
+					category = "General",
+				},
+				{
+					type = ST_BOOLEAN,
+					name = "reveal_in_fow",
+					description = "Wether to reveal the units in FOW when they spawn.",
+					default = false,
+					category = "General",
+				},
+				
+				{
+					type = ST_NUMBER,
+					name = "next_wave_delay",
+					description = "Trigger the next wave after this amount of time has elapsed since the last wave.",
+					default = 5,
+					category = "Wave",
+				},
+				{
+					type = ST_STRING,
+					name = "and_or",
+					description = "Use both or either of the next wave checks.",
+					options = {"AND", "OR"},
+					default = "AND",
+					category = "Wave",
+				},
+				{							
+					type = ST_NUMBER,
+					name = "next_wave_units_remaining",
+					description = "Trigger the next wave after this many units are remaining.",
+					default = 5,
+					category = "Wave",
+				},
+				
+				{
+					type = ST_STRING,
+					name = "target_type",
+					description = "How are we deciding what object to use for a target",
+					options = {"egroup", "sgroup"},
+					default = "egroup",
+					category = "Target",
+				},
+				{
+					type = ST_EGROUP,
+					name = "egroup",
+					description = "Target squad to be spawned",
+					requirement = {"target_type", "egroup"},
+					category = "Target",
+				},
+				{
+					type = ST_SGROUP,
+					name = "sgroup",
+					description = "Target squad to be spawned",
+					requirement = {"target_type", "sgroup"},
+					category = "Target",
+				},
+				
+				{
+					type = ST_TABLE,
+					name = "spawn_directions",
+					description = "Grabs all spawns in the area and groups them into an attack direction.",
+					multiplicity = "multiple",
+					itemSchema = {
+						{
+							type = ST_MARKER,
+							name = "area",
+							description = "Spawn area.",							
+						},
+						
+					},
+				},
+				--{
+					--type = ST_TABLE,
+					--name = "targets",
+					--description = "Targets the enemy will try to attack/capture.",
+					--multiplicity = "multiple",
+					--itemSchema = {
+						--{
+							--type = ST_STRING,
+							--name = "target_type",
+							--description = "How are we deciding what object to use for a target",
+							--options = {"egroup", "sgroup"},
+							--default = "egroup",
+							--category = "Target",
+						--},
+						--{
+							--type = ST_EGROUP,
+							--name = "egroup",
+							--description = "Target squad to be spawned",
+							--category = "Target",
+							--requirement = {"target_type", "egroup"},
+						--},
+						--{
+							--type = ST_SGROUP,
+							--name = "sgroup",
+							--description = "Target squad to be spawned",
+							--category = "Target",
+							--requirement = {"target_type", "sgroup"},
+						--},
+						
+					--},
+				--},
+				{
+					type = ST_TABLE,
+					name = "enemies",
+					description = "Define enemies to spawn and on which wave. Will eventually be replaced by the AI.",
+					multiplicity = "multiple",
+					itemSchema = {
+						{
+							type = ST_PBG,
+							name = "pbg",
+							blueprintType  = "squad",
+							description = "Squad type to be spawned",
+							show = false,
+						},
+						{
+							type = ST_SGROUP,
+							name = "sgroup",
+							description = "Sgroup for these units",
+						},
+						{
+							type = ST_NUMBER,
+							name = "number",
+							description = "How many of these enemies should be spawned",
+							default = 1,
+						},
+						{
+							type = ST_NUMBER,
+							name = "wave_min",
+							description = "These enemies won't spawn until the waves reach this number.",
+							default = 1,
+						},
+						{
+							type = ST_NUMBER,
+							name = "wave_max",
+							description = "These enemies will stop spawning when the waves are greater than this number.",
+							default = -1,
+						},
+						{
+							type = ST_PBG,
+							name = "upgrade_pbg",
+							blueprintType = "upgrade",
+							description = "These enemies will have this upgrade.",
+						},
+
+						
+					},
+				},
+			},
+		},
+	},
+}

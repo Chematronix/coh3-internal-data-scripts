@@ -1,0 +1,232 @@
+-----------------------------------------------------------------------
+-- Mission affectors debugging using command line arguments
+--
+-- (c) Relic Entertainment 2021
+--
+-- Use command line arguments to test and debug mission affectors
+-- To specify the player for the affector:-
+-- Use "lp_" for local player
+-- Use "en_" for enemy player
+-- Note: Reinforcing affectors do not require a player specifier
+-- Reinforcing affectors have the following prefix:-
+-- erc = Enemy Reinforcing Company
+-- prc = Player Reinforcing Company
+-- pd = Player Detachment
+--
+-- Example command line arg:
+-- -affectors erc_arm,prc_air_us,pd_eng_us,lp_air_bomb
+-- -affectors en_part_observe
+-----------------------------------------------------------------------
+
+local _affectors =
+{
+	erc = -- Reinforcing affectors are squad based i.e. squad can have its own reinforcing affector
+	{
+		data =
+		{
+			erc_arm = SBP.GERMAN.COMPANY_ARMORED_GER,
+			erc_mec = SBP.GERMAN.COMPANY_MECHANIZED_GER,
+			erc_air = SBP.GERMAN.COMPANY_LUFTWAFFE_GER,
+			erc_inf = SBP.GERMAN.COMPANY_INFANTRY_GER,
+		},
+		player = "Affectors_Debug_EnemyPlayer",
+		func = "Affectors_Debug_SetReinforcement",
+	},
+	prc = -- Reinforcing affectors are squad based i.e. squad can have its own reinforcing affector
+	{
+		data =
+		{
+			prc_air_us = SBP.AMERICAN.COMPANY_PARATROOPER_US,
+			prc_arm_us = SBP.AMERICAN.COMPANY_ARMOURED_US,
+			prc_ssf_us = SBP.AMERICAN.COMPANY_SPEC_OPS_US,
+			prc_arm_uk = SBP.BRITISH.COMPANY_ARMOURED_UK,
+			prc_art_uk = SBP.BRITISH.COMPANY_ARTILLERY_UK,
+		},
+		player = "Affectors_Debug_LocalPlayer",
+		func = "Affectors_Debug_SetReinforcement",
+	},
+	pd = -- Reinforcing affectors are squad based i.e. squad can have its own reinforcing affector
+	{
+		data =
+		{
+			pd_eng_us = SBP.AMERICAN.ATTACHMENT_ENGINEER_US,
+			pd_log_us = SBP.AMERICAN.ATTACHMENT_LOGISTICS_US,
+			pd_art_us = SBP.AMERICAN.ATTACHMENT_TEAM_WEAPON_MORTAR_US,
+			pd_med_us = SBP.AMERICAN.ATTACHMENT_MEDIC_US,
+			pd_aag_us = SBP.AMERICAN.ATTACHMENT_TEAM_WEAPON_AA_GUN_US,
+			pd_hmg_us = SBP.AMERICAN.ATTACHMENT_TEAM_WEAPON_HMG_US,
+			pd_how_us = SBP.AMERICAN.ATTACHMENT_TEAM_WEAPON_HOWITZER_US,
+			pd_eng_uk = SBP.BRITISH.ATTACHMENT_SAPPER_UK,
+			pd_log_uk = SBP.BRITISH.ATTACHMENT_LOGISTICS_UK,
+			pd_art_uk = SBP.BRITISH.ATTACHMENT_TEAM_WEAPON_MORTAR_UK,
+			pd_med_uk = SBP.BRITISH.ATTACHMENT_MEDIC_UK,
+			pd_aag_uk = SBP.BRITISH.ATTACHMENT_TEAM_WEAPON_AA_GUN_UK,
+			pd_hmg_uk = SBP.BRITISH.ATTACHMENT_TEAM_WEAPON_HMG_UK,
+			pd_how_uk = SBP.BRITISH.ATTACHMENT_TEAM_WEAPON_HOWITZER_UK,
+		},
+		player = "Affectors_Debug_LocalPlayer",
+		func = "Affectors_Debug_SetGarrisonReinforcement",
+	},
+	naval = -- Naval affectors are ability based i.e. it is not squad-specific
+	{
+		data =
+		{
+			naval = BP_GetAbilityBlueprint("rts_bombardment_battleship"),
+			naval = BP_GetAbilityBlueprint("rts_bombardment_destroyer_uk"),
+			naval = BP_GetAbilityBlueprint("rts_bombardment_destroyer_ger"),
+		},
+		player = "Affectors_Debug_LocalPlayer",
+		func = "Affectors_Debug_SetAbility",
+	},
+	air = -- Air affectors are ability based i.e. it is not squad-specific
+	{
+		data =
+		{
+			air_recon = BP_GetAbilityBlueprint("rts_recon_airfield_us"),
+			air_recon = BP_GetAbilityBlueprint("rts_recon_airfield_uk"),
+			air_recon = BP_GetAbilityBlueprint("rts_recon_airfield_ger"),
+			air_strafe = BP_GetAbilityBlueprint("rts_strafing_run_airfield_us"),
+			air_strafe = BP_GetAbilityBlueprint("rts_strafing_run_airfield_uk"),
+			air_strafe = BP_GetAbilityBlueprint("rts_strafing_run_airfield_ger"),
+			air_bomb = BP_GetAbilityBlueprint("rts_bombing_run_airfield_us"),
+			air_bomb = BP_GetAbilityBlueprint("rts_bombing_run_airfield_uk"),
+			air_bomb = BP_GetAbilityBlueprint("rts_bombing_run_airfield_ger"),
+		},
+		player = "Affectors_Debug_LocalPlayer",
+		func = "Affectors_Debug_SetAbility",
+	},
+	part = -- Partisan affectors are ability based i.e. it is not squad-specific
+	{
+		data =
+		{
+			part_observe = BP_GetAbilityBlueprint("rts_partisan_observe_report"),
+			part_supplies = BP_GetAbilityBlueprint("rts_partisan_loot_supplies"),
+			part_disable = BP_GetAbilityBlueprint("rts_partisan_disable"),
+		},
+		player = "Affectors_Debug_LocalPlayer",
+		func = "Affectors_Debug_SetAbility",
+	},
+	empl = 
+	{
+		data = 
+		{
+			empl_aa_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_anti_air_ger"),
+			empl_aa_uk = BP_GetAbilityBlueprint("rts_emplacement_affector_anti_air_uk"),
+			empl_at_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_anti_tank_ger"),
+			empl_how_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_howitzer_ger"),
+			empl_how_uk = BP_GetAbilityBlueprint("rts_emplacement_affector_howitzer_uk"),
+			empl_how_us = BP_GetAbilityBlueprint("rts_emplacement_affector_howitzer_us"),
+			empl_mg_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_machine_gun_ger"),
+			empl_rep_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_repair_bay_ger"),
+			empl_sup_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_supply_cache_ger"),
+			empl_sup_us = BP_GetAbilityBlueprint("rts_emplacement_affector_supply_cache_us"),
+			empl_tri_ger = BP_GetAbilityBlueprint("rts_emplacement_affector_triage_center_ger"),
+		},
+		player = "Affectors_Debug_LocalPlayer",
+		func = "Affectors_Debug_SetAbility",
+	},
+}
+
+function Affectors_Debug_SelectPlayer(player_specifier)
+	if player_specifier == "lp" then
+		return _G["Affectors_Debug_LocalPlayer"]
+	elseif player_specifier == "en" then
+		return _G["Affectors_Debug_EnemyPlayer"]
+	else
+		error("Unsupported player_specifier for affector command line arg")
+	end
+end
+
+function Affectors_Debug_EnemyPlayer()
+	return Player_FindFirstEnemyPlayer(Game_GetLocalPlayer())
+end
+
+function Affectors_Debug_LocalPlayer()
+	return Game_GetLocalPlayer()
+end
+
+function Affectors_Debug_SetReinforcement(campaign, squad_bp, player_func)
+	local ability_bp = BP_GetReinforcementModifier(squad_bp, false)
+	local player = player_func()
+	local pair = {player = player, ability_bp = ability_bp}
+	if campaign.mission_affectors.reinforcement_abilities == nil then
+		campaign.mission_affectors.reinforcement_abilities = {}
+	end
+	campaign.mission_affectors.reinforcement_abilities[BP_GetName(squad_bp)] = ability_bp
+	table.insert(g_debug_ability_affectors, pair)
+end
+
+function Affectors_Debug_SetGarrisonReinforcement(campaign, squad_bp, player_func)
+	local ability_bp = BP_GetReinforcementModifier(squad_bp, true)
+	local player = player_func()
+	local pair = {player = player, ability_bp = ability_bp}
+	if campaign.mission_affectors.garrison_attachment_reinforcement_ability == nil then
+		campaign.mission_affectors.garrison_attachment_reinforcement_ability = {}
+	end
+	campaign.mission_affectors.garrison_attachment_reinforcement_ability[BP_GetName(squad_bp)] = ability_bp
+	table.insert(g_debug_ability_affectors, pair)
+end
+
+function Affectors_Debug_SetAbility(campaign, ability_bp, player_func)
+	local player = player_func()
+	local pair = {player = player, ability_bp = ability_bp}
+	table.insert(g_debug_ability_affectors, pair)
+end
+
+function Affectors_Debug_Set()
+	if Misc_IsCommandLineOptionSet("affectors") then
+		local args = Util_StringSplit(string.lower(Misc_GetCommandLineString("affectors")))
+		local campaign = Game_RetrieveTableData("campaign", false) or {}
+		local debug_ability_affectors = {}
+		g_debug_ability_affectors = debug_ability_affectors
+		if campaign.mission_affectors == nil then
+			campaign.mission_affectors = {}
+		end
+
+		for _, arg in pairs(args) do
+			-- Check for player specifier
+			local player_specifier = string.sub(arg, 1, 2)
+			if player_specifier == "lp" or player_specifier == "en" then
+				-- Trim the arg if player specifier is found
+				arg = string.sub(arg, 4)
+			else
+				player_specifier = ""
+			end
+			local found_affector = false
+			local category_name = string.gsub(arg, "_.*", "")
+			local category = _affectors[category_name]
+			if category ~= nil then
+				local affector_value = category.data[arg]
+				if affector_value ~= nil then
+					-- Launch the associated func
+					local func = _G[category.func]
+					local player_func = _G[category.player]
+					if player_func == nil then
+						if player_specifier == "" then
+							error("player specifier is not passed in affector command line arg")
+						end
+						-- if there is no override for selecting the player, get player arg
+						player_func = Affectors_Debug_SelectPlayer(player_specifier)
+					end
+					func(campaign, affector_value, player_func)
+				end
+			end
+		end
+
+		-- Apply the affector abilities
+		if debug_ability_affectors ~= nil then
+			for k, v in pairs(debug_ability_affectors) do
+				local ability = BP_GetAbilityBlueprintByPbgID(v.ability_bp.PropertyBagGroupID)
+				Player_AddAbility(v.player, ability)
+				print("Player ".. tostring(World_GetPlayerIndex(v.player)).." granted "..BP_GetName(ability))
+			end
+		end
+
+		Game_StoreTableData("campaign", campaign)
+	end
+end
+
+--Player_CompleteUpgrade(World_GetPlayerAt(1), BP_GetUpgradeBlueprint("rts_emplacement_anti_tank_upgrade"))
+--Player_CompleteUpgrade(World_GetPlayerAt(2), BP_GetUpgradeBlueprint("rts_emplacement_anti_tank_upgrade"))
+--Player_CompleteUpgrade(Game_GetLocalPlayer(), BP_GetUpgradeBlueprint("rts_emplacement_anti_tank_upgrade"))
+--Upgrade

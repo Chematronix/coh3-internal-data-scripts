@@ -1,0 +1,324 @@
+import("anvil.scar")
+import("prefabs/templates/dynamic_narrative_node_names_template.scar")
+import("narrative/dynamic_narrative.scar")
+
+function NarrativeDebug_SetBeat(beatNumber)
+	
+	SetNarrativeVariable("state_narrative.narrative_beat", beatNumber)
+	
+end
+
+function NarrativeDebug_EnableCoreNarrative()
+	g_core_narrative_disabled = false
+	SetNarrativeVariable("state_narrative.narrative_cooldown", 0)
+	SetNarrativeVariable("narrative_config.disable_core", false)
+end
+
+function NarrativeDebug_DisableCoreNarrative()
+	g_core_narrative_disabled = true
+	SetNarrativeVariable("state_narrative.narrative_cooldown", -1)
+	SetNarrativeVariable("narrative_config.disable_core", true)
+end
+
+function NarrativeDebug_EnableFastNarrative()
+	g_fast_narrative = true
+	SetNarrativeVariable("state_narrative.narrative_cooldown", 0)
+	SetNarrativeVariable("narrative_config.fast_core", true)
+end
+
+function NarrativeDebug_DisableFastNarrative()
+	g_fast_narrative = false
+	SetNarrativeVariable("state_narrative.narrative_cooldown", 0)
+	SetNarrativeVariable("narrative_config.fast_core", false)
+end
+
+local function DisplaySubcommanderSatisfactionScreen()
+	
+	local xaml =
+[[<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+		      xmlns:luaDataStore="clr-namespace:LuaDataStoreModelTypes;assembly=EngineUI"
+              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="clr-namespace:WPFGUI">
+      <Grid x:Name="Content" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource BlackOpacity75Brush}">
+			<StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+				<StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+					<StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10">
+						<TextBlock Text="VALENTI" Foreground="White" HorizontalAlignment="Center" FontSize="40"/>
+						<RadioButton x:Name="valenti_satisfaction_calculate" GroupName="ValentiSatisfaction" Height="50" IsChecked="True">
+							<TextBlock FontSize="30" Foreground="White">Calculate</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="valenti_satisfaction_satisfied" GroupName="ValentiSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Satisfied</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="valenti_satisfaction_neutral" GroupName="ValentiSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Neutral</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="valenti_satisfaction_dissatisfied" GroupName="ValentiSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Dissatisfied</TextBlock>
+						</RadioButton>
+					</StackPanel>
+					<StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10">
+						<TextBlock Text="NORTON" Foreground="White" HorizontalAlignment="Center" FontSize="40"/>
+						<RadioButton x:Name="norton_satisfaction_calculate" GroupName="NortonSatisfaction" Height="50" IsChecked="True">
+							<TextBlock FontSize="30" Foreground="White">Calculate</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="norton_satisfaction_satisfied" GroupName="NortonSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Satisfied</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="norton_satisfaction_neutral" GroupName="NortonSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Neutral</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="norton_satisfaction_dissatisfied" GroupName="NortonSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Dissatisfied</TextBlock>
+						</RadioButton>
+					</StackPanel>
+					<StackPanel Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10">
+						<TextBlock Text="BUCKRAM" Foreground="White" HorizontalAlignment="Center" FontSize="40"/>
+						<RadioButton x:Name="buckram_satisfaction_calculate" GroupName="BuckramSatisfaction" Height="50" IsChecked="True">
+							<TextBlock FontSize="30" Foreground="White">Calculate</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="buckram_satisfaction_satisfied" GroupName="BuckramSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Satisfied</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="buckram_satisfaction_neutral" GroupName="BuckramSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Neutral</TextBlock>
+						</RadioButton>
+						<RadioButton x:Name="buckram_satisfaction_dissatisfied" GroupName="BuckramSatisfaction" Height="50" IsChecked="False">
+							<TextBlock FontSize="30" Foreground="White">Force Dissatisfied</TextBlock>
+						</RadioButton>
+					</StackPanel>
+				</StackPanel>
+				<StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="10">
+					<Button x:Name="button_ok" Width="150" Height="40" Margin="5">OK</Button>
+				</StackPanel>
+			</StackPanel>
+		</Grid>
+    </Page>
+]]
+	
+	UI_AddChild("", "XamlPresenter", "SubcommanderSatisfactionDlg", { Xaml = xaml })
+	
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.buckram_satisfaction_calculate", "IsChecked", not World_GetNarrativeVariable("state_subcommander.buckram_override"))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.buckram_satisfaction_satisfied", "IsChecked", (World_GetNarrativeVariable("state_subcommander.buckram_override") and World_GetNarrativeVariable("state_subcommander.buckram_override_satisfied")))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.buckram_satisfaction_neutral", "IsChecked", (World_GetNarrativeVariable("state_subcommander.buckram_override") and World_GetNarrativeVariable("state_subcommander.buckram_override_neutral")))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.buckram_satisfaction_dissatisfied", "IsChecked", (World_GetNarrativeVariable("state_subcommander.buckram_override") and not World_GetNarrativeVariable("state_subcommander.buckram_override_satisfied")))
+	
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.norton_satisfaction_calculate", "IsChecked", not World_GetNarrativeVariable("state_subcommander.norton_override"))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.norton_satisfaction_satisfied", "IsChecked", (World_GetNarrativeVariable("state_subcommander.norton_override") and World_GetNarrativeVariable("state_subcommander.norton_override_satisfied")))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.norton_satisfaction_neutral", "IsChecked", (World_GetNarrativeVariable("state_subcommander.norton_override") and World_GetNarrativeVariable("state_subcommander.norton_override_neutral")))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.norton_satisfaction_dissatisfied", "IsChecked", (World_GetNarrativeVariable("state_subcommander.norton_override") and not World_GetNarrativeVariable("state_subcommander.norton_override_satisfied")))
+
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.valenti_satisfaction_calculate", "IsChecked", not World_GetNarrativeVariable("state_subcommander.valenti_override"))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.valenti_satisfaction_satisfied", "IsChecked", (World_GetNarrativeVariable("state_subcommander.valenti_override") and World_GetNarrativeVariable("state_subcommander.valenti_override_satisfied")))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.valenti_satisfaction_neutral", "IsChecked", (World_GetNarrativeVariable("state_subcommander.valenti_override") and World_GetNarrativeVariable("state_subcommander.valenti_override_neutral")))
+	UI_SetPropertyValue("SubcommanderSatisfactionDlg.valenti_satisfaction_dissatisfied", "IsChecked", (World_GetNarrativeVariable("state_subcommander.valenti_override") and not World_GetNarrativeVariable("state_subcommander.valenti_override_satisfied")))
+	
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.valenti_satisfaction_calculate", "Click", "SetValentiSatisfactionOverride_Default")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.valenti_satisfaction_neutral", "Click", "SetValentiSatisfactionOverride_Neutral")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.valenti_satisfaction_satisfied", "Click", "SetValentiSatisfactionOverride_Satisfied")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.valenti_satisfaction_dissatisfied", "Click", "SetValentiSatisfactionOverride_Dissatisfied")
+
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.norton_satisfaction_calculate", "Click", "SetNortonSatisfactionOverride_Default")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.norton_satisfaction_neutral", "Click", "SetNortonSatisfactionOverride_Neutral")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.norton_satisfaction_satisfied", "Click", "SetNortonSatisfactionOverride_Satisfied")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.norton_satisfaction_dissatisfied", "Click", "SetNortonSatisfactionOverride_Dissatisfied")
+
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.buckram_satisfaction_calculate", "Click", "SetBuckramSatisfactionOverride_Default")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.buckram_satisfaction_neutral", "Click", "SetBuckramSatisfactionOverride_Neutral")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.buckram_satisfaction_satisfied", "Click", "SetBuckramSatisfactionOverride_Satisfied")
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.buckram_satisfaction_dissatisfied", "Click", "SetBuckramSatisfactionOverride_Dissatisfied")
+	
+	UI_AddEventHandler("SubcommanderSatisfactionDlg.button_ok", "Click", "CloseSubcommanderSatisfactionDlg")
+end
+
+function CloseSubcommanderSatisfactionDlg()
+	
+	UI_Remove("SubcommanderSatisfactionDlg")
+	
+end
+
+local function SetSubcommanderOverride(subcommander, override, satisfied, dissatisfied)
+	
+	World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_override", override)
+	World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_override_satisfied", satisfied)
+	World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_override_neutral", (not satisfied and not dissatisfied))
+	World_SetNarrativeVariable("state_subcommander." .. subcommander .. "_override_dissatisfied", dissatisfied)
+	
+	UpdateSubcommanderSatisfactionFlags();
+	
+end
+
+function SetValentiSatisfactionOverride_Default()
+
+	SetSubcommanderOverride("valenti", false)
+
+end
+
+function SetValentiSatisfactionOverride_Satisfied()
+
+	SetSubcommanderOverride("valenti", true, true, false)
+	
+end
+
+function SetValentiSatisfactionOverride_Neutral()
+
+	SetSubcommanderOverride("valenti", true, false, false)
+	
+end
+
+function SetValentiSatisfactionOverride_Dissatisfied()
+
+	SetSubcommanderOverride("valenti", true, false, true)
+
+end
+
+function SetNortonSatisfactionOverride_Default()
+
+	SetSubcommanderOverride("norton", false)
+
+end
+
+function SetNortonSatisfactionOverride_Satisfied()
+
+	SetSubcommanderOverride("norton", true, true, false)
+
+end
+
+function SetNortonSatisfactionOverride_Neutral()
+
+	SetSubcommanderOverride("norton", true, false, false)
+
+end
+
+function SetNortonSatisfactionOverride_Dissatisfied()
+	
+	SetSubcommanderOverride("norton", true, false, true)
+	
+end
+
+function SetBuckramSatisfactionOverride_Default()
+
+	SetSubcommanderOverride("buckram", false)
+
+end
+
+
+function SetBuckramSatisfactionOverride_Satisfied()
+
+	SetSubcommanderOverride("buckram", true, true, false)
+	
+end
+
+function SetBuckramSatisfactionOverride_Neutral()
+
+	SetSubcommanderOverride("buckram", true, false, false)
+	
+end
+
+function SetBuckramSatisfactionOverride_Dissatisfied()
+	
+	SetSubcommanderOverride("buckram", true, false, true)
+
+end
+
+function NarrativeDebug_OverrideSatisfaction()
+	
+	DisplaySubcommanderSatisfactionScreen()
+
+end
+
+function NarrativeDebug_PrintState()
+	
+	print("Beat: " .. GetNarrativeVariable("state_narrative.narrative_beat"))
+	print("Cooldown: " .. GetNarrativeVariable("state_narrative.narrative_cooldown"))
+	print("Core Narrative: " .. (g_core_narrative_disabled and "Disabled" or "Enabled"))
+	print("Fast Narrative: " .. (g_fast_narrative and "Enabled" or "Disabled"))
+	
+	print("SUBCOMMANDER STATE")
+	print("------------------")
+
+	PrintSubcommanderState("Buckram")
+	PrintSubcommanderState("Norton")
+	PrintSubcommanderState("Valenti")
+	
+end
+
+function Debug_ListDynamicDialogue()
+	
+	for node_index = 1, #g_dynamic_narrative_node_names do
+		
+		if (g_dynamic_narrative_node_names[node_index] ~= "<none>") then
+			
+			print(g_dynamic_narrative_node_names[node_index])
+			
+		end 
+	end
+	
+end
+
+local function Debug_TestNode(active_node, actor)
+	
+	if (NodePlaysEvent(active_node)) then
+		if (actor == nil or active_node.actor == actor) then
+			DoIntel(active_node.intro_loc_string_key, active_node.narrative_event)
+		end
+	end
+    
+	if (active_node ~= nil and active_node.connections ~= nil) then
+		for _, connection in ipairs(active_node.connections) do	
+			Debug_TestNode(g_narrative_nodes[connection.destination_node], actor)
+		end
+	end
+	
+	return nil
+end
+
+function Debug_TestDynamicNarrativeNode(nodeName, actor)
+	
+    local active_node = g_narrative_nodes[nodeName]
+	
+	while (active_node ~= nil) do	
+    	active_node = Debug_TestNode(active_node, actor)
+	end
+	
+end
+
+local function TestDynamicNarrative(nodes, node_name, actorFilter)
+
+	local subcommanderTranslation =
+	{
+		buckram = "general",
+		norton = "ccommander",
+		valenti = "partisan_leader",
+	}
+	
+	local actor = nil
+	
+	if (actorFilter ~= nil) then
+		actor = subcommanderTranslation[string.lower(actorFilter)]
+	end
+
+	local wildcard = string.find(node_name, "*")
+	node_name =string.gsub(node_name, "*", "")
+	
+	for node in pairs(nodes) do
+
+		if (node == node_name or (wildcard and string.match(node, node_name) ~= nil)) then			
+			print("Playing Node - " .. node)
+			Debug_TestDynamicNarrativeNode(node, actor)
+		end
+	
+	end	
+end
+
+function Debug_TestDynamicNarrative(node_name, actorFilter)
+
+	TestDynamicNarrative(g_narrative_nodes, node_name, actorFilter)
+
+end
+
+function PlayDynamicNarrative(node_name)
+	
+	ExecuteDynamicNarrativeNode(node_name, false, nil)
+	
+end

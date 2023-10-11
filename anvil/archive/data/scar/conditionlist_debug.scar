@@ -1,0 +1,773 @@
+--
+-- Mission-o-Matic - Condition Completion Functions
+--
+-- Intelligently satisfy a condition if possible, as opposed to just forcing it 
+--
+import("conditionlist.scar")
+import("scarutil.scar")
+import("missionomatic/missionomatic_debug.scar")
+
+-- Attempts to actually satisfy the condition, otherwise calls ConditionDebug_ForceComplete
+function ConditionDebug_CheatComplete(condition)
+	local condition_name = condition.conditionName or condition.condition or ""
+	local check_fn = _G["Condition_"..condition_name.."_Check"]
+	if scartype(check_fn) == ST_FUNCTION and check_fn(condition) then
+		return -- No need to cheat, it's already complete
+	end
+	local fn = _G["Condition_"..condition_name.."_CheatComplete"]
+	if scartype(fn) == ST_FUNCTION then
+		-- If it found a CheatComplete function, it will try to
+		-- intelligently complete the condition
+		local table_fn = _G["Condition_"..condition_name.."_Get"]
+		if scartype(table_fn) == ST_FUNCTION then
+			fn(condition, table_fn(condition))
+		else
+			fn(condition)
+		end
+	else
+		-- Just force complete it
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+--Attempts to modify the result of GetCount for a function
+function ConditionDebug_CheatModifyCount(condition, operation)
+	local condition_name = condition.conditionName or condition.condition or ""
+	local fn = _G["Condition_"..condition_name.."_CheatModifyCount"]
+	if scartype(fn) == ST_FUNCTION then
+		local table_fn = _G["Condition_"..condition_name.."_Get"]
+		if scartype(table_fn) == ST_FUNCTION then
+			return fn(condition, operation, table_fn(condition))
+		else
+			return fn(condition, operation)
+		end
+	end
+	return 0
+end
+
+-- Bypasses the whole condition so that it simply evaluates to true
+function ConditionDebug_ForceComplete(condition)
+	if scartype(condition.condition) == ST_STRING then
+		condition.conditionName = condition.condition
+	end
+	condition.condition = function() 
+		return true
+	end
+end
+
+function Condition_Boolean_CheatComplete(condition)
+	local end_num
+	if condition.boolean == "ANY" then
+		end_num = condition.minRequired
+	elseif condition.boolean == "ALL" then
+		end_num = #condition.subconditions
+	elseif condition.boolean == "NONE" then
+		end_num = 0
+		ConditionDebug_ForceComplete(condition)
+	end
+	local completed = 0
+	local ignored_objective_conditions = 0
+	local UpdateCompleted = function()
+		completed = 0
+		for index, item in pairs(condition.subconditions) do
+			if ConditionList_CheckItem(item) then
+				completed = completed + 1
+			end
+		end
+	end
+	UpdateCompleted()
+	if completed >= end_num then
+		return
+	end
+	for index, item in pairs(condition.subconditions) do
+		if not ConditionList_CheckItem(item) then
+			ConditionDebug_CheatComplete(item)
+			local condition_name = item.conditionName or item.condition or ""
+			if ConditionList_CheckItem(item) then
+				completed = completed + 1
+			elseif String_StartsWith(condition_name, "ObjectiveIs") then
+				completed = completed + 1
+				ignored_objective_conditions = ignored_objective_conditions + 1
+			end
+		end
+		if completed >= end_num then
+			UpdateCompleted()
+			completed = completed + ignored_objective_conditions
+			if completed >= end_num then
+				return
+			end
+		end
+	end
+	
+	if completed < end_num then
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+function Condition_AggregatedCount_CheatComplete(condition, table)
+	local operation = NumberComparisonToOperation(table.result, condition.comparison, condition.number)
+	local amount = Condition_AggregatedCount_CheatModifyCount(condition, operation, table)
+	if amount < operation.amount then
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+function Condition_AggregatedCount_CheatModifyCount(condition, operation, table)
+	local amount = operation.amount
+	if condition.accumulator == "MAX" or condition.accumulator == "MIN" then
+		if (condition.accumulator == "MIN" and operation.operation == "ADD") or
+			(condition.accumulator == "MAX" and operation.operation == "SUBTRACT") then
+			amount = 0
+			for i = 1, #condition.subconditions do
+				amount = math.max(amount,
+					operation.amount-ConditionDebug_CheatModifyCount(condition.subconditions[i], operation))
+			end
+		else
+			for i = 1, #condition.subconditions do
+				amount = math.min(amount,
+					operation.amount-ConditionDebug_CheatModifyCount(condition.subconditions[i], operation))
+				if amount <= 0 then
+					break
+				end
+			end
+		end
+	else -- SUM is default
+		for i = 1, #condition.subconditions do
+			amount = amount - ConditionDebug_CheatModifyCount(condition.subconditions[i], operation)
+			if amount <= 0 then
+				break
+			end
+		end
+	end
+	return operation.amount - amount
+end
+
+-----------------------------------------
+--   Spawning, Killing, Moving, Claiming
+-----------------------------------------
+
+function Condition_CompareUnitCounts_CheatComplete(condition, table)
+	local comparison = condition.comparison or IS_GREATER_THAN
+	local group1_count = SGroup_Count(table.sgroupA)
+	local group2_count = SGroup_Count(table.sgroupB)
+	local operation = NumberComparisonToOperation(
+		group1_count,
+		comparison,
+		group2_count
+		)
+	function kill_or_spawn(kill_group, kill_player, spawn_group, spawn_player)
+		g_enemy_team = g_enemy_team or Core_GetTeamsEntryFromIndex(2)
+		if(Player_GetTeam(kill_player) == g_enemy_team) then
+			local kill_group_count = SGroup_Count(kill_group)
+			_KillNFromGroup(math.min(operation.amount, kill_group_count), kill_group)
+			operation.amount = operation.amount - math.min(operation.amount, kill_group_count)
+		end
+		if operation.amount > 0 then
+			local location = condition.position or condition.debug_location
+				or Player_GetStartingPosition(spawn_player)
+			if condition.debug_sbp ~= nil then
+				Util_CreateSquads(spawn_player,
+					spawn_group,
+					condition.debug_sbp,
+					location,
+					location,
+					operation.amount,
+					0)
+			else
+				ConditionDebug_ForceComplete(condition)
+			end
+		end
+	end
+	if operation.operation == "ADD" then
+		kill_or_spawn(table.sgroupB, condition.playerB, table.sgroupA, condition.playerA)
+	else
+		kill_or_spawn(table.sgroupA, condition.playerA, table.sgroupB, condition.playerB)
+	end
+	table.cleanup(table)
+end
+
+function Condition_CountConstructedEntities_CheatComplete(condition)
+	local operation = NumberComparisonToOperation(condition.count_so_far, condition.comparison, condition.count)
+	local amount = Condition_CountConstructedEntities_CheatModifyCount(condition, operation)
+	if amount < operation.amount then
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+function Condition_CountConstructedEntities_CheatModifyCount(condition, operation)
+	if operation.operation == "ADD" then
+		local location = Player_GetStartingPosition(condition.player)
+		if condition.require_location then
+			location = condition.position
+		elseif condition.has_debug_location then
+			location = condition.debug_location
+		end
+		Util_CreateEntities(
+			condition.player,
+			condition.opt_source_egroup,
+			condition.ebp,
+			location,
+			operation.amount,
+			condition.facing)
+		return operation.amount
+	else
+		return 0
+	end
+end
+
+function Condition_CountConstructedSquads_CheatComplete(condition)
+	local operation = NumberComparisonToOperation(condition.count_so_far, condition.comparison, condition.count)
+	local amount = Condition_CountConstructedSquads_CheatModifyCount(condition, operation)
+	if amount < operation.amount then
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+function Condition_CountConstructedSquads_CheatModifyCount(condition, operation)
+	if operation.operation == "ADD" then
+		local location = Player_GetStartingPosition(condition.player)
+		if condition.require_location then
+			location = condition.location
+		elseif condition.has_debug_location then
+			location = condition.debug_location
+		end
+		Util_CreateSquads(
+			condition.player,
+			condition.opt_source_sgroup,
+			condition.sbp,
+			location,
+			location, -- destination
+			operation.amount)
+		return operation.amount
+	else
+		return 0
+	end
+end
+
+function Condition_CountConstructedUpgrades_CheatComplete(condition)
+	local operation = NumberComparisonToOperation(condition.count_so_far, condition.comparison, condition.count)
+	local amount = Condition_CountConstructedUpgrades_CheatModifyCount(condition, operation)
+	if amount < operation.amount then
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+function Condition_CountConstructedUpgrades_CheatModifyCount(condition, operation)
+	if operation.operation == "ADD" then
+		local remaining = operation.amount
+		if condition.upgrade_type == "Squad" then
+			local sgroup = condition.opt_source_sgroup
+			if sgroup == nil then
+				Player_GetAll()
+				sgroup = sg_allsquads
+			end
+			local temp_sgroup = SGroup_CreateUnique("temp")
+			local try_upgrade = function(group, index, squad)
+				if remaining == 0 or Squad_HasUpgrade(squad, condition.upgrade_pbg) then
+					return
+				end
+				SGroup_Clear(temp_sgroup)
+				SGroup_Add(temp_sgroup, squad)
+				Cmd_InstantUpgrade(temp_sgroup, condition.upgrade_pbg, 1)
+				if Squad_HasUpgrade(squad, condition.upgrade_pbg) then
+					remaining = remaining - 1
+				end
+			end
+			SGroup_ForEach(sgroup, try_upgrade)
+			SGroup_Destroy(temp_sgroup)
+		elseif condition.upgrade_type == "Entity" then
+			local egroup = condition.opt_source_egroup
+			if egroup == nil then
+				Player_GetAll()
+				egroup = eg_allentities
+			end
+			local temp_egroup = EGroup_CreateUnique("temp")
+			local try_upgrade = function(group, index, entity)
+				if remaining == 0 or Entity_HasUpgrade(entity, condition.upgrade_pbg) then
+					return
+				end
+				EGroup_Clear(temp_egroup)
+				EGroup_Add(temp_egroup, entity)
+				Cmd_InstantUpgrade(temp_egroup, condition.upgrade_pbg, 1)
+				if Entity_HasUpgrade(entity, condition.upgrade_pbg) then
+					remaining = remaining - 1
+				end
+			end
+			EGroup_ForEach(egroup, try_upgrade)
+			EGroup_Destroy(temp_egroup)
+		else -- Player
+			Cmd_InstantUpgrade(condition.player, condition.upgrade_pbg, 1)
+			remaining = 0
+		end
+		return operation.amount - remaining
+	else
+		return 0
+	end
+end
+
+function Condition_EntityAtLocation_CheatComplete(condition, table)
+	if condition.egroup ~= nil and EGroup_Count(table.egroup) > 0 then
+		Entity_SetPosition(EGroup_GetEntityAt(table.egroup, 1), condition.position)
+	elseif condition.entityType ~= nil or condition.debug_ebp ~= nil then
+		Util_CreateEntities(
+			condition.player,
+			condition.egroup,
+			condition.entityType or condition.debug_ebp,
+			condition.position, 1)
+	else
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+	
+function Condition_GroupCount_CheatComplete(condition, table)
+	local operation = NumberComparisonToOperation(table.result, condition.comparison, condition.number)
+	local amount = Condition_GroupCount_CheatModifyCount(condition, operation, table)
+	if amount < operation.amount then
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+function Condition_GroupCount_CheatModifyCount(condition, operation, table)
+	if operation.operation == "SUBTRACT" then
+		return _KillNFromGroup(operation.amount, table.group)
+	elseif operation.operation == "ADD" then
+		local player = World_GetPlayerAt(2)
+		if condition.target == "SGROUP" and SGroup_Count(table.group) > 0 then
+			player = Squad_GetPlayerOwner(SGroup_GetSquadAt(table.group, 1))
+		elseif condition.target == "EGROUP" and EGroup_Count(table.group) > 0 then
+			player = Entity_GetPlayerOwner(EGroup_GetEntityAt(table.group, 1))
+		end
+		local location = Player_GetStartingPosition(player)
+		if condition.has_debug_location then
+			location = condition.debug_location
+		end
+		if condition.target == "SGROUP" then
+			if condition.debug_sbp ~= nil then
+				Util_CreateSquads(player, table.group, condition.debug_sbp, location, location, operation.amount, 0)
+				return operation.amount
+			end
+		elseif condition.target == "EGROUP" then
+			if condition.debug_ebp ~= nil then
+				Util_CreateEntities(player, table.group, condition.debug_ebp, location, operation.amount)
+				return operation.amount
+			end
+		end
+	end
+	return 0
+end
+
+function Condition_GroupKilled_CheatComplete(condition)
+	local group = condition.group
+	
+	if scartype(group) == ST_EGROUP then
+		EGroup_Kill(group)
+	elseif scartype(group) == ST_SGROUP then
+		SGroup_Kill(group)
+	end
+end
+
+function Condition_HasBuildings_CheatComplete(condition, table)
+	local operation = NumberComparisonToOperation(table.result, condition.comparison, condition.number)
+	if operation.operation == "SUBTRACT" then
+		_KillNFromGroup(table.group, operation.amount)
+	else
+		local ebp = condition.unitType or condition.debug_ebp
+		if ebp ~= nil then
+			local location = Player_GetStartingPosition(condition.player)
+			if condition.has_debug_location then
+				location = condition.debug_location
+			end
+			Util_CreateEntities(
+				condition.player,
+				nil, --SGroup
+				ebp,
+				location, --Location
+				operation.amount -- numEntities
+			)
+		else
+			ConditionDebug_ForceComplete(condition)
+		end
+	end
+end
+
+function Condition_HasUnits_CheatComplete(condition, table)
+	local operation = NumberComparisonToOperation(table.result, condition.comparison, condition.number)
+	if operation.operation == "SUBTRACT" then
+		_KillNFromGroup(table.group, operation.amount)
+	else
+		local location = Player_GetStartingPosition(condition.player)
+		if condition.has_debug_location then
+			location = condition.debug_location
+		end
+		local sbp = condition.unitType or condition.debug_sbp
+		if sbp ~= nil then
+			Util_CreateSquads(
+				condition.player,
+				nil, --SGroup
+				sbp,
+				location, --Location
+				location, --destination
+				operation.amount, -- numSquads
+				0 -- loadout
+				)
+		else
+			ConditionDebug_ForceComplete(condition)
+		end
+	end
+end
+
+function Condition_PlayerOwner_CheatComplete(condition, table)
+	if scartype(table.target) == ST_EGROUP then
+		local claim = function(group, index, entity)
+			if (Entity_IsStrategicPoint( entity )) then
+				if not World_OwnsEntity(entity) then
+					local enemy = Entity_GetPlayerOwner(entity)
+					if enemy ~= table.player then
+						local kill_group = SGroup_CreateUnique("temp")
+						World_GetSquadsNearPoint(table.player, kill_group, Util_GetPosition(entity), condition.debug_radius, OT_Enemy)
+						SGroup_Kill(kill_group)
+						SGroup_Destroy(kill_group)
+					end
+				end
+				Entity_InstantCaptureStrategicPoint(entity, table.player)
+			else
+				Entity_SetPlayerOwner( entity, table.player )  
+			end
+		end
+		EGroup_ForEach(table.target, claim)
+	elseif scartype(table.target) == ST_SGROUP then
+		SGroup_SetPlayerOwner(table.target, table.player)
+	end
+end
+
+function Condition_UnitAtLocation_CheatComplete(condition, table)
+	if table == nil then
+		 -- The location did not exist
+		ConditionDebug_ForceComplete(condition)
+	end
+	sg_SquadsNearMarker = table.sg_SquadsNearMarker
+	sg_UnitsToCheck = table.sg_UnitsToCheck
+	local temp_in_area_sgroup = SGroup_CreateUnique("temp_cheat")
+	local temp_out_area_sgroup = SGroup_CreateUnique("temp_cheat")
+	local result = 0
+	for i=1, SGroup_CountSpawned(sg_UnitsToCheck) do
+		local squad = SGroup_GetSpawnedSquadAt(sg_UnitsToCheck, i)
+		local is_near_marker = false
+		for ii=1, SGroup_Count(sg_SquadsNearMarker) do
+			if squad == SGroup_GetSpawnedSquadAt(sg_SquadsNearMarker, ii) then
+				SGroup_Add(temp_in_area_sgroup, squad)
+				result = result + 1
+				is_near_marker = true
+				break
+			end
+		end
+		if not is_near_marker then
+			SGroup_Add(temp_out_area_sgroup, squad)
+		end
+	end
+	local operation = NumberComparisonToOperation(result, condition.comparison, condition.amount)
+	if operation == nil then
+		return -- No Change Needed
+	end
+	if operation.operation == "ADD" or
+		(operation.operation == "ANY" and operation.amount > SGroup_Count(temp_in_area_sgroup)) then
+		local player = condition.player or World_GetPlayerAt(1)
+		local sbp = condition.unitType or condition.debug_sbp
+		if sbp ~= nil then
+			Util_CreateSquads(player,
+				condition.opt_sgroup,
+				sbp,
+				table.position,
+				table.position,
+				operation.amount)
+		else
+			ConditionDebug_ForceComplete(condition)
+		end
+	else
+		_KillNFromGroup(operation.amount, temp_in_area_sgroup)
+	end
+	SGroup_Destroy(temp_in_area_sgroup)
+	SGroup_Destroy(temp_out_area_sgroup)
+end
+--{
+--		result = garrisoned_count,
+--		total = total_count,
+--		group = group,
+--		target = context_target,
+--		target_is_entity = target_is_entity
+--	}
+function Condition_IsGarrisoned_CheatComplete(condition, table)
+	if condition.garrison_match_type == "NONE" then
+		local UnloadSingle = function(group, index, target)
+			local heldSquads = SGroup_CreateUnique()
+			
+			if scartype(target) == ST_ENTITY then
+				Entity_GetSquadsHeld(target, heldSquads)
+			else
+				Squad_GetSquadsHeld(target, heldSquads)
+			end
+			
+			if SGroup_Count(heldSquads) == 0 then
+				return
+			end
+			
+			LocalCommand_Squad(Squad_GetPlayerOwner(SGroup_GetSquadAt(heldSquads, 1)), heldSquads, SCMD_Unload, false)
+		end
+	
+		-- Call the helper on every input target to empty its hold
+		if condition.garrison_target_type == "EGROUP" then
+				EGroup_ForEach(condition.egroup, UnloadSingle)
+		elseif condition.garrison_target_type == "SGROUP" then
+				SGroup_ForEach(condition.sgroup, UnloadSingle)
+		else
+			-- Garrison target type is CONTEXT
+			-- NOTE: Context needs to be available to the _Get function since it is dynamic
+			-- data not stored in prefabdata.
+			ConditionDebug_ForceComplete(condition)
+		end
+	else
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+---------------------------------
+-- Objective-Related Conditions
+---------------------------------
+
+function Condition_ObjectiveCounter_CheatComplete(condition)
+	local table = Condition_ObjectiveCounter_Get(condition)
+	local objective = table.objective
+	
+	if table.currentCounter == nil then
+		ConditionDebug_ForceComplete(condition)
+		return
+	end
+	
+	local operation = NumberComparisonToOperation(table.currentCounter, condition.comparison, condition.number)
+	if operation.operation == "SUBTRACT" then
+		ConditionDebug_ForceComplete(condition)
+	else
+		local needed = operation.amount
+		for i = 1, needed do
+			if i > #objective.completeConditions.subconditions then
+				Objective_SetCounter(objective.objectiveData, condition.number, condition.number)
+				return
+			end
+			local child_condition = objective.completeConditions.subconditions[i]
+			if condition ~= child_condition then
+				ConditionDebug_CheatComplete(child_condition)
+			else
+				needed = needed + 1
+			end
+		end
+	end
+end
+
+function Condition_ObjectiveTimer_CheatComplete(condition, table)
+	local objective = table.objective
+	if Objective_IsTimerSet(objective.objectiveData) then
+		local operation = NumberComparisonToOperation(table.currentTime or 0, condition.comparison, condition.number)
+		Timer_Add(objective.objectiveData.Counter.TimerID, operation.signed_amount)
+	else
+		ConditionDebug_ForceComplete(condition)
+	end
+		
+end
+
+function Condition_ObjectiveIsStarted_CheatComplete(condition)
+	local objective = MissionOMatic_FindObjective(condition.id)
+	MissionDebug_StartNode(objective.debug_node_id, true)
+end
+
+function Condition_ObjectiveIsComplete_CheatComplete(condition)
+	local objective = MissionOMatic_FindObjective(condition.id)
+	if objective == nil then
+		ConditionDebug_ForceComplete(condition)
+		return
+	end
+	local node = MissionDebug_GetNode(objective.debug_node_id)
+	if Objective_IsComplete(objective.objectiveData) then
+		return
+	end
+	MissionDebug_CompleteObjectiveNode(node, --[[append--]] true)
+end
+
+function Condition_ObjectiveIsFailed_CheatComplete(condition)
+	local objective = MissionOMatic_FindObjective(condition.id)
+	if objective == nil then
+		ConditionDebug_ForceComplete(condition)
+		return
+	end
+	local node = MissionDebug_GetNode(objective.debug_node_id)
+	if Objective_IsFailed(objective.objectiveData) then
+		return
+	end
+	MissionDebug_StartNode(node, true)
+	if objective.can_fail then
+		ConditionDebug_CheatComplete(objective.failConditions)
+	else
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+----------
+-- Other
+----------
+
+function Condition_PrefabIsActive_CheatComplete(condition)
+	local data = Prefab_GetInstance(condition.prefab)
+	if data.debug_node_id ~= nil then
+		MissionDebug_StartNode(data.debug_node_id, true)
+	else
+		ConditionDebug_ForceComplete(condition)
+	end
+end
+
+function Condition_HasResources_CheatComplete(condition)
+	local player = World_GetPlayerAt(1)
+	if condition.player ~= nil then 
+		player = condition.player
+	end
+	local resourceType = condition.resourceType
+	
+	if resourceType == "Manpower" then
+		resourceType = RT_Manpower
+	elseif resourceType == "Fuel" then
+		resourceType = RT_Fuel
+	elseif resourceType == "Munition" then
+		resourceType = RT_Munition
+	end
+	local resourceAmount = Player_GetResource(player, resourceType)
+	local operation = NumberComparisonToOperation(resourceAmount, condition.comparison, condition.number)
+	if operation == nil then
+		return -- No Change Needed
+	end
+	
+	Player_AddResource(player, resourceType, operation.signed_amount)
+end
+
+function Condition_HealthPercentage_CheatComplete(condition)
+	local table = Condition_HealthPercentage_Get(condition, context)
+	local operation = NumberComparisonToOperation(table.result, condition.comparison, table.percentage, .01)
+	if(scartype(table.target) == ST_SGROUP) then
+		if table.percentage == 0 and operation.operation == "SUBTRACT" then
+			SGroup_Kill(table.target)
+		else
+			SGroup_SetAvgHealth(table.target, table.result + operation.signed_amount)
+		end
+	elseif(scartype(table.target) == ST_EGROUP) then
+		if table.percentage == 0 and operation.operation == "SUBTRACT" then
+			EGroup_Kill(table.target)
+		else
+			EGroup_SetAvgHealth(table.target, table.result + operation.signed_amount)
+		end
+	end
+end
+
+function Condition_TurnDuration_CheatComplete(condition)
+	local operation = NumberComparisonToOperation(
+		World_GetCurrentTurn(),
+		condition.comparison,
+		condition.turnDuration)
+	if operation.operation == "SUBTRACT" then
+		ConditionDebug_ForceComplete(condition)
+	else
+		MissionDebug_SkipTurns(operation.amount)
+	end
+end
+
+-------------------------------------
+---------------UTILITY---------------
+-------------------------------------
+function NumberComparisonToOperation(number, comparison, value, opt_padding)
+	if scartype(comparison) == ST_STRING then
+		comparison = _G[comparison]	
+	end
+	opt_padding = opt_padding or 0
+	if comparison == IS_EQUAL then
+		if number < value then
+			return {
+				operation = "ADD",
+				amount = value - number,
+				signed_amount = value - number
+			}
+		elseif number > value then	
+			return {
+				operation = "SUBTRACT",
+				amount = number - value,
+				signed_amount = value - number
+			}
+		end
+	elseif comparison == IS_LESS_THAN then
+		if number >= value then
+			return {
+				operation = "SUBTRACT",
+				amount = number - value + 1 + opt_padding,
+				signed_amount = value - number - 1 - opt_padding
+			}
+		end
+	elseif comparison == IS_GREATER_THAN then
+		if number <= value then
+			return {
+				operation = "ADD",
+				amount = value - number + 1 + opt_padding,
+				signed_amount = value - number + 1 + opt_padding
+			}
+		end
+	elseif comparison == IS_LESS_THAN_OR_EQUAL then
+		if number > value then
+			return {
+				operation = "SUBTRACT",
+				amount = number - value + opt_padding,
+				signed_amount = value - number - opt_padding
+			}
+		end
+	elseif comparison == IS_GREATER_THAN_OR_EQUAL then
+		if number < value then
+			return {
+				operation = "ADD",
+				amount = value - number + opt_padding,
+				signed_amount = value - number + opt_padding
+			}
+		end
+	elseif comparison == IS_NOT_EQUAL then
+		if number == value then
+			return {
+				operation = "ANY",
+				amount = 1,
+				signed_amount = 1
+			}
+		end
+	end
+	
+	return nil
+end
+function _KillNFromGroup(amount, group)
+	if scartype(group) == ST_SGROUP then
+		amount = math.min(amount, SGroup_Count(group))
+		for i=1, amount do
+			local squad = SGroup_GetSquadAt(group, i)
+			Squad_Kill(squad)
+		end
+	elseif scartype(group) == ST_EGROUP then
+		amount = math.min(amount, EGroup_Count(group))
+		for i=1, amount do
+			local squad = EGroup_GetEntityAt(group, i)
+			Entity_Destroy(squad)
+		end
+	end
+	return amount
+end
+
+function MissionDebug_SkipTurns(amount)
+	Rule_AddInterval(MissionDebug_CheckSkipTurns, 1, {amount = amount})
+end
+
+function MissionDebug_CheckSkipTurns(context, table)
+	if World_IsLastTurnActionFinished() and World_GetCurrentTurnPlayerID() == Player_GetID(World_GetPlayerAt(1)) then
+		if table.amount <= 0 then
+			Rule_RemoveMe()
+		else
+			table.amount = table.amount - 1
+			World_EndTurn()
+		end
+	end
+end

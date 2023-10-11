@@ -1,0 +1,271 @@
+import("Player.scar")
+import("Entity.scar")
+import("Squad.scar")
+import("Groups.scar")
+import("util.scar")
+import("ai/ai_utils.scar")
+import("ai/campaign_map_ai.scar")
+
+import("ai/campaignmap_personalities.scar")
+
+-- t_personality_tuning is used as a global variable to cache a reference to the current ai player personality tuning
+
+-- the human player has an AI ally. apply this scaled to military targets owned by that player.
+local aiEnemyScale = 0
+
+function AI_SetCampaignPlayerPersonality(personality_name)
+	if personality_name == nil then
+		error("personality_name was nil")
+		return
+	end
+	
+	local table = t_ai_campaign_commander_personalities[personality_name]
+	if table == nil then
+		error("Campaign AI player personality "..personality_name.." not found")
+		return
+	end
+	t_personality_tuning = table
+end
+
+function AI_GetCampaignPersonalityName()
+	return t_personality_tuning.name
+end
+
+if t_personality_tuning == nil then
+	-- default personality for if it doesn't get set by campaign prefab/script
+	AI_SetCampaignPlayerPersonality("balanced")
+end
+
+local function ResolveOptionalDifficulty(aiPlayer, tableAddress)
+	local isTable = scartype(tableAddress) == ST_TABLE
+	if isTable and tableAddress[Easy] ~= nil then 
+		return AI_DifVar(aiPlayer, tableAddress)
+	else
+		return tableAddress
+	end
+end
+
+function AIPlayer_GetFrontLineWeight(aiPlayer)
+	local front_line_score = ResolveOptionalDifficulty(aiPlayer, t_personality_tuning.military_target_scoring.front_line_score)
+	return front_line_score * AIPlayer_GetDynamicMultiplier( aiPlayer, "front_line")
+end
+
+function AIPlayer_CalculatePercentCapturePointsOfType(aiPlayer, unitType)
+	local capture_points = AIPlayer_GetAllCapturePoints(aiPlayer)
+	local num_capture_points = EGroup_Count(capture_points)
+	if num_capture_points <= 0 then
+		return 0
+	end
+	EGroup_Filter(capture_points, unitType, FILTER_KEEP)
+	
+	local percent = 0
+	if num_capture_points > 0 then
+		percent = EGroup_Count(capture_points) / num_capture_points
+	end
+	return percent
+end
+
+function AIPlayer_CalculateEngagementTypeWeight(aiPlayer, personality, militaryEngagementTypeName)
+	local engagement_type_score = 
+		ResolveOptionalDifficulty(aiPlayer, personality.military_target_scoring.ai_military_engagement_type_tuning[militaryEngagementTypeName])
+	if engagement_type_score ~= nil then
+		local base_score = (engagement_type_score ~= nil and engagement_type_score) or 0
+		local multiplier = AIPlayer_GetDynamicMultiplier(aiPlayer, militaryEngagementTypeName)
+		return base_score * multiplier
+	else
+		return nil
+	end
+end
+
+function AIPlayer_CalculateEnemyProximityWeight(aiPlayer, target, personality, engagement_type_name)
+	local enemy_proximity_tuning_per_engagement_type = personality.military_target_scoring.enemy_proximity_tuning_per_engagement_type
+	if enemy_proximity_tuning_per_engagement_type == nil then 
+		return nil
+	end
+	local enemy_proximity_tuning = ResolveOptionalDifficulty(aiPlayer, enemy_proximity_tuning_per_engagement_type[engagement_type_name])
+	if enemy_proximity_tuning == nil then
+		return nil
+	end
+	
+	local ignore_self = false;
+	local max_range = enemy_proximity_tuning.max_range or 200
+	local target_position = Util_GetPosition(target)
+	local enemy_squads = AIPlayer_GetSquadsInRange(aiPlayer, target_position, max_range, R_ENEMY, ignore_self)
+	
+	local sum_of_distance_scores = 0
+	for _, squad in ipairs(enemy_squads) do
+		local distance = Util_GetDistance(target_position, squad)
+		distance = math.max(distance, 1)
+		local distance_ratio = distance / max_range
+		local distance_score = 1 - distance_ratio
+		sum_of_distance_scores = sum_of_distance_scores + distance_score
+	end
+	
+	-- normalize to [0, 1] 
+
+	local enemy_squads_count = #AIPlayer_GetSquadsInRange(aiPlayer, target_position, -1, R_ENEMY, ignore_self)
+	if enemy_squads_count < 1 then
+		return 0
+	end
+	local score = sum_of_distance_scores / enemy_squads_count
+	
+	if not enemy_proximity_tuning.prefer_close then
+		score = 1 - score
+	end
+	
+	score = enemy_proximity_tuning.scale * score
+	
+	return score
+end
+
+-- This is an additive score that should typically be 1 or greater.
+-- This is designed to be used instead of AE-tuned military target scoring in the engine. 
+-- parameter table contains: militaryEngagementType, militaryTargetType, and squad/entity
+function ANVIL_Campaign_ScoreMilitaryTarget(table)
+	if table.squad == nil and table.entity == nil then 
+		error("Expected military target to have an entity or squad. If you need to score a military target with no entity "..
+			"or squad (eg. position), talk to an AI programmer about supporting it.")
+	end
+	local score = 0
+	local aiPlayer = AI_GetAIPlayer()
+	local aiPlayerID = AI_GetPlayerID()
+	local isSquad = table.squad ~= nil
+	local militaryTargetType = table.militaryTargetType
+	
+	local position = nil
+	local target_id = nil
+	local unit_type_multiplier_function = nil
+	local target = nil
+	if isSquad then
+		target_id = Squad_GetID(table.squad)
+		position = Squad_GetPosition(table.squad)
+		unit_type_multiplier_function = AIPlayer_GetDynamicUnitTypeMultipliersForSquad
+		target = table.squad
+		is_of_type_function = Squad_IsOfType
+		unit_type_scoring = t_personality_tuning.military_target_scoring.squad_type_scoring
+	else
+		target_id = Entity_GetID(table.entity)
+		position = Entity_GetPosition(table.entity)
+		unit_type_multiplier_function = AIPlayer_GetDynamicUnitTypeMultipliersForEntity
+		target = table.entity
+		is_of_type_function = Entity_IsOfType
+		unit_type_scoring = t_personality_tuning.military_target_scoring.entity_type_scoring
+	end
+	AIPlayer_ClearDebugScoreContributions(aiPlayer, target_id)
+	
+	local engagement_type_name = AI_GetMilitaryEngagementTypeNameFromIndex(table.militaryEngagementType)
+	-- we don't run encounters for ally clump so give them 0 score to reduce their clutter in debug display
+	if engagement_type_name == "AllyClump" then
+		return 0
+	end
+	
+	local personality = t_personality_tuning
+	
+	if AIPlayer_IsPositionInFrontLine(aiPlayer, position) then
+		local dynamic_weight = AIPlayer_GetFrontLineWeight(aiPlayer)
+		-- the ai_scoring_dynamic_multipliers in this file is referencing a different one than the other
+		score = score + dynamic_weight
+		AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, "front_line", dynamic_weight)
+	end
+	
+	local engagement_type_score = AIPlayer_CalculateEngagementTypeWeight(aiPlayer, personality, engagement_type_name)
+	if engagement_type_score ~= nil then
+		score = score + engagement_type_score
+		AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, engagement_type_name, engagement_type_score)
+	end
+	
+	local unit_type_multipliers = unit_type_multiplier_function(aiPlayer, target)
+	for unit_type, multiplier in pairs(unit_type_multipliers) do
+		local base = ResolveOptionalDifficulty(aiPlayer, unit_type_scoring[unit_type]) or 1
+		local contribution = (base * unit_type_multipliers[unit_type])
+		score = score + contribution
+		AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, "unit_type: ".. unit_type, contribution)
+	end
+	
+	-- add base contributions for unit_types with no dynamic multipliers
+	for unit_type, value in pairs(unit_type_scoring) do 
+		if unit_type_multipliers[unit_type] == nil and is_of_type_function(target, unit_type) then
+			local contribution = ResolveOptionalDifficulty(aiPlayer, value) 
+			score = score + contribution
+			AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, "unit_type ".. unit_type, contribution)
+		end
+	end
+	
+	local enemy_proximity_score = AIPlayer_CalculateEnemyProximityWeight(aiPlayer, target, personality, engagement_type_name)
+	if enemy_proximity_score ~= nil then
+		score = score + enemy_proximity_score
+		AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, "enemy_proximity", enemy_proximity_score)
+	end
+	 
+	if not isSquad then
+		local entity_target_score = AIPlayer_GetDynamicEntityTargetScore(aiPlayer, target)
+		score = score + entity_target_score
+		AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, "egroup", entity_target_score)
+	end
+	
+	if not isSquad and Entity_IsOfType(table.entity, "capture") then
+		local capture_point_desired_percent_score = ResolveOptionalDifficulty(aiPlayer, personality.military_target_scoring.capture_point_desired_percent_score)
+		local below_threshold_max_contribution = capture_point_desired_percent_score.below_threshold_max_contribution
+		local below_threshold_min_contribution = capture_point_desired_percent_score.below_threshold_min_contribution
+		local threshold_met_max_contribution = capture_point_desired_percent_score.threshold_met_max_contribution
+		local threshold_met_min_contribution = capture_point_desired_percent_score.threshold_met_min_contribution
+		
+		-- allows contributions for multiple capture point types
+		for i, entity_type in ipairs(g_capture_point_tunings) do
+			local threshold = ResolveOptionalDifficulty(aiPlayer, personality.military_target_scoring.capture_point_desired_percents[entity_type])
+			if threshold ~= nil and Entity_IsOfType(table.entity, entity_type) then
+				if scartype(threshold) == ST_TABLE then
+					-- resolve difficulty if needed
+					threshold = ResolveOptionalDifficulty(aiPlayer, threshold)
+				end
+				local have_amount = AIPlayer_CalculatePercentCapturePointsOfType(aiPlayer, entity_type)
+				
+				local scale = nil
+				local score_contribution = nil
+				if have_amount < threshold then					
+					scale = (threshold - have_amount) / threshold
+					score_contribution = scale * (below_threshold_max_contribution - below_threshold_min_contribution) + below_threshold_min_contribution
+				else
+					scale = (1 - have_amount) / (1 - threshold)
+					score_contribution = scale * (threshold_met_max_contribution - threshold_met_min_contribution) + threshold_met_min_contribution
+				end
+				score = score + score_contribution
+				AIPlayer_AddDebugScoreContribution(aiPlayer, target_id, entity_type, score_contribution)
+				
+			end
+		end
+		
+	end
+	
+	local targetOwner = Util_GetPlayerOwner(target)
+	if targetOwner ~= nil then 
+		local relationship = Player_ObserveRelationship(AI_ConvertToSimPlayer(aiPlayer), targetOwner)
+		if relationship == R_ENEMY and not Player_IsHuman(targetOwner) then
+			score = score * aiEnemyScale
+		end
+	end
+	
+	return score
+end
+
+function AI_CalculateCampaignCombatRating(ai_layer, allied_squads, enemy_squads)
+	local rating = 0 
+	
+	local allyHealthSum = 0
+	for i, squad in ipairs(allied_squads) do
+		allyHealthSum = allyHealthSum + Squad_GetHealth(squad)
+	end
+	
+	local enemyHealthSum = 0
+	for i,squad in ipairs(enemy_squads) do
+		enemyHealthSum = enemyHealthSum + Squad_GetHealth(squad)
+	end
+	
+	if enemyHealthSum == 0 and allyHealthSum == 0 then
+		rating = 0.5
+	else	
+		rating = (allyHealthSum / (allyHealthSum + enemyHealthSum))
+	end
+	
+	return rating
+end

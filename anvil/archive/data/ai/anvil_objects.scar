@@ -1,0 +1,529 @@
+import("Player.scar")
+import("Entity.scar")
+import("Squad.scar")
+import("Groups.scar")
+
+function ANVIL_DetermineAIStatsMilitaryPointTypeEntity(entity)
+	if Entity_IsOfType(entity, "hq") then
+		return AIMTT_hq
+	elseif Entity_IsOfType(entity, "building") and not Entity_IsOfType(entity, "campaign_not_attackable") then
+		return AIMTT_structure
+	elseif Entity_IsOfType(entity, "capture") or Entity_IsOfType(entity, "territory_point") then
+		return AIMTT_capture
+	elseif Entity_IsOfType(entity, "ai_supply_blocker_should_remove") then
+		return AIMTT_structure
+	elseif Entity_IsOfType(entity, "supply_crate") then
+		return AIMTT_structure
+	elseif Entity_IsOfType(entity, "wreck") then
+		return AIMTT_structure
+	end
+	return AIMTT_INVALID
+end
+
+function ANVIL_DetermineAIStatsMilitaryPointTypeSquad(squad)
+	return AIMTT_squad
+end
+
+
+function ANVIL_DetermineAIGatheringPointType(entity)
+	return AIMTT_INVALID 
+end
+
+function ANVIL_DetermineAIStatsCapturePointTypeEntity(entity)
+	if Entity_IsStrategicPoint(entity) or Entity_IsVictoryPoint(entity) then
+		return AIMTT_capture
+	end
+	
+	return AIMTT_INVALID
+end
+
+-- Distance to base score, value is inversely proportional to distance to starting position.
+local function GetDistToBaseScore(targetPosition, tuning)
+	local startingPosition = Player_GetStartingPosition(AI_GetPlayer())
+	local worldWidth = World_GetWidth()
+	local worldLength = World_GetLength()
+	local maxDistance = math.sqrt(worldWidth * worldWidth + worldLength * worldLength)
+	local targetDistance = World_DistancePointToPoint(startingPosition, targetPosition)
+	return (1 - (targetDistance / maxDistance)) * tuning.dist_to_base_weight
+end
+
+-- The engagement type (key) are related to the following ping types (value)
+-- If a ping is near a target of related engagement type it should affect it's score
+local engagement_type_ping_relationship =
+{
+	["DefendStructure"] = {"defend", "question",},
+ 	["AttackStructure"]= {"attack", "question"},
+ 	["NeutralStructure"]= {"attack", "defend", "question"},
+ 	["Capture"]= {"attack", "defend", "question"},
+ 	["AllyClump"]= {"defend", "question"},
+ 	["EnemyClump"]= {"attack",  "question"},
+ 	["NeutralClump"]= {"attack", "defend", "question"},
+	
+	-- unused in Anvil
+	["AttackArea"]= {},
+ 	["DefendArea"]= {},
+	["Gather"]= {},
+}
+
+local function AreEngagementTypeAndPingTypeRelated(engagementType, pingType)
+	local relationship = engagement_type_ping_relationship[engagementType]
+	
+	if relationship == nil then
+		error("Unexpected engagementType")
+		return false
+	end
+	
+	 for i, relatedPing in ipairs(relationship) do
+        if pingType == relatedPing then
+            return true
+        end
+    end
+	
+	return false
+end
+
+-- Distance to enemy base score, value is inversely proportional to distance to enemy base position if weight is positive
+-- If weight is negative, and the distance from enemy base is within abs(weight) radius from the enemybase we zero out the score
+local function GetDistToEnemyBaseScore(target, targetPosition, tuning, score)
+	local aiPlayer = AI_GetAIPlayer()
+	
+	local worldWidth = World_GetWidth()
+	local worldLength = World_GetLength()
+	local maxDistance = math.sqrt(worldWidth * worldWidth + worldLength * worldLength)
+	local minTargetDistance = maxDistance
+	
+	local enemyPlayers = AIPlayer_GetOpponentPlayers(aiPlayer)
+	for i, enemyPlayer in ipairs(enemyPlayers) do
+		local enemyStartingPosition = Player_GetStartingPosition(enemyPlayer)
+		local curTargetDistance = World_DistancePointToPoint(enemyStartingPosition, targetPosition)
+		minTargetDistance = math.min(minTargetDistance, curTargetDistance)
+	end
+	
+	-- For negative weights, we check if target is within radius of enemybase
+	if tuning.dist_to_enemy_base_weight < 0 then
+		if math.abs(tuning.dist_to_enemy_base_weight) >= minTargetDistance then 
+			return (-1 * score) 
+		else 
+			return 0
+		end
+	end 
+	
+	return (1 - (minTargetDistance / maxDistance)) * tuning.dist_to_enemy_base_weight
+end
+
+
+-- Distance to ally base score, value is inversely proportional to distance to ally base position if weight is positive
+-- If weight is negative, and the distance from ally base is within abs(weight) radius from the allybase we zero out the score
+-- Note the distance here is the amount of distance the ally is CLOSER to the target then us.
+local function GetDistToAllyBaseScore(target, targetPosition, tuning, score)
+	local aiPlayer = AI_GetAIPlayer()
+	local allyPlayers = AIPlayer_GetAllyPlayers(aiPlayer)
+	if (#allyPlayers <= 0) then
+		return 0;
+	end
+	
+	local startingPosition = Player_GetStartingPosition(AI_GetPlayer())
+	local myDistance = World_DistancePointToPoint(startingPosition, targetPosition)
+	local worldWidth = World_GetWidth()
+	local worldLength = World_GetLength()
+	local maxDistance = math.sqrt(worldWidth * worldWidth + worldLength * worldLength)
+	local minTargetDistance = maxDistance
+	
+	for i, allyPlayer in ipairs(allyPlayers) do
+		local allyStartingPosition = Player_GetStartingPosition(allyPlayer)
+		local curTargetDistance = World_DistancePointToPoint(allyStartingPosition, targetPosition)
+		minTargetDistance = math.min(minTargetDistance, curTargetDistance)
+	end
+	
+	-- Expect weight to be negative here but we ensure score wont go into the negative with this tuning
+	-- We subtract our distance from the target meaning if we are closer this negative score becomes a postive score
+	local final_score = ((myDistance - minTargetDistance)/ maxDistance) * tuning.dist_to_ally_base_weight
+	if (final_score + score < 0) then
+		return -1.0 * score;
+	else
+		return final_score
+	end
+end
+
+local function GetDistToAllySquadScore(target, targetPosition, tuning, score)
+	local aiPlayer = AI_GetAIPlayer()
+
+	local ignore_self = true;
+	
+	if type(tuning.dist_to_ally_squad) ~= "table" then
+		return 0
+	end
+	
+	local allySquadWeight = tuning.dist_to_ally_squad.weight or 0;
+	local allySquadRange = tuning.dist_to_ally_squad.distance or 0;
+	-- This uses the "promised" position for squads, it likely needs to use the TRUE position
+	local allySquads = AIPlayer_GetSquadsInRange(aiPlayer, targetPosition, allySquadRange, R_ALLY, ignore_self)
+	
+	-- Expect weight to be negative here but we ensure score wont go into the negative with this tuning
+	local final_score = allySquadWeight * (#allySquads)
+	if (final_score + score < 0) then
+		return -1.0 * score;
+	else
+		return final_score
+	end
+end
+
+local function GetDistToOwnedSquadScore(target, targetPosition, tuning, score)
+	local aiPlayer = AI_GetAIPlayer()
+	if type(tuning.dist_to_owned_squad) ~= "table" then
+		return 0
+	end
+
+	-- Ignore busy and locked squads
+	local ignoreLockedSquads = true;
+	local ignoreBusySquads = true;
+	
+	local ownedSquadWeight = tuning.dist_to_owned_squad.weight or 0;
+	local ownedSquadRange = tuning.dist_to_owned_squad.distance or 0;
+	local ownedSquads = AIPlayer_GetOwnedSquadsInRange(aiPlayer, targetPosition, ownedSquadRange, ignoreLockedSquads, ignoreBusySquads)
+	
+	-- Expect weight to be positive here but we ensure score wont go into the negative with this tuning
+	local final_score = ownedSquadWeight * (#ownedSquads)
+	if (final_score + score < 0) then
+		return -1.0 * score;
+	else
+		return final_score
+	end
+end
+
+-- Capture point type bonus, value is normalized based on max priority, 0 when no priority is set.
+local function GetCapturePointEntityScore(entity, tuning)
+	local maxBonus = math.max(
+		tuning.victory_point_priority,
+		tuning.munition_point_priority,
+		tuning.fuel_point_priority,
+		tuning.strategic_point_priority
+	)
+	if maxBonus == 0 then
+		return 0, "no_capture_point_bonus"
+	end
+
+	local intention_victory_point = AIPlayer_GetStrategicIntention(AI_GetAIPlayer(), "victory_point")
+	local intention_munition = AIPlayer_GetStrategicIntention(AI_GetAIPlayer(), "munition")
+	local intention_fuel = AIPlayer_GetStrategicIntention(AI_GetAIPlayer(), "fuel")
+	
+	local bonus = 0
+	local contributor = "capture_point"
+	if Entity_IsOfType(entity, "territory_point") then
+		if (Entity_IsOfType(entity, "victory_point")) then
+			bonus = tuning.victory_point_priority * intention_victory_point
+			contributor = contributor .. " (vp si=" .. string.format("%.2f", intention_victory_point) .. ")"
+		elseif(Entity_IsOfType(entity, "resource_point_munition")) then
+			bonus = tuning.munition_point_priority * intention_munition
+			contributor = contributor .. " (munition si=" .. string.format("%.2f", intention_munition) .. ")"
+		elseif(Entity_IsOfType(entity, "resource_point_fuel")) then
+			bonus = tuning.fuel_point_priority * intention_fuel
+			contributor = contributor .. " (fuel si=" .. string.format("%.2f", intention_fuel) .. ")"
+		elseif(Entity_IsOfType(entity, "capture")) then
+			bonus = tuning.strategic_point_priority
+		end
+	end
+	
+	return (bonus / maxBonus) * tuning.capture_point_weight, contributor
+end
+
+-- Connected sector bonus, this is a yes/no condition so nearby means we apply the weight, 0 otherwise.
+local function GetConnectedSectorScore(entity, targetPosition, engagementTypeName, tuning)
+	local bonus = 0
+	
+	if AI_IsPositionNearInSupplySector(AI_GetAIPlayer(), targetPosition) then
+		bonus = 1
+	end
+	
+	-- If this is a victory point and the strategizer is prioritizing VPs, then we are
+	-- behind in tickets and should ignore connectedness.
+	if (Entity_IsOfType(entity, "victory_point")) then
+		local intention_victory_point = AIPlayer_GetStrategicIntention(AI_GetAIPlayer(), "victory_point")
+		if intention_victory_point >= 1 then
+			bonus = 1 
+		end
+	end
+	
+	return bonus * tuning.connected_sector_weight
+end
+
+-- Bridge weight, this is a yes/no condition so bridge entity means we apply the weight, 0 otherwise.
+local function GetBridgeScore(entity, tuning)
+	local bonus = 0
+	
+	if Entity_IsOfType(entity, "bridge") then
+		bonus = 1
+	end
+		
+	return bonus * tuning.bridge_weight
+end
+
+local function GetOwnedTerritoryPointCount(player)
+	local egroup = Player_GetEntitiesFromType(player, "territory_point")
+	local count = EGroup_Count(egroup)
+	EGroup_Destroy(egroup)
+	return count
+end
+
+-- Returns true if engagement type is a clump target
+local function IsClumpTarget(engagementTypeName)
+	if engagementTypeName == "AllyClump" or
+		engagementTypeName == "EnemyClump" or
+		engagementTypeName == "NeutralClump" then
+		return true
+	end
+	
+	return false
+end
+
+-- target is a squad
+local function ScoreClumpTarget(aiPlayer, target, targetID, targetPosition, engagementTypeName, clumpSize)
+	local score = 0
+	local smallClumpScore = 1
+	local minLargeClumpScore = 5
+	local maxLargeClumpScore = 10
+	local immediateThreatScoreBonus = 10
+	local threatToAlliesScoreBonus = 5;
+	local isInOurSpaceScoreBonus = 5
+	
+	-- Either use small clump score, or clamp between min/max large clump score
+	if clumpSize > minLargeClumpScore then
+		score = math.min(clumpSize, maxLargeClumpScore)
+	else
+		score = smallClumpScore
+	end
+	
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "clump_score", score)
+	
+	-- Check if target is near player or allied starting position
+	if AIPlayer_IsPositionNearPlayerAnchorPosition(aiPlayer, targetPosition) then
+		score = score + immediateThreatScoreBonus
+		AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "immediate_threat", immediateThreatScoreBonus)
+	elseif AIPlayer_IsPositionNearAlliedPlayerAnchorPosition(aiPlayer, targetPosition) then
+		score = score + threatToAlliesScoreBonus
+		AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "threat_to_allies", threatToAlliesScoreBonus)
+	end
+	
+	-- Check if target is in player owned territory 
+	if AIPlayer_IsPositionInFriendlyTerritory(aiPlayer, targetPosition) then
+		score = score + isInOurSpaceScoreBonus
+		AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "in_owned_sector", isInOurSpaceScoreBonus)
+	end
+	
+	--== Apply in_hold multipliers ==--
+	local holdMultiplierApplied = false;
+	if t_personality_tuning.in_hold_squad_multipliers ~= nil then
+		local hold_multiplier = t_personality_tuning.in_hold_squad_multipliers.attack
+		if engagementTypeName == "AllyClump" then
+			hold_multiplier = t_personality_tuning.in_hold_squad_multipliers.defend
+		end
+		
+		if hold_multiplier ~= nil and (Squad_IsInHoldEntity(target) or Squad_IsInHoldSquad(target)) then
+			score = score * hold_multiplier
+			AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "in_hold_mult", hold_multiplier)
+			holdMultiplierApplied = true
+		end
+	end
+	
+	--== Apply squad_type multipliers ==--
+	-- For now, neutral also falls under the attack tuning
+	local squad_multipliers = t_personality_tuning.attack_squad_tags_multipliers
+	if engagementTypeName == "AllyClump" then
+		squad_multipliers = t_personality_tuning.defend_squad_tags_multipliers
+	end
+	
+	-- For now, only apply squad multiplier if hold multipier was not used
+	if not holdMultiplierApplied and scartype(squad_multipliers) == ST_TABLE then
+		local multiplier = 0
+		for type_name, type_multiplier in pairs(squad_multipliers) do
+			if Squad_IsOfType(target, type_name) then
+				multiplier = math.max(multiplier, type_multiplier)
+			end
+		end
+
+		score = score * multiplier
+		AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "squad_types_mult", multiplier)
+	end
+	
+	return score
+end
+
+-- target is an entity
+local function ScoreMilitaryTarget(aiPlayer, target, targetID, targetPosition, engagementTypeName)
+	local score = 0
+		
+	--== Favor targets close to starting position ==--
+	local distToBaseScore = GetDistToBaseScore(targetPosition, t_personality_tuning)
+	score = score + distToBaseScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "dist_to_base", distToBaseScore)
+	
+	--== Capture point bonus ==--
+	local capturePointScore, contributor = GetCapturePointEntityScore(target, t_personality_tuning)
+	score = score + capturePointScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, contributor, capturePointScore)
+	
+	--== Connected sector bonus ==--
+	local connectedSectorScore = GetConnectedSectorScore(target, targetPosition, engagementTypeName, t_personality_tuning)
+	score = score + connectedSectorScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "connected_sector", connectedSectorScore)
+	
+	--== Bridge entity weight ==--
+	local bridgeScore = GetBridgeScore(target, t_personality_tuning)
+	score = score + bridgeScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "bridge", bridgeScore)
+	
+	--== Check targets close to enemy starting positions ==--
+	local distToEnemyBaseScore = GetDistToEnemyBaseScore(target, targetPosition, t_personality_tuning, score)
+	score = score + distToEnemyBaseScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "dist_to_enemy_base", distToEnemyBaseScore)
+	
+	--== Check targets close to ally starting positions ==--
+	local distToAllyBaseScore = GetDistToAllyBaseScore(target, targetPosition, t_personality_tuning, score)
+	score = score + distToAllyBaseScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "dist_to_ally_base", distToAllyBaseScore)
+	
+	--== Apply forward barracks multipliers ==--
+	local forwardBarracksMultiplierApplied = false;
+	if t_personality_tuning.forward_barracks_multipliers ~= nil then
+		local forward_barracks_multiplier = nil
+		if engagementTypeName == "DefendStructure" then
+			forward_barracks_multiplier = t_personality_tuning.forward_barracks_multipliers.defend
+		end
+		if engagementTypeName == "AttackStructure" then
+			forward_barracks_multiplier = t_personality_tuning.forward_barracks_multipliers.attack
+		end
+		
+		if forward_barracks_multiplier ~= nil and (Entity_IsConvertedBuilding(target)) then
+			score = score * forward_barracks_multiplier
+			AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "forwardbar_mult", forward_barracks_multiplier)
+			forwardBarracksMultiplierApplied = true
+		end
+	end
+	
+	--== Apply unit_type multipliers ==--
+	-- For now, neutral also falls under the attack tuning
+	local multipliers = t_personality_tuning.attack_unit_tags_multipliers
+	if engagementTypeName == "DefendStructure" then
+		multipliers = t_personality_tuning.defend_unit_tags_multipliers
+	end
+	
+	if not forwardBarracksMultiplierApplied and scartype(multipliers) == ST_TABLE then
+		local multiplier = 0
+		for type_name, type_multiplier in pairs(multipliers) do
+			if Entity_IsOfType(target, type_name) then
+				multiplier = math.max(multiplier, type_multiplier)
+			end
+		end
+		score = score * multiplier
+		AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "entity_types_mult", multiplier)
+	end
+	
+	--== Shortcut wreck scopring ==--
+	if Entity_IsOfType(target, "wreck") and score == 0 then
+		return score
+	end
+
+	
+	--== Ahead on Capture Point Threshold Score ==-
+	if t_personality_tuning.behind_capture_points_buffer ~= nil and engagementTypeName == "NeutralStructure" then
+		local include_types = {"CAPTURE"}
+		local include_all = true
+		local exclude_types = nil
+		local exclude_all = false
+		local attackTargets = AIPlayer_GetActiveEncounterTargets(aiPlayer,
+			include_types, include_all, exclude_types, exclude_all)
+		local ai_sim_player = AI_GetPlayer()
+		local ai_point_count = 0
+		for i = 1, #attackTargets do
+			if scartype(attackTargets[i]) == ST_ENTITY and (World_OwnsEntity(attackTargets[i]) or
+				Player_ObserveRelationship(ai_sim_player, Entity_GetPlayerOwner(attackTargets[i]) ~= R_ALLY)) then
+				ai_point_count = ai_point_count + 1
+			end
+		end
+		local enemy_point_count = 0
+		for i = 1, World_GetPlayerCount() do
+			local player = World_GetPlayerAt(i)
+			local relationship = Player_ObserveRelationship(ai_sim_player, player)
+			if relationship == R_ALLY then
+				ai_point_count = ai_point_count + GetOwnedTerritoryPointCount(player)
+			elseif relationship == R_ENEMY then
+				enemy_point_count = enemy_point_count + GetOwnedTerritoryPointCount(player)
+			end
+		end
+		
+		if enemy_point_count + t_personality_tuning.behind_capture_points_buffer <= ai_point_count then
+			score = 0
+			AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "behind_capture", 0)
+		end
+	end
+	
+	--== Decrease the score of points too close to allies ==--
+	local distToAllySquadScore = GetDistToAllySquadScore(target, targetPosition, t_personality_tuning, score)
+	score = score + distToAllySquadScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "dist_to_ally_squad", distToAllySquadScore)
+	
+	--== Increase the score of points closer to owned squads ==--
+	local distToOwnedSquadScore = GetDistToOwnedSquadScore(target, targetPosition, t_personality_tuning, score)
+	score = score + distToOwnedSquadScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "dist_to_owned_squad", distToOwnedSquadScore)
+	
+	return score
+end
+
+-- Returns the score for a given military target. 
+-- Parameter table contains:
+--		militaryEngagementType
+--		militaryTargetType
+--		squad or entity
+--		clumpSize (default to 1 for non-clump target) 
+function ANVIL_ScoreMilitaryTarget(table)
+	if table.squad == nil and table.entity == nil then 
+		error("Expected military target to have an entity or squad. If you need to score a military target with no entity "..
+			"or squad (eg. position), talk to an AI programmer about supporting it.")
+	end
+
+	local score = 0
+	local aiPlayer = AI_GetAIPlayer()
+	local isSquad = table.squad ~= nil
+	local engagementTypeName = AI_GetMilitaryEngagementTypeNameFromIndex(table.militaryEngagementType)
+	local clumpSize = table.clumpSize
+	
+	local target = nil
+	local targetID = nil
+	local targetPosition = nil
+	if isSquad then
+		targetPosition = Squad_GetPosition(table.squad)
+		target = table.squad
+		targetID = Squad_GetID(table.squad)
+	else
+		targetPosition = Entity_GetPosition(table.entity)
+		target = table.entity
+		targetID = Entity_GetID(table.entity)
+	end
+	
+	AIPlayer_ClearDebugScoreContributions(aiPlayer, targetID)
+
+	if IsClumpTarget(engagementTypeName) then
+		assert(isSquad, "Engagement Type: "..engagementTypeName.." has entity target?")
+		score = ScoreClumpTarget(aiPlayer, target, targetID, targetPosition, engagementTypeName, clumpSize)
+	else
+		assert(not isSquad, "Engagement Type: "..engagementTypeName.." has squad target?")
+		score = ScoreMilitaryTarget(aiPlayer, target, targetID, targetPosition, engagementTypeName)
+	end
+
+	--== Ping Scoring ==--
+	local pingDist = t_personality_tuning.ally_ping_distance
+	local pingTimeout = t_personality_tuning.ally_ping_timeout
+	local allyRecentlyPingedData = AIPlayer_AllyRecentlyPinged(aiPlayer, targetPosition, pingDist, pingTimeout)
+	local allyRecentlyPingedScore = 0
+	if allyRecentlyPingedData["result"]  then
+		if AreEngagementTypeAndPingTypeRelated(engagementTypeName, allyRecentlyPingedData["type"]) then
+			allyRecentlyPingedScore = t_personality_tuning.ally_ping_weight
+		end
+	end
+	
+	score = score + allyRecentlyPingedScore
+	AIPlayer_AddDebugScoreContribution(aiPlayer, targetID, "player_ping", allyRecentlyPingedScore)
+	
+	return score
+end

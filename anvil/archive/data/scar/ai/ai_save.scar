@@ -1,0 +1,413 @@
+import("core.scar")
+import("partialsave.scar")
+
+
+local t_aiSquadBoolStateModelToSave = 
+{ 
+	"campaign_updating"
+}
+
+local t_aiSquadIntStateModelToSave =
+{
+}
+
+local t_aiSquadTargetStateModelToSave =
+{
+}	
+
+local t_aiSquadPBGStateModelToSave =
+{
+	"ai_company_personality"
+}
+
+local t_aiSquadListStateModelToSave =
+{
+}
+
+local t_aiEntityBoolStateModelToSave = 
+{
+	"campaign_updating"
+}
+
+local t_aiEntityIntStateModelToSave =
+{
+}
+
+local t_aiEntityTargetStateModelToSave =
+{
+}	
+
+local t_aiEntityListStateModelToSave =
+{
+}
+
+function AISave_GeneratePartialSaveStateModelTableForPlayer(player)
+	local statemodelTable = {
+		version = 1,
+		aisquad_statemodel_data = {},
+		aientity_statemodel_data = {},
+	}
+	
+	local playerID = Player_GetID(player)
+	local all_squads = Player_GetSquads(player)
+	SGroup_ForEach(all_squads,
+		function(sgroup, index, squad)
+			local squad_id = Squad_GetID(squad)
+			local aiSquad = AI_FindAISquadByID(player, squad_id)
+			if aiSquad ~= nil then
+				statemodelTable.aisquad_statemodel_data[squad_id] =
+				{
+					bool_data = {},
+					int_data = {},
+					target_data = {},
+					pbg_data = {},
+					list_data = {},
+				}
+				
+				for i = 1, #t_aiSquadBoolStateModelToSave do
+					local stateModelIndex = t_aiSquadBoolStateModelToSave[i]
+					local stateModelBool = AISquad_GetStateModelBool(aiSquad, stateModelIndex)
+					statemodelTable.aisquad_statemodel_data[squad_id].bool_data[stateModelIndex] = stateModelBool
+				end
+				
+				for i = 1, #t_aiSquadIntStateModelToSave do
+					local stateModelIndex = t_aiSquadIntStateModelToSave[i]
+					local stateModelInt = AISquad_GetStateModelInt(aiSquad, stateModelIndex)
+					statemodelTable.aisquad_statemodel_data[squad_id].int_data[stateModelIndex] = stateModelInt
+				end
+				
+				for i = 1, #t_aiSquadTargetStateModelToSave do
+					local stateModelIndex = t_aiSquadTargetStateModelToSave[i]
+					local stateModelTarget = AISquad_GetStateModelTarget(aiSquad, stateModelIndex)
+					statemodelTable.aisquad_statemodel_data[squad_id].target_data[stateModelIndex] = stateModelTarget
+				end
+				
+				for i = 1, #t_aiSquadPBGStateModelToSave do
+					local stateModelIndex = t_aiSquadPBGStateModelToSave[i]
+					local stateModelPBG = AISquad_GetStateModelPBG(aiSquad, stateModelIndex)
+					statemodelTable.aisquad_statemodel_data[squad_id].pbg_data[stateModelIndex] = stateModelPBG
+				end
+				
+				for i = 1, #t_aiSquadListStateModelToSave do
+					local stateModelIndex = t_aiSquadListStateModelToSave[i]
+					local stateModelList = AISquad_GetStateModelListTarget(aiSquad, stateModelIndex)
+					statemodelTable.aisquad_statemodel_data[squad_id].list_data[stateModelIndex] = stateModelList
+				end
+			end
+		end)
+	SGroup_Clear(all_squads)
+	
+		
+	local all_entities = Player_GetAllEntities(player)
+	EGroup_ForEach(all_entities,
+		function(sgroup, index, entity)
+			local entity_id = Entity_GetID(entity)
+			local ai_entity = AI_FindAIEntityByID(player, entity_id)
+			if ai_entity ~= nil then
+				statemodelTable.aientity_statemodel_data[entity_id] =
+				{
+					bool_data = {},
+					int_data = {},
+					target_data = {},
+					list_data = {},
+				}
+				
+				for i = 1, #t_aiEntityBoolStateModelToSave do
+					local stateModelIndex = t_aiEntityBoolStateModelToSave[i]
+					local stateModelBool = AIEntity_GetStateModelBool(ai_entity, stateModelIndex)
+					statemodelTable.aientity_statemodel_data[entity_id].bool_data[stateModelIndex] = stateModelBool
+				end
+				
+				for i = 1, #t_aiEntityIntStateModelToSave do
+					local stateModelIndex = t_aiEntityIntStateModelToSave[i]
+					local stateModelInt = AIEntity_GetStateModelInt(ai_entity, stateModelIndex)
+					statemodelTable.aientity_statemodel_data[entity_id].int_data[stateModelIndex] = stateModelInt
+				end
+				
+				for i = 1, #t_aiEntityTargetStateModelToSave do
+					local stateModelIndex = t_aiEntityTargetStateModelToSave[i]
+					local stateModelTarget = AIEntity_GetStateModelTarget(ai_entity, stateModelIndex)
+					statemodelTable.aientity_statemodel_data[entity_id].target_data[stateModelIndex] = stateModelTarget
+				end
+				
+				for i = 1, #t_aiEntityListStateModelToSave do
+					local stateModelIndex = t_aiEntityListStateModelToSave[i]
+					local stateModelList = AIEntity_GetStateModelListTarget(ai_entity, stateModelIndex)
+					statemodelTable.aientity_statemodel_data[entity_id].list_data[stateModelIndex] = stateModelList
+				end
+		end
+	end)
+	EGroup_Clear(all_entities)
+
+	return statemodelTable
+end
+
+function AISave_RestorePartialSaveStateModelTableForPlayer(context, data)
+	local saveTable = data.saveTable
+	local playerID = saveTable.id
+	local player = Player_FromId(playerID)
+	local statemodelTable = saveTable.statemodelTable
+	for squad_id,v in pairs(statemodelTable.aisquad_statemodel_data) do
+		local aisquad = AI_FindAISquadByID(player, squad_id)
+		if aisquad == nil then
+			print("AISquad state model was saved for an AISquad with id " .. squad_id .. 
+				" but no AISquad was found with that ID for player ".. playerID)
+		else
+			local bool_data = v.bool_data
+			for bool_property, data in pairs(bool_data) do
+				AISquad_SetStateModelBool(aisquad, bool_property, data)
+			end
+			
+			local int_data = v.int_data
+			for int_property, data in pairs(int_data) do
+				AISquad_SetStateModelInt(aisquad, int_property, data)
+			end
+			
+			local target_data = v.target_data
+			for target_property, data in pairs(target_data) do
+				AISquad_SetStateModelTarget(aisquad, target_property, data)
+			end
+			
+			local pbg_data = v.pbg_data
+			for pbg_property, data in pairs(pbg_data) do
+				AISquad_SetStateModelPBG(aisquad, pbg_property, data)
+			end
+			
+			local list_data = v.list_data
+			for list_name, list in pairs(list_data) do
+				for index, data in pairs(list) do
+					AISquad_SetStateModelListTarget(aisquad, list_name, data, true)
+				end
+			end
+		end
+	end
+	
+	for entity_id,v in pairs(statemodelTable.aientity_statemodel_data) do
+		if Entity_IsValid(entity_id) then
+			local aiEntity = AI_FindAIEntityByID(player, entity_id)
+			if aiEntity == nil then
+				print("AIEntity state model was saved for an AIEntity with id " .. entity_id .. 
+					" but no AIEntity was found with that ID for player ".. playerID)
+			else
+				local bool_data = v.bool_data
+				for bool_property, data in pairs(bool_data) do
+					AIEntity_SetStateModelBool(aiEntity, bool_property, data)
+				end
+				
+				local int_data = v.int_data
+				for int_property, data in pairs(int_data) do
+					AIEntity_SetStateModelInt(aiEntity, int_property, data)
+				end
+				
+				local target_data = v.target_data
+				for target_property, data in pairs(target_data) do
+					AIEntity_SetStateModelTarget(aiEntity, target_property, data)
+				end
+				
+				local list_data = v.list_data
+				for list_name, list in pairs(list_data) do
+					for index, data in pairs(list) do
+						AIEntity_SetStateModelListTarget(aiEntity, list_name, data, true)
+					end
+				end
+			end
+		end
+	end
+	
+end
+
+function AISave_GetAIPlayerSaveData(player, playerData)
+	-- required for us to run the correct state tree after save/load
+	playerData.personality = AI_GetPersonality(player)
+	
+	-- save locked squads
+	playerData.lockedSquads = {}
+	local sg_playerSquads = Player_GetSquads(player)
+	
+	SGroup_ForEach(sg_playerSquads, 
+		function(sgroupid, itemindex, squad)
+			if Squad_IsAlive(squad) and AI_IsSquadLocked(player, squad) then
+				local squadID = Squad_GetID(squad)
+				table.insert(playerData.lockedSquads, squadID)
+			end
+		end)
+	
+	-- save ai markers active state
+	-- all aimarkers start active so only save ids of inactive markers
+	playerData.inactiveMarkers = {}
+	local aiMarkers = AI_GetAIMarkers(player)
+	for _, marker in ipairs(aiMarkers) do
+		if not marker.active then
+			table.insert(playerData.inactiveMarkers, marker.id)
+		end
+	end
+	
+	-- save military target score modifiers
+	local aiPlayer = AIPlayer_GetLocalFromPlayer(player)
+	playerData.scoreMultipliers = AIPlayer_GetAllScoreMultipliers(aiPlayer)
+	return playerData
+end
+
+function AISave_GetAIPlayersSaveTable()
+	local aiPlayersSaveTable = {
+		version = 1,
+		playersData = {}, -- dynamic data for each instance
+	}
+	
+	-- for each ai player
+ 	for index = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(index)
+		local playerID = Player_GetID(player)
+		aiPlayersSaveTable.playersData[index] = {id = playerID}
+		
+		local playerData = aiPlayersSaveTable.playersData[index]
+		playerData.isAI = AI_IsAIPlayer(player)
+		
+		if playerData.isAI then
+			AISave_GetAIPlayerSaveData(player, playerData)
+		end
+	end
+	
+	return aiPlayersSaveTable
+end
+
+function AISave_RestoreAIPlayer(player, playerData)
+	if playerData.personality ~= nil then 
+		AI_SetPersonality(player, playerData.personality)
+	end
+	
+	-- load locked squads
+	for i, squadID in ipairs(playerData.lockedSquads) do
+		assert (Squad_IsValid(squadID), "Squad with id "..squadID.." is not valid")
+		
+		local squad = Squad_FromID(squadID)
+		assert(Squad_IsAlive(squad), "Squad with id "..squadID.." is not alive" )
+		
+		AI_LockSquad(player, squad)
+	end
+	
+	-- load ai markers
+	for _, markerID in ipairs(playerData.inactiveMarkers) do
+		AI_SetAIMarkerActiveByID(markerID, false, player)
+	end
+	
+	-- load military target score modifiers
+	local aiPlayer = AIPlayer_GetLocalFromPlayer(player)
+	local scoreMultipliers = playerData.scoreMultipliers
+	if scoreMultipliers ~= nil then
+		
+		if scoreMultipliers.bespoke_multipliers ~= nil then
+			for key, list in pairs(scoreMultipliers.bespoke_multipliers) do
+				for _, pair in ipairs(list) do
+					AIPlayer_PushScoreMultiplier(aiPlayer, key, pair.value, pair.id)
+				end
+			end
+		end
+		
+		if scoreMultipliers.unit_type_multipliers ~= nil then
+			for key, list in pairs(scoreMultipliers.unit_type_multipliers) do
+				for _, pair in ipairs(list) do
+					AIPlayer_PushUnitTypeScoreMultiplier(aiPlayer, key, pair.value, pair.id)
+				end
+			end
+		end
+		
+		if scoreMultipliers.unit_type_multipliers ~= nil then
+			for _, entity_table in ipairs(scoreMultipliers.entity_multipliers) do
+				local entity_id = entity_table.entity_id
+				local entity = Entity_FromID(entity_id)
+				if entity ~= nil then
+					for _, pair in ipairs(entity_table.score_modifiers) do
+						AIPlayer_PushEntityScoreContribution(aiPlayer, entity, pair.value, pair.id)
+					end
+				end
+			end
+		end
+	end
+end
+
+function AISave_RestoreAIPlayers(restoreTable)
+	-- for each ai player
+	for i, playerData in ipairs(restoreTable.playersData) do
+		local playerID = playerData.id
+		assert(Player_IsValid(playerID), "attempting to load ai info for player "..playerID.." but the player is invalid")
+		local player = Player_FromId(playerID)
+		
+		if playerData.isAI then	
+			AISave_RestoreAIPlayer(player, playerData)
+		end
+	end
+end
+
+-----------------------------------------------------------
+-- RTS save path
+
+function AISave_OnGameSave()
+	__AIPlayersSaveTable = AISave_GetAIPlayersSaveTable()
+end
+
+function AISave_OnGameRestore()
+	AISave_RestoreAIPlayers(__AIPlayersSaveTable)
+end
+-----------------------------------------------------------
+
+-----------------------------------------------------------
+-- Partial save path
+
+function PartialSave_SaveAIPlayers(saveTable)
+	saveTable.aiPlayersTable = AISave_GetAIPlayersSaveTable()
+		
+ 	for index = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(index)
+		local playerData = saveTable.aiPlayersTable.playersData[index]
+		if playerData ~= nil and playerData.isAI then
+			playerData.statemodelTable = AISave_GeneratePartialSaveStateModelTableForPlayer(player)
+		end
+	end
+end
+
+function PartialSave_RestoreAIPlayers(saveTable)
+	AISave_RestoreAIPlayers(saveTable.aiPlayersTable)
+	
+ 	for index = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(index)
+		local playerData = saveTable.aiPlayersTable.playersData[index]
+		if playerData ~= nil and playerData.isAI and playerData.statemodelTable ~= nil then
+			Rule_AddOneShot(AISave_RestorePartialSaveStateModelTableForPlayer, 1, {saveTable = playerData})
+		end
+	end
+end
+-----------------------------------------------------------
+
+Core_RegisterModule("AISave")
+
+PartialSave_AddSaveFunction(PartialSave_SaveAIPlayers)
+PartialSave_AddRestoreFunction(PartialSave_RestoreAIPlayers)
+
+
+------------------------------------------------------------
+-- cheat util
+local t_switchPlayerData = {}
+
+function AISave_SaveAIPlayerForSwitchPlayer(playerid)
+ 	local player = Player_FromId(playerid)
+	t_switchPlayerData[playerid] = {}
+	if AI_IsAIPlayer(player) then 
+		AISave_GetAIPlayerSaveData(player, t_switchPlayerData[playerid]) 
+	end
+end
+
+function AISave_RestoreAIPlayerAfterSwitch(context, data)
+	local player = Player_FromId(data.playerid)
+	local playerData = t_switchPlayerData[data.playerid]
+	local aiprefab_savetable 
+	if playerData ~= nil then
+		AISave_RestoreAIPlayer(player, playerData)
+	end
+	aiPrefab_RestoreAll()
+	t_switchPlayerData[data.playerid] = nil
+end
+
+function AISave_DelayedRestoreAIPlayerAfterSwitch(playerid)
+	Rule_AddOneShot(AISave_RestoreAIPlayerAfterSwitch, 0.5, {playerid = playerid})
+end

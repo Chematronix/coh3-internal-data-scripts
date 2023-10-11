@@ -1,0 +1,34 @@
+import("prefabs/schemas/locationgroupinfo.scar")
+-- Every location marker will have this data associated with it. This is separated so we can easily
+-- insert elements programmatically into it (to simulate a checkbox group for each location tag type in
+-- locationgroupinfo.scar)
+local location_marker_schema = {
+	{
+		type = ST_MARKER,
+		name = "position",
+		description = "Position in the world for this location marker.",
+		hasRange = true,
+		hasDirection = true,
+	},
+}
+
+-- This adds the 'checkbox' group programmatically for each location tag type.
+locationgroup_AddLocationTagCheckbox(nil, location_marker_schema)
+
+locationgroup_schema = {
+	type = "Prefab",
+	name = "locationgroup",
+	description = "locationgroup",
+	script = "locationgroup.scar",
+	proxy = "art/debug/test_lod/test_lod",
+	itemSchema = {
+		{
+			type = ST_TABLE,
+			name = "locations",
+			description = "List of locations",
+			multiplicity = "multiple",
+			itemSchema = location_marker_schema,
+		},
+
+	},
+}

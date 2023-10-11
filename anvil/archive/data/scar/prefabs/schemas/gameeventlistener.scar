@@ -1,0 +1,594 @@
+--
+-- GameEventListener prefab
+--
+
+--  Prefab Script
+
+function gameeventlistener_Init(data)
+	--Initialize all gameeventlistener data here if required
+end
+
+function gameeventlistener_Trigger(data)
+	local instance = Prefab_GetInstance(data)
+	local events = instance.events
+	
+	local events_data = {}
+	for i = 1, #events do
+		local event = events[i]
+		event.has_run = false
+		if events_data[event.event_type] == nil then
+			events_data[event.event_type] = {}
+		end
+		table.insert(events_data[event.event_type], event)
+	end
+	
+	for i = 1, #events do
+		local event_type_string = events[i].event_type
+		local event_type = _G[event_type_string]
+		local callback_func = _G[event_type_string.."_Callback"]
+		if not Rule_Exists(callback_func) then
+			Rule_AddGlobalEvent(callback_func, event_type, events_data[event_type_string])
+		end
+	end
+end
+
+function GE_AbilityExecuted_OnExecute(context, prefab_event_data)
+	if prefab_event_data.caster_type ~= "ANY" then
+		if prefab_event_data.caster_type == "PLAYER" then
+			if prefab_event_data.caster_player ~= context.executer then
+				return
+			end
+		elseif prefab_event_data.caster_type == "SGROUP" and prefab_event_data.caster_sgroup ~= nil then
+			if scartype(context.executer) == ST_SQUAD and not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, context.executer.SquadID, false) then
+				return
+			elseif scartype(context.executer) == ST_ENTITY then
+				local squad = Entity_GetSquad(context.executer)
+				if squad ~= nil and not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, squad.SquadID, false) then
+					return
+				end
+			end
+		elseif prefab_event_data.caster_type == "EGROUP" and prefab_event_data.caster_egroup ~= nil then
+			if not EGroup_ContainsEntity(prefab_event_data.caster_egroup, context.executer) then
+				return
+			end
+		end
+	end
+	
+	if prefab_event_data.target_type ~= "ANY" then
+		if prefab_event_data.target_type == "PLAYER" then
+			if prefab_event_data.target_player ~= context.target then
+				return
+			end
+		elseif prefab_event_data.target_type == "SGROUP" and prefab_event_data.target_sgroup ~= nil then
+			if scartype(context.target) == ST_SQUAD and not SGroup_ContainsSquad(prefab_event_data.target_sgroup, context.target.SquadID, false) then
+				return
+			elseif scartype(context.target) == ST_ENTITY then
+				local squad = Entity_GetSquad(context.target)
+				if squad ~= nil and not SGroup_ContainsSquad(prefab_event_data.target_sgroup, squad.SquadID, false) then
+					return
+				end
+			end
+		elseif prefab_event_data.target_type == "EGROUP" and prefab_event_data.target_egroup ~= nil then
+			if not EGroup_ContainsEntity(prefab_event_data.target_egroup, context.target) then
+				return
+			end
+		elseif prefab_event_data.target_type == "POSITION" then
+			if context.target == nil then
+			  	return
+			end
+			if context.target.x == nil or context.target.z == nil then
+				return
+			end
+			if not Marker_InProximity(prefab_event_data.target_position, Util_ScarPos(context.target.x, context.target.z, context.target.y)) then
+				return
+			end
+		end
+	end
+	
+	if prefab_event_data.ability ~= nil and context.ability ~= prefab_event_data.ability then
+		return
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_AbilityExecuted_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_AbilityExecuted_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_DamageReceived_OnExecute(context, prefab_event_data)
+	if context.attacker ~= nil then
+		if prefab_event_data.attacker_type ~= "ANY" then
+			if prefab_event_data.attacker_type == "SGROUP" and prefab_event_data.caster_sgroup ~= nil then
+				local squad = Entity_GetSquad(context.attacker)
+				if squad ~= nil and not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, squad.SquadID, false) then
+					return
+				end
+			elseif prefab_event_data.attacker_type == "EGROUP" and prefab_event_data.caster_egroup ~= nil then
+				if not EGroup_ContainsEntity(prefab_event_data.caster_egroup, context.attacker) then
+					return
+				end
+			end
+		end
+		if not prefab_event_data.ignore_caster_player_check then
+			local attacker_player = Entity_GetPlayerOwner(context.attacker)
+			if attacker_player ~= nil and prefab_event_data.caster_player ~= attacker_player then
+				return
+			end
+		end
+		
+		-- Caster Check
+		if not prefab_event_data.caster_unit_type_check then
+			-- BP Check
+			if prefab_event_data.caster_bp_type == "SQUAD" and prefab_event_data.caster_squad_bp ~= nil then
+				local attacker_squad = Entity_GetSquad(context.attacker)
+				if attacker_squad ~= nil and Squad_GetBlueprint(attacker_squad) ~= prefab_event_data.caster_squad_bp then
+					return
+				end
+			elseif prefab_event_data.caster_bp_type == "ENTITY" and prefab_event_data.caster_entity_bp ~= nil then
+				if context.attacker ~= nil and Entity_GetBlueprint(context.attacker) ~= prefab_event_data.caster_entity_bp then
+					return
+				end
+			end
+		else
+			-- Type Check
+			if prefab_event_data.caster_unit_types ~= "" then
+				local caster_unit_types = Table_StringSplit(prefab_event_data.caster_unit_types, ",")
+				caster_unit_types = {caster_unit_types}
+				if prefab_event_data.caster_bp_type == "SQUAD" then
+					local attacker_squad = Entity_GetSquad(context.attacker)
+					if attacker_squad ~= nil and not Squad_HasBlueprint(attacker_squad, caster_unit_types) then
+						return
+					end
+				elseif prefab_event_data.caster_bp_type == "ENTITY" then
+					if context.attacker ~= nil and not Entity_HasBlueprint(context.attacker, caster_unit_types) then
+						return
+					end
+				end
+			end
+		end
+	end
+	
+	if prefab_event_data.victim_type ~= "ANY" then
+		if prefab_event_data.victim_type == "SGROUP" and prefab_event_data.target_sgroup ~= nil and context.victimSquad ~= nil then
+			if scartype(context.victimSquad) == ST_SQUAD and not SGroup_ContainsSquad(prefab_event_data.target_sgroup, context.victimSquad.SquadID, false) then
+				return
+			end
+		elseif prefab_event_data.victim_type == "EGROUP" and prefab_event_data.target_egroup ~= nil and context.victim ~= nil then
+			if not EGroup_ContainsEntity(prefab_event_data.target_egroup, context.victim) then
+				return
+			end
+		end
+	end
+	if not prefab_event_data.ignore_target_player_check and context.victim ~= nil then
+		local victim_player = Entity_GetPlayerOwner(context.victim)
+		if victim_player ~= nil and prefab_event_data.target_player ~= victim_player then
+			return
+		end
+	end
+	
+	-- Target Check
+	if not prefab_event_data.target_unit_type_check then
+		-- BP Check
+		if prefab_event_data.target_bp_type == "SQUAD" and prefab_event_data.target_squad_bp ~= nil and context.victimSquad ~= nil then
+			if context.victimSquad ~= nil and Squad_GetBlueprint(context.victimSquad) ~= prefab_event_data.target_squad_bp then
+				return
+			end
+		elseif prefab_event_data.target_bp_type == "ENTITY" and prefab_event_data.target_entity_bp ~= nil and context.victim ~= nil then
+			if context.victim ~= nil and Entity_GetBlueprint(context.victim) ~= prefab_event_data.target_entity_bp then
+				return
+			end
+		end
+	else
+		-- Type Check
+		if prefab_event_data.target_unit_types ~= "" then
+			local target_unit_types = Table_StringSplit(prefab_event_data.target_unit_types, ",")
+			target_unit_types = {target_unit_types}
+			if prefab_event_data.target_bp_type == "SQUAD" and context.victimSquad ~= nil then
+				if context.victimSquad ~= nil and not Squad_HasBlueprint(context.victimSquad, target_unit_types) then
+					return
+				end
+			elseif prefab_event_data.target_bp_type == "ENTITY" and context.victim ~= nil then
+				if context.victim ~= nil and not Entity_HasBlueprint(context.victim, target_unit_types) then
+					return
+				end
+			end
+		end
+	end
+	
+	if not prefab_event_data.ignore_damage_check and
+		NumberComparison(context.damage, prefab_event_data.comparison, prefab_event_data.damage) == false then
+		return
+	end
+	
+	if not prefab_event_data.ignore_is_repairing_check and context.isRepairing ~= prefab_event_data.is_repairing then
+		return
+	end
+	
+	if not prefab_event_data.ignore_current_health_check and
+		NumberComparison(context.currentHealth, prefab_event_data.comparison, prefab_event_data.current_health) == false then
+		return
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_DamageReceived_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_DamageReceived_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_EntityKilled_OnExecute(context, prefab_event_data)
+	if context.killer ~= nil then
+		if prefab_event_data.attacker_type ~= "ANY" then
+			if prefab_event_data.attacker_type == "SGROUP" and prefab_event_data.caster_sgroup ~= nil then
+				local squad = Entity_GetSquad(context.killer)
+				if squad ~= nil and not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, squad.SquadID, false) then
+					return
+				end
+			elseif prefab_event_data.attacker_type == "EGROUP" and prefab_event_data.caster_egroup ~= nil then
+				if not EGroup_ContainsEntity(prefab_event_data.caster_egroup, context.killer) then
+					return
+				end
+			end
+		end
+		if not prefab_event_data.ignore_caster_player_check then
+			local killer_player = Entity_GetPlayerOwner(context.killer)
+			if killer_player ~= nil and prefab_event_data.caster_player ~= killer_player then
+				return
+			end
+		end
+		
+		-- Caster BP/Type Check
+		if not prefab_event_data.caster_unit_type_check then
+			-- BP Check
+			if prefab_event_data.caster_bp_type == "SQUAD" and prefab_event_data.caster_squad_bp ~= nil then
+				local killer_squad = Entity_GetSquad(context.killer)
+				if killer_squad ~= nil and Squad_GetBlueprint(killer_squad) ~= prefab_event_data.caster_squad_bp then
+					return
+				end
+			elseif prefab_event_data.caster_bp_type == "ENTITY" and prefab_event_data.caster_entity_bp ~= nil then
+				if context.killer ~= nil and Entity_GetBlueprint(context.killer) ~= prefab_event_data.caster_entity_bp then
+					return
+				end
+			end
+		else
+			-- Type Check
+			if prefab_event_data.caster_unit_types ~= "" then
+				local caster_unit_types = Table_StringSplit(prefab_event_data.caster_unit_types, ",")
+				caster_unit_types = {caster_unit_types}
+				if prefab_event_data.caster_bp_type == "SQUAD" then
+					local killer_squad = Entity_GetSquad(context.killer)
+					if killer_squad ~= nil and not Squad_HasBlueprint(killer_squad, caster_unit_types) then
+						return
+					end
+				elseif prefab_event_data.caster_bp_type == "ENTITY" then
+					if context.killer ~= nil and not Entity_HasBlueprint(context.killer, caster_unit_types) then
+						return
+					end
+				end
+			end
+		end
+	end
+	
+	if prefab_event_data.victim_type ~= "ANY" then
+		if prefab_event_data.victim_type == "SGROUP" and prefab_event_data.target_sgroup ~= nil and context.victimSquad ~= nil then
+			if scartype(context.victimSquad) == ST_SQUAD and not SGroup_ContainsSquad(prefab_event_data.target_sgroup, context.victimSquad.SquadID, false) then
+				return
+			end
+		elseif prefab_event_data.victim_type == "EGROUP" and prefab_event_data.target_egroup ~= nil and context.victim ~= nil then
+			if not EGroup_ContainsEntity(prefab_event_data.target_egroup, context.victim) then
+				return
+			end
+		end
+	end
+	if not prefab_event_data.ignore_target_player_check then
+		if prefab_event_data.target_player ~= context.victimOwner then
+			return
+		end
+	end
+	
+	-- Target Check
+	if not prefab_event_data.target_unit_type_check then
+		-- BP Check
+		if prefab_event_data.target_bp_type == "SQUAD" and prefab_event_data.target_squad_bp ~= nil and context.victimSquad ~= nil then
+			if context.victimSquad ~= nil and Squad_GetBlueprint(context.victimSquad) ~= prefab_event_data.target_squad_bp then
+				return
+			end
+		elseif prefab_event_data.target_bp_type == "ENTITY" and prefab_event_data.target_entity_bp ~= nil and context.victim ~= nil then
+			if context.victim ~= nil and Entity_GetBlueprint(context.victim) ~= prefab_event_data.target_entity_bp then
+				return
+			end
+		end
+	else
+		-- Type Check
+		if prefab_event_data.target_unit_types ~= "" then
+			local target_unit_types = Table_StringSplit(prefab_event_data.target_unit_types, ",")
+			target_unit_types = {target_unit_types}
+			if prefab_event_data.target_bp_type == "SQUAD" and context.victimSquad ~= nil then
+				if context.victimSquad ~= nil and not Squad_HasBlueprint(context.victimSquad, target_unit_types) then
+					return
+				end
+			elseif prefab_event_data.target_bp_type == "ENTITY" and context.victimSquad ~= nil then
+				if context.victim ~= nil and not Entity_HasBlueprint(context.victim, target_unit_types) then
+					return
+				end
+			end
+		end
+	end
+	
+	if not prefab_event_data.ignore_death_reason_check and context.deathReason ~= _G[prefab_event_data.death_reason] then
+		return
+	end
+	
+	if not prefab_event_data.ignore_remaining_entities_check and
+		NumberComparison(context.numRemainingEntities, prefab_event_data.comparison, prefab_event_data.remaining_entities_in_squad) == false then
+		return
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_EntityKilled_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_EntityKilled_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_MineDefused_OnExecute(context, prefab_event_data)
+	if not prefab_event_data.ignore_caster_player_check and context.player ~= prefab_event_data.caster_player then
+		return
+	end
+	
+	if not prefab_event_data.ignore_caster_squad_check and prefab_event_data.caster_sgroup ~= nil then
+		local defuser_squad = Entity_GetSquad(context.defuser)
+		if defuser_squad ~= nil and not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, defuser_squad.SquadID, false) then
+			return
+		end
+	end
+	
+	if not prefab_event_data.ignore_target_entity_check and prefab_event_data.target_egroup ~= nil then
+		if not EGroup_ContainsEntity(prefab_event_data.target_egroup, context.mine) then
+			return
+		end
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_MineDefused_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_MineDefused_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_SquadProductionQueue_OnExecute(context, prefab_event_data)
+	local context_squad_bp = Squad_GetBlueprint(context.squad)
+	if prefab_event_data.caster_squad_bp ~= nil and context_squad_bp ~= prefab_event_data.caster_squad_bp then
+		return
+	end
+	if not prefab_event_data.ignore_caster_player_check then
+		local producer_player = Squad_GetPlayerOwner(context.squad)
+		if producer_player ~= nil and prefab_event_data.caster_player ~= producer_player then
+			return
+		end
+	end
+	
+	if prefab_event_data.complete_squad_check then
+		if Squad_AliveCount(context.squad) ~= Squad_GetMax(context.squad) then
+			return
+		end
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_SquadProductionQueue_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_SquadProductionQueue_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_SquadKilled_OnExecute(context, prefab_event_data)
+	if context.victim ~= nil then
+		if not prefab_event_data.ignore_victim_check and prefab_event_data.target_sgroup ~= nil then
+			if not SGroup_ContainsSquad(prefab_event_data.target_sgroup, context.victim.SquadID, false) then
+				return
+			end
+		end
+		if not prefab_event_data.ignore_target_player_check then
+			local victim_player = Squad_GetPlayerOwner(context.victim)
+			if victim_player ~= nil and prefab_event_data.target_player ~= victim_player then
+				return
+			end
+		end
+		
+		-- Target Check
+		if not prefab_event_data.target_unit_type_check then
+			-- BP Check
+			if prefab_event_data.target_squad_bp ~= nil then
+				if context.victim ~= nil and Squad_GetBlueprint(context.victim) ~= prefab_event_data.target_squad_bp then
+					return
+				end
+			end
+		else
+			-- Type Check
+			if prefab_event_data.target_unit_types ~= "" then
+				local target_unit_types = Table_StringSplit(prefab_event_data.target_unit_types, ",")
+				target_unit_types = {target_unit_types}
+				if context.victim ~= nil and not Squad_HasBlueprint(context.victim, target_unit_types) then
+					return
+				end
+			end
+		end
+	end
+	
+	if context.killer ~= nil then
+		if not prefab_event_data.ignore_last_member_bp_check then
+			local context_last_member_bp = Entity_GetBlueprint(context.lastMember)
+			if prefab_event_data.last_member_bp ~= nil and context_last_member_bp ~= prefab_event_data.last_member_bp then
+				return
+			end
+		end
+		
+		if prefab_event_data.attacker_type ~= "ANY" then
+			if prefab_event_data.attacker_type == "SGROUP" and prefab_event_data.caster_sgroup ~= nil then
+				local squad = Entity_GetSquad(context.killer)
+				if squad ~= nil and not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, squad.SquadID, false) then
+					return
+				end
+			elseif prefab_event_data.attacker_type == "EGROUP" and prefab_event_data.caster_egroup ~= nil then
+				if not EGroup_ContainsEntity(prefab_event_data.caster_egroup, context.killer) then
+					return
+				end
+			end
+		end
+		if not prefab_event_data.ignore_caster_player_check then
+			local killer_player = Entity_GetPlayerOwner(context.killer)
+			if killer_player ~= nil and prefab_event_data.caster_player ~= killer_player then
+				return
+			end
+		end
+		
+		-- Caster BP/Type Check
+		if not prefab_event_data.caster_unit_type_check then
+			-- BP Check
+			if prefab_event_data.caster_bp_type == "SQUAD" and prefab_event_data.caster_squad_bp ~= nil then
+				local killer_squad = Entity_GetSquad(context.killer)
+				if killer_squad ~= nil and Squad_GetBlueprint(killer_squad) ~= prefab_event_data.caster_squad_bp then
+					return
+				end
+			elseif prefab_event_data.caster_bp_type == "ENTITY" and prefab_event_data.caster_entity_bp ~= nil then
+				if context.killer ~= nil and Entity_GetBlueprint(context.killer) ~= prefab_event_data.caster_entity_bp then
+					return
+				end
+			end
+		else
+			-- Type Check
+			if prefab_event_data.caster_unit_types ~= "" then
+				local caster_unit_types = Table_StringSplit(prefab_event_data.caster_unit_types, ",")
+				caster_unit_types = {caster_unit_types}
+				if prefab_event_data.caster_bp_type == "SQUAD" then
+					local killer_squad = Entity_GetSquad(context.killer)
+					if killer_squad ~= nil and not Squad_HasBlueprint(killer_squad, caster_unit_types) then
+						return
+					end
+				elseif prefab_event_data.caster_bp_type == "ENTITY" then
+					if context.killer ~= nil and not Entity_HasBlueprint(context.killer, caster_unit_types) then
+						return
+					end
+				end
+			end
+		end
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_SquadKilled_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_SquadKilled_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_UpgradeComplete_OnExecute(context, prefab_event_data)
+	if prefab_event_data.caster_type ~= "ANY" then
+		if prefab_event_data.caster_type == "PLAYER" then
+			if prefab_event_data.caster_player ~= context.executer then
+				return
+			end
+		elseif prefab_event_data.caster_type == "SGROUP" and prefab_event_data.caster_sgroup ~= nil then
+			if not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, context.executer.SquadID, false) then
+				return
+			end
+		elseif prefab_event_data.caster_type == "EGROUP" and prefab_event_data.caster_egroup ~= nil then
+			if not EGroup_ContainsEntity(prefab_event_data.caster_egroup, context.executer) then
+				return
+			end
+		end
+	end
+	
+	if prefab_event_data.target_type ~= "ANY" then
+		if prefab_event_data.target_type == "PLAYER" then
+			if prefab_event_data.target_player ~= context.target then
+				return
+			end
+		elseif prefab_event_data.target_type == "SGROUP" and prefab_event_data.target_sgroup ~= nil then
+			if not SGroup_ContainsSquad(prefab_event_data.target_sgroup, context.target.SquadID, false) then
+				return
+			end
+		elseif prefab_event_data.target_type == "EGROUP" and prefab_event_data.target_egroup ~= nil then
+			if not EGroup_ContainsEntity(prefab_event_data.target_egroup, context.target) then
+				return
+			end
+		elseif prefab_event_data.target_type == "POSITION" then
+			if context.target.x == nil or context.target.z == nil then
+				return
+			end
+			if Marker_InProximity(prefab_event_data.target_position, Util_ScarPos(context.target.x, context.target.z, context.target.y)) then
+				return
+			end
+		end
+	end
+	
+	if prefab_event_data.upgrade ~= nil and context.upgrade ~= prefab_event_data.upgrade then
+		return
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_UpgradeComplete_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_UpgradeComplete_OnExecute(context, events_data[i])
+		end
+	end
+end
+
+function GE_StrategicPointChanged_OnExecute(context, prefab_event_data)
+	if not prefab_event_data.ignore_change_type_check and context.changeType ~= _G[prefab_event_data.change_type] then
+		return
+	end
+	
+	if not prefab_event_data.ignore_target_player_check and context.strategicPointOwner ~= prefab_event_data.target_player then
+		return
+	end
+	
+	if not prefab_event_data.ignore_target_entity_check and prefab_event_data.target_egroup ~= nil then
+		if not EGroup_ContainsEntity(prefab_event_data.target_egroup, context.strategicPointEntity) then
+			return
+		end
+	end
+
+	if not prefab_event_data.ignore_caster_squad_check and prefab_event_data.caster_sgroup ~= nil then
+		if not SGroup_ContainsSquad(prefab_event_data.caster_sgroup, context.instigatorSquad.SquadID, false) then
+			return
+		end
+	end
+	
+	Prefab_Trigger(prefab_event_data.on_event_fulfilled)
+	prefab_event_data.has_run = true
+end
+function GE_StrategicPointChanged_Callback(context, events_data)
+	for i = 1, #events_data do
+		if events_data[i].run_once == false or (events_data[i].run_once == true and events_data[i].has_run == false) then
+			GE_StrategicPointChanged_OnExecute(context, events_data[i])
+		end
+	end
+end

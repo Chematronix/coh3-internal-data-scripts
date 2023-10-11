@@ -1,0 +1,86 @@
+import("prefabs/templates/conditions_template.scar")
+import("prefabs/templates/objectives_template.scar")
+import("prefabs/templates/actions_template.scar")
+
+local dedicatedActions = {
+	{
+		type = ST_TABLE,
+		name = "optional_dedicated_actions",
+		description = "Actions dedicated to this condition",
+		multiplicity = "multiple",
+		itemSchema = g_playbills_actions_full_template,
+		category = "Optional",
+	},
+}
+
+local conditions_template_with_optional_dedicated_actions = Table_Concatenate(g_conditions_template, dedicatedActions)
+
+g_playbills_template = {
+
+	--{
+	--	type = ST_TABLE,
+	--	name = "conditions",
+	--	description = "All conditions to check",
+	--	multiplicity = "multiple",
+	--	itemSchema = g_conditions_template,
+	--	requirement = {"boolean", "ALL", },
+	--},
+	{
+		--Temp Fix: Update with the new requirements in the item when Tools update it
+		type = ST_TABLE,
+		name = "conditions",
+		description = "All conditions to check (Don't add optional_dedicated_actions when boolean is set to ALL)",
+		multiplicity = "multiple",
+		itemSchema = conditions_template_with_optional_dedicated_actions,
+		requirement = {"boolean", "ANY", "NONE", "ALL"},
+	},
+	{
+		type = ST_TABLE,
+		name = "actions",
+		description = "All secondary beats possible on this map",
+		multiplicity = "multiple",
+		itemSchema = g_playbills_actions_full_template
+	},
+	{
+		type = ST_STRING,
+		name = "boolean",
+		description = "Checks conditions to see if ANY, ALL or NONE have been completed",
+		options = {"ALL", "ANY", "NONE"},
+		default = "ALL",
+		category = "Options",
+	},
+	{
+		type = ST_NUMBER,
+		name = "minRequired",
+		description = "ANY: Minimum number of conditions to be true\nNONE: Minimum number of conditions to be false (If 0 or less, then all the subconditions are considered NONE)",
+		requirement = {"boolean", "ANY", "NONE"},
+		category = "Options",
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "scripted_turn_phase",
+		displayName = "Scripted Turn Phase",
+		description = "Campaign map only. If true, queue actions to execute during the next scripted turn phase once conditions are met",
+		category = "Turn phase",
+		default = false,
+	},
+	{
+		type = ST_PLAYER,
+		name = "player_turn_for_scripted_phase",
+		displayName = "Player Turn for Scripted Phase",
+		description = "Campaign map only. Only used if scripted_turn_phase is true. "..
+		"Some actions must be run on the correct player's turn, for example issuing a move command to a player squad."..
+		" If \"World\", action will be run during the next scripted phase of any player.",
+		category = "Turn phase",
+		allowWorld = true,
+		default = "World",
+		requirement = {"scripted_turn_phase", true},
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "enabled",
+		displayName = "Enabled",
+		description = "Should this playbill.playbills run at all?",
+		default = true,
+	},
+}

@@ -1,0 +1,537 @@
+import("anvil.scar")
+import("scarutil.scar")
+import("narrative/dynamic_narrative_nodes.scar")
+import("narrative/dynamic_narrative_variables.scar")
+import("narrative/narrative_variables.scar")
+
+
+
+local destination_nodes = {}
+local current_narrative_event_loc_id
+local selection_in_progress -- TRUE when the player has clicked an interactive dialogue option
+local interactive_dialogue_active = false -- TRUE when the interactive diaogue is displayed
+
+--[[
+Triggered dynamic narrative is placed in a queue.
+
+When the dynamic narrative queue becomes non-empty, we block further turn actions from
+happening (clear queued commands) and prevent saving until the queue is empty and
+all active dynamic narrative is complete.
+
+Nodes are popped from the queue in order when the previous node is done playing.
+
+When a node is popped from the queue it becomes the active narrative
+and continues until the interactive dialogue is closed if any and the scar
+event (subtitled speech) is done playing.
+]]--
+local g_dynamic_narrative_queue = {} -- Dynamic narrative waiting for previous narrative to complete
+local g_narrative_save_blocker = nil -- Blocks save while queue is non-empty
+local g_active_narrative = nil -- The dynamic narrative currently playing
+
+
+function DoIntel(active_node, intro_loc_string_key, callback)
+	
+	local playNarrativeEvent = function()
+		if intro_loc_string_key ~= nil then
+			CTRL.Actor_PlaySpeech(active_node.actor_name, intro_loc_string_key, nil, active_node.wwise_event)
+		else
+			CTRL.Actor_PlaySpeech(active_node.actor_name, active_node.loc_string_key, nil, active_node.wwise_event)
+		end
+		CTRL.WAIT()
+	end
+	
+	Util_StartIntel(playNarrativeEvent, callback)
+	
+end
+
+local function IsInteractiveNode(node)
+	
+	return (node.connections[1] ~= nil and node.connections[1].interaction_option_loc_string_key ~= nil)
+
+end
+
+--? @shortdesc Execute an Articy exit expression 
+--? @args nodedata - Articy data containing an exit_expression variable
+function DoExitExpression(nodedata)
+
+	if (nodedata.exit_expression ~= nil) then
+		nodedata.exit_expression()
+	end
+	
+end
+
+function NodePlaysEvent(node)
+	return node ~= nil and node.narrative_event ~= nil and not node.cancel_interaction
+end
+
+function IsDynamicNarrativePlaying()
+	return g_active_narrative ~= nil
+end
+
+function DynamicNarrative_HasQueue()
+	return g_dynamic_narrative_queue ~= nil and #g_dynamic_narrative_queue > 0
+end
+
+function DynamicNarrativeManager_UpdatePlaying()
+	local complete = (not Event_IsAnyRunning()) and (not interactive_dialogue_active)
+	if complete then
+		g_active_narrative_playing = false
+		if g_active_narrative.callback then
+			g_active_narrative.callback()
+		end
+		g_active_narrative = nil
+	end
+end
+
+-- Runs every frame while there is any narrative active or queued.
+function DynamicNarrativeManager()
+	if g_active_narrative then
+		DynamicNarrativeManager_UpdatePlaying()
+	elseif #g_dynamic_narrative_queue <= 0 then
+		-- Not currently playing, nothing left to play
+		if g_narrative_save_blocker ~= nil then
+			World_RemoveScriptedSaveBlocker(g_narrative_save_blocker)
+			g_narrative_save_blocker = nil
+		end
+		Rule_RemoveMe()
+		return
+	else
+		-- No active narrative but there is more queued narrative,
+		-- time to pop from the queue
+		g_active_narrative = g_dynamic_narrative_queue[1]
+		table.remove(g_dynamic_narrative_queue, 1)
+		
+		-- Process node data:
+		if scartype(g_active_narrative.node) == ST_STRING then
+			-- This entry corresponds to a narrative node, play associated
+			-- intel / interactive dialgoue:
+			ProcessDynamicNarrativeNode(g_active_narrative.node)
+		else
+			-- This entry is an intel function, play the intel directly
+			Util_StartIntel(g_active_narrative.node)
+		end
+		
+		DynamicNarrativeManager_UpdatePlaying() -- Just entered playing state, process immediately if possible
+	end
+end
+
+local function ProcessNode(active_node, event_callback)
+	
+	if (IsInteractiveNode(active_node)) then
+		DoExitExpression(active_node)
+		DisplayInteractiveDialogue(active_node)		
+		return nil	
+	end
+
+	if NodePlaysEvent(active_node) then
+		DoIntel(active_node, active_node.intro_loc_string_key, event_callback)
+	end
+    
+	DoExitExpression(active_node)
+	
+	SetNarrativeVariable("random.current", World_GetRand(0, 99))
+	
+    for _, connection in ipairs(active_node.connections) do	
+		
+		if (connection.condition()) then
+			DoExitExpression(connection)
+			return g_narrative_nodes[connection.destination_node]
+		end
+		
+    end
+	
+	return nil
+end
+
+-- Queues dynamic narrative to trigger
+-- Node can be either the name of a dynamic narrative node or an intel function
+function ExecuteDynamicNarrativeNode(node, callback)
+	
+	-- Insert dynamic narrative into the queue
+	local narrative_entry = {
+		node = node,
+		callback = callback,
+	}
+	g_dynamic_narrative_queue[#g_dynamic_narrative_queue + 1] = narrative_entry
+	
+	if g_narrative_save_blocker == nil then
+		g_narrative_save_blocker = World_AddScriptedSaveBlocker()
+	end
+	
+	-- Churn the manager once to process in-line and add it if it is not a rule
+	DynamicNarrativeManager()
+	if (not Rule_Exists(DynamicNarrativeManager)) then
+		Rule_Add(DynamicNarrativeManager)
+	end
+end
+
+function ProcessDynamicNarrativeNode(nodeName)
+	
+    local active_node = g_narrative_nodes[nodeName]
+
+	while (active_node ~= nil) do
+    	active_node = ProcessNode(active_node, callback)
+	end
+end
+
+function InteractiveDialogueTest()
+	
+	DisplayInteractiveDialogue(g_narrative_nodes.dfr_valenti_avellino)	
+	
+end
+
+local function GetActorName(actor)
+
+	local actor_name = "Unknown"
+
+	local actor_names = 
+	{
+		{ actor = "ccommander", locstring = 11165890 },
+		{ actor = "general", locstring = 11165891 },
+		{ actor = "partisan_leader", locstring = 11221869 },	
+	}
+
+
+	for i = 1, #actor_names do
+		if (actor_names[i].actor == actor) then
+			actor_name = Loc_GetString(actor_names[i].locstring)
+		end
+	end
+
+	return actor_name
+
+end
+
+local function GetActorPortrait(actor)
+
+	local portrait = nil
+
+	local actor_portraits = 
+	{
+		{ actor = "ccommander", portrait = "pack://application:,,,/WPFGUI;component/icons/talking_heads/Narrative_generic_Clarence_Norton.png" },
+		{ actor = "general", portrait = "pack://application:,,,/WPFGUI;component/icons/talking_heads/Narrative_general_henry_buckham.png" },
+		{ actor = "partisan_leader", portrait = "pack://application:,,,/WPFGUI;component/icons/talking_heads/partisan_leader_portrait.png" },	
+	}
+
+	for i = 1, #actor_portraits do
+		if (actor_portraits[i].actor == actor) then
+			portrait = actor_portraits[i].portrait
+		end
+	end
+
+	return portrait
+
+end
+
+local function GetActorFlag(actor)
+
+	local flag = nil
+
+	local actor_flags = 
+	{
+		{ actor = "ccommander", flag = "pack://application:,,,/WPFGUI;component/icons/talking_heads/flag_uk.png" },
+		{ actor = "general", flag = "pack://application:,,,/WPFGUI;component/icons/talking_heads/flag_usa.png" },
+		{ actor = "partisan_leader", flag = "pack://application:,,,/WPFGUI;component/icons/talking_heads/flag_partisan.png" },	
+	}
+
+	for i = 1, #actor_flags do
+		if (actor_flags[i].actor == actor) then
+			flag = actor_flags[i].flag
+		end
+	end
+
+	return flag
+
+end
+
+function DisplayInteractiveDialogue(node)	
+
+	if (interactive_dialogue_active) then
+		return
+	end
+	
+	Misc_ClearSelection()
+	
+	-- Tell the FE tree to close out of the company tech page properly
+	local flow = Game_RetrieveTableData("flow",false)
+	if flow.inGameScreenPage == "campaignSquadTechTree" then
+		flow.inGameScreenPage = ""
+		Game_StoreTableData("flow", flow)
+	end
+	
+	interactive_dialogue_active = true
+	
+	local xaml =
+[[<Page xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+		      xmlns:luaDataStore="clr-namespace:LuaDataStoreModelTypes;assembly=EngineUI"
+              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="clr-namespace:WPFGUI"
+		 	  xmlns:esUtility="clr-namespace:WPFGUI.Shared.Utility;assembly=EngineUI"
+              xmlns:esModels="clr-namespace:WPFGUI.Shared.Models;assembly=EngineUI">
+			
+	<Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent">
+		<StackPanel Width="1000" Margin="0,0,0,220"  HorizontalAlignment="Center" VerticalAlignment="Bottom" IsHitTestVisible="True">
+			<StackPanel.Resources>
+	            <ResourceDictionary>
+	                <ResourceDictionary.MergedDictionaries>
+	                    <ResourceDictionary Source="pack://application:,/WPFGUI;component/Resources/HUDResources.xaml" />
+	                    <ResourceDictionary Source="pack://application:,/WPFGUI;component/Resources/ButtonResources.xaml" />
+	                </ResourceDictionary.MergedDictionaries>
+	
+					<Style x:Key="ConfirmButton" TargetType="{x:Type ContentControl}">
+						<Setter Property="Template">
+							<Setter.Value>
+								<ControlTemplate TargetType="{x:Type ContentControl}">
+			                    	<Grid Width="22" Height="22">
+										<Ellipse Style="{StaticResource SmallGamepadButtonIconBackground}"/>
+										<Image Width="20" Height="20"
+                               		  	   	   Source="{Binding Converter={StaticResource GamepadIconConverter}, ConverterParameter=binding:gp_navigation_confirm}" />
+		                        	</Grid>
+								</ControlTemplate>
+							</Setter.Value>
+						</Setter>
+					</Style> 
+	
+					<Style x:Key="SelectOptionButton" TargetType="{x:Type Button}">
+					    <Setter Property="Background" Value="{DynamicResource SelectOptionButtonDefaultBackgroundBrush}"/>
+						<Setter Property="BorderBrush" Value="{DynamicResource SelectOptionButtonDefaultBorderBrush}"/>
+						<Setter Property="Foreground" Value="{DynamicResource SelectOptionButtonDefaultForegroundBrush}"/>
+					    <Setter Property="Template">
+					        <Setter.Value>
+					            <ControlTemplate TargetType="Button">
+					                <Border Height="34" Margin="10,0,10,0" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="2">
+										<Grid>
+					                    	<ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+											<ContentControl Style="{StaticResource ConfirmButton}"
+															HorizontalAlignment="Right" VerticalAlignment="Center"
+															Visibility="{Binding Path=(esUtility:UINavigationAttachedProperty.Modifier).Selected, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource BoolToVis}}"/>
+										</Grid>
+					                </Border>
+					            </ControlTemplate>
+					        </Setter.Value>
+					    </Setter>
+					    <Style.Triggers>
+					        <Trigger Property="IsMouseOver" Value="True">
+					            <Setter Property="Background" Value="{DynamicResource SelectOptionButtonHighlightBackgroundBrush}"/>
+								<Setter Property="BorderBrush" Value="{DynamicResource SelectOptionButtonHighlightBorderBrush}"/>
+								<Setter Property="Foreground" Value="{DynamicResource SelectOptionButtonHighlightForgroundBrush}"/>
+					        </Trigger>
+							<DataTrigger Value="True">
+	                            <DataTrigger.Binding>
+	                                <Binding RelativeSource="{RelativeSource Self}" Path="(esUtility:UINavigationAttachedProperty.Modifier).Selected"/>
+	                            </DataTrigger.Binding>
+	                            <Setter Property="Background" Value="{DynamicResource SelectOptionButtonHighlightBackgroundBrush}"/>
+								<Setter Property="BorderBrush" Value="{DynamicResource SelectOptionButtonHighlightBorderBrush}"/>
+								<Setter Property="Foreground" Value="{DynamicResource SelectOptionButtonHighlightForgroundBrush}"/>
+	                        </DataTrigger>
+					    </Style.Triggers>
+					</Style>					
+	            </ResourceDictionary>
+	        </StackPanel.Resources>
+			<Grid Visibility="Visible">
+                <Grid Width="942" Height="204"
+                      HorizontalAlignment="Left" VerticalAlignment="Top"
+                      Visibility="Visible">
+                    <!--  Background  -->
+                    <Image Source="{StaticResource TalkingHeadsStaticBackground}" Stretch="Fill" />
+					
+					<!--  Background Used for HC  -->
+                    <Border Margin="10" Background="{DynamicResource DefaultTextBorderBackgroundBrush}" />
+                    
+					<!--  Portrait  -->
+                    <Grid Margin="16,0,0,0" HorizontalAlignment="Left"
+                          VerticalAlignment="Center">
+                        <Border Width="178" Height="170"
+                                HorizontalAlignment="Left" VerticalAlignment="Center">
+                            <Border.Background>
+                                <ImageBrush ImageSource="{StaticResource TalkingHeadsStaticPortraitBackground}" Stretch="Uniform" />
+                            </Border.Background>
+                        </Border>
+                        <Image Width="152"
+                               Margin="0,0,0,24" HorizontalAlignment="Center"
+                               VerticalAlignment="Bottom"
+                               Source="{Binding [SubtitleSpeechPortrait]}" Stretch="Uniform" />
+                    </Grid>
+
+                    <StackPanel Margin="200,34,0,0" HorizontalAlignment="Left"
+                                Orientation="Vertical">
+                        <!--  Name text  -->
+                        <TextBlock Width="670"
+                                   Margin="0,0,0,0" HorizontalAlignment="Left"
+                                   Foreground="{StaticResource HUDHeaderBrush}"
+                                   Style="{StaticResource TitleTextBlockStyle}"
+                                   Text="{Binding [SubtitleSpeechName]}" TextWrapping="NoWrap" />
+
+                        <Image Width="692" Height="4"
+                               Margin="0,6,0,0" HorizontalAlignment="Left"
+                               Source="pack://application:,,,/WPFGUI;component/icons/hud/subtitles/talkingheads_divider.png" />
+
+                        <!--  Body text  -->
+                        <TextBlock Width="670" MaxHeight="70"
+                                   Margin="0,10,0,0" HorizontalAlignment="Left"
+                                   Foreground="{StaticResource HUDBodyBrush}"
+                                   Opacity="{Binding SubtitleSpeechAlpha}"
+                                   Style="{StaticResource BaseTextBlockStyle}"
+                                   Text="{Binding [SubtitleSpeechText]}" TextWrapping="Wrap" />
+
+                    </StackPanel>
+                </Grid>
+			<StackPanel Width="740"
+                            Margin="0,200,72,0" HorizontalAlignment="Right"
+                            Orientation="Vertical">
+				<esUtility:UINavigationAttachedProperty.Request>
+	            	<esModels:UINavigationRequestParameter ID="dynamic_narrative.scar" Focus="{StaticResource HUDFocusDynamicNarrative}"/>
+	            </esUtility:UINavigationAttachedProperty.Request>
+				<!--  Buffer  -->
+                <Rectangle Height="10"
+                           HorizontalAlignment="Stretch"
+                           Fill="Transparent" />
+				<Button x:Name="option1" Style="{StaticResource SelectOptionButton}">
+					<esUtility:UINavigationAttachedProperty.Info>
+               	    	<esModels:UINavigationInfoParameter Group="{StaticResource HUDFocusDynamicNarrative}"/>
+                    </esUtility:UINavigationAttachedProperty.Info>
+					<TextBlock x:Name="caption1" Margin="5,0,0,0" Style="{StaticResource OptionsButtonTextBlockStyle}">Option One</TextBlock>
+				</Button>
+				<Button x:Name="option2" Style="{StaticResource SelectOptionButton}">
+					<esUtility:UINavigationAttachedProperty.Info>
+               	    	<esModels:UINavigationInfoParameter Group="{StaticResource HUDFocusDynamicNarrative}"/>
+                    </esUtility:UINavigationAttachedProperty.Info>
+					<TextBlock x:Name="caption2" Margin="5,0,0,0" Style="{StaticResource OptionsButtonTextBlockStyle}">Option Two</TextBlock>
+				</Button>
+				<Button x:Name="option3" Style="{StaticResource SelectOptionButton}">
+					<esUtility:UINavigationAttachedProperty.Info>
+               	    	<esModels:UINavigationInfoParameter Group="{StaticResource HUDFocusDynamicNarrative}"/>
+                    </esUtility:UINavigationAttachedProperty.Info>
+					<TextBlock x:Name="caption3" Margin="5,0,0,0" Style="{StaticResource OptionsButtonTextBlockStyle}">Option Three</TextBlock>
+				</Button>
+				<Button x:Name="option4" Style="{StaticResource SelectOptionButton}">
+					<esUtility:UINavigationAttachedProperty.Info>
+               	    	<esModels:UINavigationInfoParameter Group="{StaticResource HUDFocusDynamicNarrative}"/>
+                    </esUtility:UINavigationAttachedProperty.Info>
+					<TextBlock x:Name="caption4" Margin="5,0,0,0" Style="{StaticResource OptionsButtonTextBlockStyle}" >Option Four</TextBlock>
+				</Button>
+				<!--  Buffer  -->
+                <Rectangle Height="10"
+                           HorizontalAlignment="Stretch"
+                           Fill="Transparent" />
+			</StackPanel>
+			</Grid>
+		</StackPanel>
+    </Grid>
+</Page>
+]]
+	
+	data_context =
+	{
+		SubtitleSpeechName = GetActorName(node.actor),
+		SubtitleSpeechPortrait = GetActorPortrait(node.actor),
+		SubtitleSpeechIconSecondary = GetActorFlag(node.actor),
+		SubtitleSpeechText = Loc_GetString(node.loc_string_key),
+	}
+	
+	World_InteractiveOptionInitialized(node.loc_string_key)
+	
+	selection_in_progress = false
+	
+	UI_AddChild("", "XamlPresenter", "InteractiveDialogue", { Xaml = xaml, DataContext = UI_CreateDataContext(data_context) })
+
+	UI_AddEventHandler("InteractiveDialogue.option1", "Click", "SelectOptionOne")
+	UI_AddEventHandler("InteractiveDialogue.option2", "Click", "SelectOptionTwo")
+	UI_AddEventHandler("InteractiveDialogue.option3", "Click", "SelectOptionThree")
+	UI_AddEventHandler("InteractiveDialogue.option4", "Click", "SelectOptionFour")
+
+	InitializeInteractiveOption(node.connections[1], "InteractiveDialogue.option1", "InteractiveDialogue.caption1")
+	InitializeInteractiveOption(node.connections[2], "InteractiveDialogue.option2", "InteractiveDialogue.caption2")
+	InitializeInteractiveOption(node.connections[3], "InteractiveDialogue.option3", "InteractiveDialogue.caption3")
+	InitializeInteractiveOption(node.connections[4], "InteractiveDialogue.option4", "InteractiveDialogue.caption4")
+
+	destination_nodes = node.connections
+	current_narrative_event_loc_id = node.loc_string_key
+	
+	-- Play the audio associated with this node without displaying another portrait
+	local playAudio = function() 
+					      CTRL.Actor_PlaySpeechWithoutPortrait(ACTOR.NONE, node.loc_string_key)
+						  CTRL.WAIT()
+					  end
+	Event_Start(playAudio, 1)
+	
+	if g_autoselections ~= nil and #g_autoselections > 0 then
+		-- If there is a queued selection, then use that now
+		local selection = g_autoselections[1]
+		table.remove(g_autoselections, 1)
+		SelectOption(selection)
+	end
+end
+
+function InitializeInteractiveOption(connection, button, caption)
+	
+	if (connection == nil or not connection.condition()) then
+		
+		UI_SetPropertyValue(button, "Visibility", "Collapsed")
+		
+	else
+		
+		UI_SetPropertyValue(button, "Visibility", "Visible")
+		UI_SetPropertyValue(caption, "Text", Loc_GetString(connection.interaction_option_loc_string_key))
+		
+	end
+	
+end
+
+function SelectOption(index)
+	
+	if (not selection_in_progress) then
+		selection_in_progress = true
+
+		Event_Skip()
+		
+		UI_Remove("InteractiveDialogue")	
+		
+		interactive_dialogue_active = false
+		
+		local destination_node = ""
+		if (destination_nodes[index] ~= nil) then
+			destination_node = destination_nodes[index].destination_node
+			ProcessDynamicNarrativeNode(destination_node)
+		end
+		
+		World_InteractiveOptionSelected(current_narrative_event_loc_id, index, destination_nodes[index].interaction_option_loc_string_key)
+		
+		current_narrative_event_loc_id = nil
+	end
+	
+end
+
+function SelectOptionOne()
+	
+	SelectOption(1)
+	
+end
+
+function SelectOptionTwo()
+	
+	SelectOption(2)
+	
+end
+
+function SelectOptionThree()
+
+	SelectOption(3)
+	
+end
+
+function SelectOptionFour()
+
+	SelectOption(4)
+	
+end
+
+function QueueDynamicNarrativeSelection(selection)
+	if interactive_dialogue_active then
+		SelectOption(selection)
+	else
+		g_autoselections = g_autoselections or {}
+		g_autoselections[#g_autoselections + 1] = selection 
+	end
+
+end

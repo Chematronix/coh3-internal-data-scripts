@@ -1,0 +1,170 @@
+local schema = {
+	{
+		type = ST_STRING,
+		name = "behaviour",
+		description = "What behaviour should be run at this target.",
+		options = {"Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Plan", "Assault", "cmap_Defend", "cmap_CaptureAttack", "cmap_CaptureAssault", "cmap_CaptureIgnoreEnemies", "cmap_AttackCompany", "cmap_Garrison"},
+		default = "Hold",
+	},
+	{
+		type = ST_PLAYER,
+		name = "aiplayer",
+		description = "What AIPlayer sees this behaviour.",
+		default = "Player2",
+	},
+	{
+		type = ST_NUMBER,
+		name = "min_difficulty",
+		description = "Minimum number of units needed to satisfy this behaviour. At least this value must be reached before behaviour can start. Must be greater than 0",
+		default = 1,
+		requirement = {"behaviour", "Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Assault", "cmap_Defend", "cmap_CaptureAttack", "cmap_CaptureAssault", "cmap_CaptureIgnoreEnemies", "cmap_AttackCompany", "cmap_Garrison"}, -- everything except Plan
+	},
+	{
+		type = ST_NUMBER,
+		name = "max_difficulty",
+		aliases = {"difficulty"},
+		description = "Maximum number of units needed to satisfy this behaviour. Behaviour can start if this value isnt reached. Units between minimum and maximum count are free to leave behaviour if needed elsewhere. Must be greater than minimum",
+		default = 3,
+		requirement = {"behaviour", "Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Assault", "cmap_Defend", "cmap_CaptureAttack", "cmap_CaptureAssault", "cmap_CaptureIgnoreEnemies", "cmap_AttackCompany", "cmap_Garrison"}, -- everything except Plan
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "can_reassign",
+		description = "Can units added after minimum has been reached be used to support or reassigned to achieve other goals.",
+		default = false,
+		requirement = {"behaviour", "Hold", "Defend", "Capture", "Push", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Assault"},
+	},
+	{
+		type = ST_BOOLEAN,
+		name = "active",
+		description = "Does this prefab start active.",
+		default = true,
+	},
+	{
+		type = ST_STRING,
+		name = "area_type",
+		description = "Type of area to operate in. If area_type is territory_sector and target_type is Position, the radius on the marker will be ignored.",
+		options = { "territory_sector", "circle_around_target" },
+		default = "territory_sector",
+		requirement = {"behaviour", "cmap_Defend"}
+	},
+	{
+		type = ST_MARKER,
+		name = "marker",
+		description = "Behaviour target location and radius. Radius must always be specified.",
+		colour = "black",
+		hasDirection = true,
+		hasRange = true,
+		showAlways = true,
+		requirement = {
+			operator = "ANY",
+			{"behaviour", "Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Assault"}, -- everything except Plan
+			{ 
+				operator = "ALL",
+				{"behaviour", "cmap_Defend"},
+				{"target_type", "Position"}
+			}
+		}
+   },
+   {
+		type = ST_NUMBER,
+		name = "operation_radius",
+		description = "Encounter squads will choose defend positions within this radius of the target",
+		default = 0,
+		requirement = {
+			operator = "ALL",
+			{"area_type", "circle_around_target"},
+			{operator = "NOT", {"target_type", "Position"}}
+		},
+   },
+   {
+		type = ST_STRING,
+		name = "selection_type",
+		description = "Behaviour selection rule. Default selection allows the AI to select nearby units to fill this behaviour.",
+		options = {"Automatic", "SGroup"},
+		requirement = {"behaviour", "Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Assault", "cmap_Defend", "cmap_CaptureAttack", "cmap_CaptureAssault", "cmap_CaptureIgnoreEnemies", "cmap_AttackCompany", "cmap_Garrison"},
+		default = "Automatic",
+   },
+   {
+		type = ST_SGROUP,
+		name = "sgroup_selection",
+		description = "SGroup to assign to this behaviour",
+		requirement = {"selection_type", "SGroup"},
+   },
+   {
+		type = ST_STRING,
+		name = "target_type",
+		description = "Behaviour target type",
+		options = {"Position", "SGroup", "EGroup", "Waypoints"},
+		default = "Position",
+		requirement = {"behaviour", "Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Assault", "cmap_Defend", "cmap_CaptureAttack", "cmap_CaptureAssault", "cmap_CaptureIgnoreEnemies", "cmap_AttackCompany", "cmap_Garrison"}, -- everything except Plan
+	},
+	{
+		type = ST_EGROUP,
+		name = "egroup_target",
+		aliases = {"egroup"},
+		description = "EGroup to be used as prefab target",
+		requirement = {"target_type", "EGroup"},
+	},
+	{
+		type = ST_SGROUP,
+		name = "sgroup_target",
+		aliases = {"sgroup"},
+		description = "SGroup to be used as prefab target",
+		requirement = {"target_type", "SGroup"},
+	},
+	{
+		type = ST_STRING,
+		name = "waypoints",
+		description = "Existing Waypoint spline for AI to follow",
+		requirement = {"target_type", "Waypoints"},
+	},
+	{
+		type = ST_TABLE,
+		name = "intents",
+		description = "List of AI Intents to enforce. Only units matching the specified intent are accepted. Empty implies all units are acceptable",
+		multiplicity = "multiple",
+		requirement = {"behaviour", "Hold", "Defend", "Capture", "Push", "Patrol", "Wave", "Guard", "GuardSmoothPoints", "Homing", "Stroll", "Assault"}, -- everything except Plan
+		itemSchema = {	
+			{
+				type = ST_PBG,
+				name = "intent",
+				blueprintType = "ai_prefab_intent",
+				description = "AI Intent",					
+			},	
+		},
+	},
+	{
+		type = ST_TABLE,
+		name = "children",
+		description = "Children ai prefabs",
+		multiplicity = "multiple",
+		requirement = {"behaviour", "Plan"},
+		itemSchema = {	
+			{
+				type = ST_PREFAB,
+				name = "aiprefab",
+				description = "AIPrefabs to associate with this parent aiprefab. Must be of correct prefab type",
+				default = "",				
+			},
+			{
+           		type = ST_BOOLEAN,
+           		name = "parallel",
+				description = "Run this behaviour in parallel with the next. If set to false, this behaviour must complete before next child can start",
+				default = false,                           
+       		},
+		},
+	},
+}
+
+aiprefab_schema = {																	-- schema ALWAYS named the prefab name with schema on the end
+	type = "Prefab",
+	name = "aiprefab",																-- name the prefab uses to identify itself
+	description = "aiprefab",														-- name to display for this prefab
+	script = "aiprefab.scar",														-- script associated with this prefab, needs to be imported into the prefab data script
+	compatibility = {
+		"triggerable",
+	},
+	proxy = "art/debug/test_lod/test_lod",		-- some identifying visual we can see in the WB - something to click on, too, in order to select the prefab
+	itemSchema = schema
+}

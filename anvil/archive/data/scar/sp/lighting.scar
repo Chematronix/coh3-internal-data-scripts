@@ -1,0 +1,145 @@
+-----------------------------------------------------------------------
+-- Mission lighting
+--
+-- Sets the lighting transitions used by missions & campaign skirmishes.
+--
+-- (c) Relic Entertainment 2020
+-----------------------------------------------------------------------
+
+-----------------------------------------------------------------------
+-- Lighting transitions by mission sceneref
+-----------------------------------------------------------------------
+
+local _lighting = {
+	--------------------------------
+	-- Skirmishes
+	--------------------------------
+	cliff_1_sp = { 			-- scenario = "cliff_crossing_2p"
+		{{"day_bright"}},
+		{{"day_hazy"}},
+	},
+	rails_1_sp = {			-- scenario = "industrial_railyard_6p_mkii"
+		{{"slot_01_skirmish_01"}, {"slot_02_skirmish_01"}},
+	},
+	rural_1_sp = {			-- scenario = "rural_town_4p"
+		{{"dusk"}},
+		{{"slot_02_skirmish_01"}},
+	},
+	ruins_1_sp = {			-- scenario = "mountain_ruins_8p_mkii"
+		{{"potenza_light"}},
+		{{"potenza_dark"}},
+	},
+	ruins_2_sp = {			-- scenario = "mountain_ruins_8p_mkii"
+		{{"potenza_light"}},
+		{{"potenza_dark"}},
+	},
+	urban_1_sp = {			-- scenario = "torrente_4p_mkiii"
+		{{"slot_01_skirmish_01"}, {"slot_02_skirmish_01"}},	
+	},
+	urban_2_sp = {			-- scenario = "torrente_4p_mkiii"
+		{{"slot_01_skirmish_02"}, {"slot_02_skirmish_02"}},
+	},
+	castle_1_sp = {			-- scenario = "rural_castle_4p"
+		{{"slot_01_skirmish_02"}, {"slot_02_skirmish_02"}},
+	},
+	beach_1_sp = {			-- scenario = "twin_beach_2p_mkii"
+		{{"slot_01_skirmish_01"}, {"slot_02_skirmish_01"}},
+	},
+	
+	--------------------------------
+	-- Italy missions
+	--------------------------------
+	--airfield_pomigliano = {
+		--{{"new_renderer_default"}, {"bombardment"}},
+	--},
+	--anzio_invasion = {
+		--{{"new_renderer_default"}, {"transition_02", 900}},
+	--},
+	--foggia_airfield_capture = {
+		--{{"new_renderer_default"}, {"transition_02", 900}},
+	--},
+	--foggia_defend_01 = {
+		--{{"foggia_defend_01"}, {"foggia_defend_02", 300}},
+	--},
+	--gaeta_defend_01 = {
+		--{{"bombed_2"}},
+	--},
+	--hill_highway_destroy = {
+		--{{"evening_cool"}},
+	--},
+	--hill_highway_repair_01 = {
+		--{{"transition_01"}, {"bombed_01"}},
+	--},
+	--italy_sniper_01 = {
+		--{{"new_renderer_dusk" }},
+	--},
+	--ortona_defend_01 = {
+		--{{"default_day"}},
+	--},
+	--potenza_defend_01 = {
+		--{{"default_day"}},
+	--},
+	--salerno_defend_01 = {
+		--{{"default_day"}},
+	--},
+	--seaside_destroy = {
+		--{{"evening_cool"}},
+	--},
+	--seaside_tank_ace = {
+		--{{"new_renderer_default"}},
+	--},
+	--river_crossing_raid = {
+		--{{"new_renderer_default"}},
+	--},
+	--rural_town_hunt01 = {
+		--{{"dusk"}},
+	--},
+}
+
+-----------------------------------------------------------------------
+-- Scripting framework
+-----------------------------------------------------------------------
+
+Core_RegisterModule("Lighting")
+
+-----------------------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------------------
+
+-- Called by OnInit() in core.scar at start of initialization sequence.
+-- Sets the lighting transition(s) for the mission.
+function Lighting_OnInit()
+	local options = _lighting[string.lower(Game_GetScenarioFileName())]
+	if options then
+		-- If there is more than one lighting option then pick one to use at random
+		for i = #options,1,-1 do 
+			if World_GetRand(1,i) == 1 then
+				Lighting_SetTransitions(options[i])
+				break
+			end
+		end
+	end
+end
+
+
+-- Set the transition based on the player's index for campaign skirmishes. 
+-- Otherwise, sets lighting transitions based on a table of one or more time-stamped lighting transitions
+-- (e.g. {{"dark"}, {"dawn", 100}, {"day, 200"}, ...}).
+function Lighting_SetTransitions(transitions)
+	if #transitions == 2 and string.find(transitions[1][1], "skirmish") then
+		-- Set lighting transitions based on player index for campaign skirmishes
+		local i = math.fmod(World_GetPlayerIndex(Game_GetLocalPlayer()) + 1, 2) + 1
+		local state = transitions[i][1]
+		local time = transitions[i][2] or 0
+		Game_TransitionToState(state, time)
+		print("Game_TransitionToState("..state..", "..time..")")
+	else
+		-- Apply lighting transition(s)
+		for _, transition in pairs(transitions) do
+			local state = transition[1]
+			local time = transition[2] or 0
+			Game_TransitionToState(state, time)
+			print("Game_TransitionToState("..state..", "..time..")")
+		end
+	end
+end

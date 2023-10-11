@@ -1,0 +1,692 @@
+----------------------------------------------------------------------------------------------------------------
+-- Dynamic training systems
+-- Copyright 2018 SEGA Corporation, Developed by Relic Entertainment
+
+-- See: Dynamic Training
+--      http://relicwiki/display/CARD/Dynamic+Training	(in the EE, you can Control-click on this link to go there)
+
+--? @group scardoc;Training;Goals
+
+----------------------------------------------------------------------------------------------------------------
+
+__t_trainingTimerIDOffset = 3000
+__t_trainingVeryLargeTimerDuration = 9999
+__t_trainingInfiniteTimerDuration = 99999
+
+local _isTrainingEnabled = false
+
+local GoalTelemetryState = 
+{
+	Triggered = 0,
+	Regressed = 1,
+	Completed = 2,
+}
+
+local GoalStartReason =
+{
+	None = 0,
+	Started = 1,
+	Reminder = 2,
+	Regressed = 3,
+}
+
+local GoalCompletionReason =
+{
+	None = 0,
+	Bypass = 1,
+	Completed = 3,
+	Regressed = 4,
+}
+
+Core_RegisterModule("Training")
+
+local function Training_LogTelemetry(goalSequence, state, completionReason, isReminder)
+	
+	if goalSequence == nil then
+		return
+	end
+	
+	local hintID = goalSequence.id
+	local subHintID = ""
+	local currentGoalIndex = goalSequence.currentGoalIndex	
+	local completionTime = 0
+	if currentGoalIndex > 0 and currentGoalIndex <= #goalSequence.goals then
+		local goal = goalSequence.goals[currentGoalIndex]
+		
+		if goal.data ~= nil and goal.data.ID ~= nil then
+			subHintID = goal.data.ID
+		else
+			subHintID = "No ID provided"
+		end
+		
+		if state == GoalTelemetryState.Completed and completionReason ~= GoalCompletionReason.Bypass then
+			if _TimerTable[goal.timerID] == nil then
+				fatal( caller .. ": Trying to record completion time for a goal whose timer does not exist")
+			end
+			completionTime = Timer_GetElapsed(goal.timerID) * 1000 -- convert to ms as the underlying c++ api only takes integer
+		end
+	end
+	
+		
+	UI_LogLearningSystemTelemetry(hintID, subHintID, currentGoalIndex - 1, state, completionReason, completionTime, isReminder)
+end
+
+local function Training_CreateTagInternal(key, data, subkey)
+	if scartype(key) == ST_STRING then
+		UI_CreateTag(key, data)
+		return
+	end
+	
+	if scartype(key) == ST_PBG then
+		UI_CreateTagForPBG(key, data)
+		return
+	end
+	
+	if scartype(key) == ST_ENTITY and Entity_IsValid(Entity_GetID(key)) then
+		if (subkey ~= nil) then
+			UI_CreateTagForEntityWithSubkey(key, subkey, data)
+		else
+			UI_CreateTagForEntity(key, data)
+		end
+		return
+	end
+	
+	if scartype(key) == ST_SQUAD and Squad_IsAlive(key) then -- Squad_IsAlive check added as a temp fix for Slice 3 demo
+		if (subkey ~= nil) then
+			UI_CreateTagForSquadWithSubkey(key, subkey, data)
+		else
+			UI_CreateTagForSquad(key, data)
+		end
+		return
+	end
+	
+	if scartype(key) == ST_NUMBER then
+		if (subkey ~= nil) then
+			UI_CreateTagForUIDWithSubkey(key, subkey, data)
+		else
+			UI_CreateTagForUID(key, data)
+		end
+		return
+	end
+	
+	if scartype(key) == ST_SCARPOS then
+		UI_CreateTagForPosition(key, data)
+		return
+	end
+	
+	if scartype(key) == ST_TABLE then
+		if key.orderNum ~= nil then
+			UI_CreateTagForOrder(key.orderNum, data)
+		end
+	end
+	
+end
+
+local function Training_CreateTag(goal)
+	if goal.triggeredAudioEvent ~= nil then
+		Sound_Play2D(goal.triggeredAudioEvent)
+	end
+	
+	if (goal.uiCreate ~= nil) then
+		goal.uiCreate(goal)
+	end
+	
+	Training_CreateTagInternal(goal.key, goal.data, goal.subkey)
+	
+	-- create extra tags
+	for i, tag in pairs(goal.exTags) do
+		Training_CreateTagInternal(tag.key, tag.data, tag.subkey)
+	end
+	
+	goal.isTagged = true
+end
+
+local function Training_DestroyTagInternal(key, subkey)
+	if scartype(key) == ST_STRING then
+		UI_DestroyTag(key)
+		return
+	end
+	
+	if scartype(key) == ST_PBG then
+		UI_DestroyTagForPBG(key)
+		return
+	end
+	
+	if scartype(key) == ST_ENTITY then
+		if (subkey ~= nil) then
+			UI_DestroyTagForEntityWithSubkey(key, subkey)
+		else
+			UI_DestroyTagForEntity(key)
+		end
+		return
+	end
+	
+	if scartype(key) == ST_SQUAD then
+		if (subkey ~= nil) then
+			UI_DestroyTagForSquadWithSubkey(key, subkey)
+		else
+			UI_DestroyTagForSquad(key)
+		end
+		return
+	end
+	
+	if scartype(key) == ST_NUMBER then
+		if (subkey ~= nil) then
+			UI_DestroyTagForUIDWithSubkey(key, subkey)
+		else
+			UI_DestroyTagForUID(key)
+		end
+		return
+	end
+	
+	if scartype(key) == ST_TABLE then
+		if key.orderNum ~= nil then
+			UI_DestroyTagForOrder(key.orderNum)
+		end
+	end
+	
+	if scartype(key) == ST_SCARPOS then
+		UI_DestroyTagForPosition(key)
+		return
+	end
+end
+
+local function Training_DestroyTag(goal)
+	Training_DestroyTagInternal(goal.key, goal.subkey)
+	
+	if (goal.uiDestroy ~= nil) then
+		goal.uiDestroy(goal)
+	end
+	
+	-- destroy extra tags
+	for i, tag in pairs(goal.exTags) do
+		Training_DestroyTagInternal(tag.key, tag.subkey)
+	end
+	goal.isTagged = false
+end
+
+function Training_StartCurrentGoal(goalSequence, goalStartReason)
+	local goal = goalSequence.goals[goalSequence.currentGoalIndex]
+	if goal.onStart ~= nil then
+		goal.onStart(goalStartReason, goal)
+	end
+	
+	Training_StartTimer(goal.timerID)	
+	Training_CreateTag(goal)
+
+	-- telemetries
+	if goalStartReason == GoalStartReason.Regressed then
+		Training_LogTelemetry(goalSequence, GoalTelemetryState.Regressed, GoalCompletionReason.None, false --[[isReminder]])
+	elseif goalStartReason == GoalStartReason.Started then
+		Training_LogTelemetry(goalSequence, GoalTelemetryState.Triggered, GoalCompletionReason.None, false --[[isReminder]])
+	elseif goalStartReason == GoalStartReason.Reminder then
+		Training_LogTelemetry(goalSequence, GoalTelemetryState.Triggered, GoalCompletionReason.None, true --[[isReminder]])
+	end
+end
+
+local function Training_CompleteCurrentGoal(goalSequence, goalCompleteReason)
+	local goal = goalSequence.goals[goalSequence.currentGoalIndex]
+	Training_DestroyTag(goal)
+	if goal.onComplete ~= nil then
+		goal.onComplete(goalCompleteReason, goal)
+	end
+	
+	-- telemetries
+	if goalCompleteReason == GoalCompletionReason.Completed then
+		Training_LogTelemetry(goalSequence, GoalTelemetryState.Completed, GoalCompletionReason.Completed, false --[[isReminder]])
+	end
+end
+
+function Training_GetNewTimerID()
+	local ret = __t_trainingTimerIDOffset
+	__t_trainingTimerIDOffset = __t_trainingTimerIDOffset + 1
+	return ret
+end
+
+--? @shortdesc Creates a goal object
+--? @extdesc A goal represents one step in a training sequence. Each goal gets one hint popup. Only one goal hint will
+--? 	be displayed at a time.
+--? key is the object to visually anchor the hint to. This can be:
+--?		- the name of an adornable UI element
+--?		- an entity 
+--? 	- a squad
+--?		- the pbg of a production button
+--? 	- a squad or entity unique id
+--? 	- UniqueSquadButton will anchor to the hero selection
+--? 	- UniqueRespawningSquadButton will anchor to the respawning hero element
+--? 	- CenterLeftSecondaryInfo will anchor to the information panel left of the command card.
+--?     - table containing orderNum field as the index of a squad/entity order from tuning_simulation to create a hint for
+--? data is a table of arbitrary information for use in the isCompletePredicate and is routed to the ui. It should include:
+--? 	Message: LocID of text to display on the hint pop-up. Use 
+--? 	DataTemplate: template for the UI hint. Options are:
+--?			- LeftClickTrainingDataTemplate: a box displaying an image of a left clicking mouse and message text
+--? 		- RightClickTrainingDataTemplate: a box displaying an image of a right clicking mouse and message text
+--? 		- PanCameraTrainingDataTemplate: a box displaying an image of a middle clicking mouse and message text
+--? 		- GenericTrainingDataTemplate: a box displaying message text
+--? 		- LargeGenericDataTemplate: a larger box dislpaying message text
+--? isComplete predicate to run on the goal. It should return true if and only if the goal is complete.
+--? @result Goal
+--? @args String/Entity/Squad/PBG key, Table data, Predicate(Goal) isComplete
+function Training_Goal(key, data, isComplete)
+	return 
+	{
+		data = data,
+		key = key,
+		completePredicate = isComplete,
+		timerID = 0, -- This will be provided with a valid value by Training_GoalSequence
+		exTags = {},
+		onStart = nil,
+		onComplete = nil,
+	}
+end
+
+--? @shortdesc add an extra tag to an existing goal. 
+function Training_AddExTagToGoal(goal, tagKey, tagData, tagSubkey)
+	table.insert(goal.exTags, {key = tagKey, data = tagData, subkey = tagSubkey} )
+end
+
+--? @shortdesc register two callbacks to a goal. One fires when starts while the other fires when completes.
+--? @args goal: the target goal
+--? onStart: a function with GoalStartReason, Goal as argument. E.G. function OnGoalStart(startReason, goal)
+--? onComplete: a function with GoalCompletionReason, Goal as argument. E.G. function OnGoalComplete(completeReason, goal)
+function Training_AddCallbacksToGoal(goal, onStart, onComplete)
+	goal.onStart = onStart
+	goal.onComplete = onComplete
+end
+
+--? @shortdesc register two UI handlers to a goal
+--? @args goal: the target goal
+--? create: a function with Goal as argument, responsible for UI creation/show
+--? destroy: a function with Goal as argument, responsible for UI destruction/hide
+function Training_AddUIHandlersToGoal(goal, create, destroy)
+	goal.uiCreate = create
+	goal.uiDestroy = destroy
+end
+
+--? @shortdesc Creates a goal sequence
+--? @extdesc A Goal Sequence represents the a single high-level task to prompt the user to do, composed of one or more 
+--?		goals. The goal sequence will begin when its trigger predicate is met, assuming its ignore and bypass conditions
+--?		aren't met first. Only one goal sequence will be run at a time.
+--? id - unique string id to identify or reference the goal seqeuence
+--? repeatMax - if the goal sequence has been completed less than repeatMax times and its triggerPredicate passes, the
+--?		goal sequence will run again. Infinite if less than 0.
+--? remindMax - if the . Infinite if less than 0.
+--? trigger - predicate to run on the goal sequence. If it returns true, start the goal sequence.
+--? ignore - predicate to run on the goal sequence. If it returns true, don't show the goal sequence even if trigger 
+--?		passes. 
+--? remind - predicate to run on the goal sequence. It should indicate that the player needs a reminder on how to do
+--?		the task. If it returns true, show the goal sequence again. 
+--? bypass - predicate to run on the goal sequence. It should indicate whether the player has completed the goal
+--?		without prompting. If true, the goal sequence will be ended and its completion count incremented.
+--? canRegress - if the complete condition for the current goal in the sequence stops passing, back up to the previous
+--?		goal
+--? goals - list of goals to proceed through to as part of this goal sequence
+--? repeatMax and remindMax will be infinite if less than 0.
+--? @result GoalSequence
+--? @args String id, Int repeatMax, Int remindMax, Predicate(GoalSequence) trigger, Predicate(GoalSequence) ignore, Predicate(GoalSequence) remind, Predicate(GoalSequence) bypass, canRegress, Array<Goal> goals, String goalTriggeredAudioEvent, String completeAudioEvent
+function Training_GoalSequence(id, repeatMax, remindMax, trigger, ignore, remind, bypass, canRegress, goals, goalTriggeredAudioEvent, completeAudioEvent)
+	local newSequence =
+	{
+		id = id,
+		repeatMax = repeatMax,
+		remindMax = remindMax,
+		triggerPredicate = trigger,
+		ignorePredicate = ignore,
+		remindPredicate = remind,
+		bypassPredicate = bypass,
+		isActive = false,
+		currentGoalIndex = 1,
+		timesMet = 0,
+		timerID = Training_GetNewTimerID(),
+		temp = {}, -- This value is reset after completion or cancellation of a sequence cycle (per repeat)
+		canRegress = canRegress,
+		goalTriggeredAudioEvent = goalTriggeredAudioEvent or "sfx_ui_event_learning_hint_play",
+		sequenceCompleteAudioEvent = completeAudioEvent or "sfx_ui_event_learning_goal_sequence_complete",
+		enabled = true,
+		timeoutID = Training_GetNewTimerID(),
+	}
+	
+	if _TrainingForceGoalsActive == false then
+		if _TrainingData[id] ~= nil then
+			newSequence.timesMet = _TrainingData[id].timesMet
+		end
+	end
+	
+	newSequence.goals = goals
+	
+	for i, goal in pairs(goals) do
+		newSequence.goals[i].timerID = Training_GetNewTimerID()
+		newSequence.goals[i].temp = {}
+		newSequence.goals[i].triggeredAudioEvent = goalTriggeredAudioEvent
+	end
+	
+	return newSequence
+end
+
+function Training_InvalidateCurrentTag()	
+	if not _isTrainingEnabled then
+		-- no action required. The tag will be re-created when enabled.
+		return
+	end
+	
+	for i, goalSequence in pairs(_TrainingGoals) do
+		if goalSequence.isActive then
+			if goalSequence.currentGoalIndex > 0 then
+				local goal = goalSequence.goals[goalSequence.currentGoalIndex]				
+				Training_DestroyTag(goal)
+				goal.isInvalidated = true				
+			end
+		end
+	end	
+end
+
+function Training_StartTimer(timerID)
+	if Timer_Exists(timerID) then
+		Timer_End(timerID)
+	end
+
+	Timer_Start(timerID, __t_trainingInfiniteTimerDuration)
+		
+	if Misc_IsCommandLineOptionSet("immediateTags") then
+		Timer_Advance(timerID, __t_trainingVeryLargeTimerDuration)
+	end
+end
+
+--? @shortdesc Adds a sequence of goals to the training system, also starting the sequence's timer
+function Training_AddGoalSequence(goalSequence)
+	
+	if goalSequence.timesMet >= goalSequence.repeatMax + goalSequence.remindMax 
+		and goalSequence.repeatMax >= 0 
+		and goalSequence.remindMax >= 0 then
+		return
+	end
+	
+	Training_StartTimer(goalSequence.timerID)
+	table.insert(_TrainingGoals, goalSequence)
+end
+
+function Training_RemoveGoalSequence(goalSequence)
+
+	local matchIndex = -1
+	for i, goal in pairs(_TrainingGoals) do
+		if goal.id == goalSequence.id then
+			matchIndex = i
+			break
+		end
+	end
+	
+	if matchIndex ~= -1 then
+		table.remove(_TrainingGoals, matchIndex)
+	end
+end
+
+function Training_ResetTimers()
+	for i, goalSequence in pairs(_TrainingGoals) do
+		Training_StartTimer(goalSequence.timerID)
+		
+		for x, goal in pairs(goalSequence.goals) do
+			Training_StartTimer(goal.timerID)
+		end
+	end
+end
+
+function Training_EndGoalSequence(goalSequence, succeeded)
+	Sound_Play2D(goalSequence.sequenceCompleteAudioEvent)
+	local goalSequenceWasActive = goalSequence.isActive
+	goalSequence.isActive = false
+	
+	Training_ResetTimers()
+	
+	if goalSequenceWasActive and goalSequence.goals[goalSequence.currentGoalIndex] then
+		Training_CompleteCurrentGoal(goalSequence, GoalCompletionReason.Completed)
+	end
+	
+	if succeeded then
+		goalSequence.timesMet = goalSequence.timesMet + 1
+		
+		if _TrainingData[goalSequence.id] == nil then
+			_TrainingData[goalSequence.id] = {}
+		end
+		
+		_TrainingData[goalSequence.id].timesMet = goalSequence.timesMet
+		
+		Game_StoreTableData("TrainingData", _TrainingData)
+		Game_SaveDataStore("TrainingData", "", true)
+	end
+	
+	goalSequence.currentGoalIndex = 1
+	goalSequence.temp = {}
+end
+
+function Training_RegressToPreviousGoal(goalSequence)
+	Training_CompleteCurrentGoal(goalSequence, GoalCompletionReason.Regressed)
+	
+	goalSequence.currentGoalIndex = goalSequence.currentGoalIndex - 1
+	
+	Training_StartCurrentGoal(goalSequence, GoalStartReason.Regressed)
+end
+
+function Training_ProceedToNextGoal(goalSequence)
+	
+	Training_CompleteCurrentGoal(goalSequence, GoalCompletionReason.Completed)
+	
+	goalSequence.goals[goalSequence.currentGoalIndex].temp = {}
+	goalSequence.currentGoalIndex = goalSequence.currentGoalIndex + 1
+
+	if goalSequence.goals[goalSequence.currentGoalIndex] ~= nil then 	
+		Training_StartCurrentGoal(goalSequence, GoalStartReason.Started)
+	else
+		Training_EndGoalSequence(goalSequence, true)
+	end
+end
+
+local function Training_UpdateCurrentGoal(goal)
+	if goal.isInvalidated ~= nil and goal.isInvalidated then
+		goal.isInvalidated = false
+		Training_CreateTag(goal)
+	end
+end
+
+function Training_UpdateGoalSequence(goalSequence)
+
+	-- Bypass trigger (the user has already completed the task without prompting)
+	if goalSequence.bypassPredicate ~= nil and goalSequence.bypassPredicate(goalSequence) then
+		Training_LogTelemetry(goalSequence, GoalTelemetryState.Completed, GoalCompletionReason.Bypass, false --[[isReminder]])			
+		Training_EndGoalSequence(goalSequence, true)			
+	end
+	
+	if not goalSequence.isActive then
+		
+		-- Initial and repeat triggers
+		if goalSequence.repeatMax < 0 or goalSequence.timesMet < goalSequence.repeatMax then
+			if goalSequence.triggerPredicate(goalSequence) then
+				goalSequence.isActive = true
+				Training_StartCurrentGoal(goalSequence, GoalStartReason.Started)
+			end
+		else
+			-- Reminders
+			if goalSequence.remindMax < 0 or goalSequence.timesMet < goalSequence.repeatMax + goalSequence.remindMax then
+				if goalSequence.remindPredicate ~= nil and goalSequence.remindPredicate(goalSequence) then
+					goalSequence.isActive = true
+					Training_StartCurrentGoal(goalSequence, GoalStartReason.Reminder)
+				end
+			else
+				Training_RemoveGoalSequence(goalSequence)
+			end
+		end	
+	else
+		if goalSequence.currentGoalIndex > 0 then
+			local currentGoal = goalSequence.goals[goalSequence.currentGoalIndex]
+			Training_UpdateCurrentGoal(currentGoal)
+		end
+	end
+		
+	if goalSequence.ignorePredicate == nil or not goalSequence.ignorePredicate(goalSequence) then
+		if goalSequence.isActive then
+			if goalSequence.goals[goalSequence.currentGoalIndex].completePredicate(goalSequence.goals[goalSequence.currentGoalIndex]) 
+			then
+				Training_ProceedToNextGoal(goalSequence)
+				return
+			end
+		
+			if goalSequence.isActive 
+			and goalSequence.canRegress 
+			and goalSequence.currentGoalIndex > 1 
+			and not goalSequence.goals[goalSequence.currentGoalIndex-1].completePredicate(goalSequence.goals[goalSequence.currentGoalIndex-1]) 
+			then 
+				Training_RegressToPreviousGoal(goalSequence)
+				return
+			end
+		end
+	else
+		-- In cases where a predicate becomes ignored while active
+		if goalSequence.isActive then
+			Training_EndGoalSequence(goalSequence, false)
+		end
+	end	
+end
+
+local function Training_OnGoalEnabled(goal)
+	if Timer_Exists(goal.timerID) then
+		Timer_Resume(goal.timerID, false)
+	end
+	
+	if goal.isTagged ~= nil and not goal.isTagged then
+		Training_CreateTag(goal)
+	end		
+end
+
+local function Training_OnGoalDisabled(goal)
+	if Timer_Exists(goal.timerID) then
+		Timer_Pause(goal.timerID)
+	end
+	
+	if goal.isTagged ~= nil and goal.isTagged then
+		Training_DestroyTag(goal)
+	end
+end
+
+local function Training_GetAndUpdateIsEnabled()
+
+	local fallbackValue = false
+	local isTrainingEnabled = SystemConfig_GetSettingBool("DynamicTraining", fallbackValue)
+	
+	if isTrainingEnabled ~= _isTrainingEnabled then
+		_isTrainingEnabled = isTrainingEnabled
+		for i, goalSequence in pairs(_TrainingGoals) do
+			if goalSequence.isActive then
+				if goalSequence.currentGoalIndex >= 1 then
+					local goal = goalSequence.goals[goalSequence.currentGoalIndex]					
+					if _isTrainingEnabled then
+						Training_OnGoalEnabled(goal)
+					else
+						Training_OnGoalDisabled(goal)
+					end
+				end
+			end
+		end		
+	end
+	
+	return _isTrainingEnabled
+end
+
+function Training_Update()	
+	if not Training_GetAndUpdateIsEnabled() then
+		return false
+	end
+	
+	-- Do not update when cinematic is playing
+	if Util_IsCinematicMode() then
+		return
+	end	
+	
+	for i, goalSequence in pairs(_TrainingGoals) do
+		if goalSequence.isActive then
+			Training_UpdateGoalSequence(goalSequence)
+			return
+		end
+	end
+	
+	for i, goalSequence in pairs(_TrainingGoals) do
+		-- skip disabled goal sequences
+		if goalSequence.enabled then
+			Training_UpdateGoalSequence(goalSequence)
+			if goalSequence.isActive then
+				return
+			end
+		end
+	end
+end
+
+function Training_ForceGoalsActive()
+	_TrainingForceGoalsActive = true
+	for i, goalSequence in pairs(_TrainingGoals) do
+		goalSequence.timesMet = 0
+	end
+end
+
+--? @shortdesc Enable/disable goal sequence
+--? @extdesc Also restarts the timer for the goal sequence
+--? @args GoalSequence goalSequence, Boolean enabled
+function Training_EnableGoalSequence(goalSequence, enabled)
+	if enabled then
+		Training_StartTimer(goalSequence.timerID)
+	else
+		Timer_End(goalSequence.timerID)
+	end
+	
+	goalSequence.enabled = enabled	
+end
+
+--? @shortdesc Enable/disable goal sequence with given id
+--? @args String id, Boolean enabled
+function Training_EnableGoalSequenceByID(id, enabled)
+	for i, goalSequence in pairs(_TrainingGoals) do
+		if goalSequence.id == id then
+			Training_EnableGoalSequence(goalSequence, enabled)
+			return
+		end
+	end
+end
+
+function Training_Init()
+
+	Game_LoadDataStore("TrainingData", "", true)
+	_TrainingData = Game_RetrieveTableData("TrainingData", false)
+	if _TrainingData == nil then
+		_TrainingData = {}
+	end
+	
+	_TrainingGoals = {}
+	_TrainingForceGoalsActive = false
+	
+	if Misc_IsCommandLineOptionSet("notraining") or World_IsReplay() then
+		return
+	end
+	
+	-- check user setting
+	local fallbackValue = false
+	_isTrainingEnabled = SystemConfig_GetSettingBool("DynamicTraining", fallbackValue)
+
+	if Misc_IsCommandLineOptionSet("forceEnableTags") then
+		Training_ForceGoalsActive()
+	end
+	
+	Rule_AddInterval( Training_Update, 0.5)
+end
+
+function Training_OnReloadUI()
+	for i, goalSequence in pairs(_TrainingGoals) do
+		if goalSequence.isActive then
+			local currentGoal = goalSequence.goals[goalSequence.currentGoalIndex]
+			if (currentGoal.uiDestroy ~= nil) then
+				currentGoal.uiDestroy(currentGoal)
+			end
+			if (currentGoal.uiCreate ~= nil) then
+				currentGoal.uiCreate(currentGoal)
+			end
+		end
+	end
+end
+
+Scar_AddInit( Training_Init )

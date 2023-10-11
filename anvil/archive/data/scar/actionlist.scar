@@ -1,0 +1,4665 @@
+--
+-- Action Lists
+--
+-- Run a list of actions from a data table
+--
+
+--
+-- See: Mission-o-Matic: Conditions and Actions
+--      http://relicwiki/display/CARD/Mission-o-Matic%3A+Conditions+and+Actions	(in the EE, you can Control-click on this link to go there)
+--
+import("ui/hpat_enum_util.scar")
+import("anvil.scar")
+import("objectiveutil.scar")
+import("gameplay/event_cues.scar")
+import("ui/scriptable_panel_ui.scar")
+import("loyalty.scar")
+import("prefabs/schemas/training_prefab_util.scar")
+
+WAIT_FOR_ACTION_TO_FINISH = true 		-- An action can return this flag to make the manager wait until the action calls Action_Finish(action) to indicate
+										-- that it has finished before the manager progresses with the next action. 
+
+local campaign_battle_sitrep_context = {}
+local default_camera_zoom = nil
+
+function ActionList_CreateMod_ZeroSquadPopcap(squad)
+	Squad_CompleteUpgrade(squad, BP_GetUpgradeBlueprint("zero_population"))
+end
+
+function ActionList_RemoveMod_ZeroSquadPopcap(squad)
+	Squad_RemoveUpgrade(squad, BP_GetUpgradeBlueprint("zero_population"))
+end
+
+function ActionList_Init(list)
+	
+	for index, action in pairs(list) do
+		
+		if scartype(_G["Action_"..action.actionName.."_Do"]) ~= ST_FUNCTION then
+			import("Actions/"..action.actionName..".scar")
+			import("Actions/"..action.actionName.."_Schema.scar")
+		end
+
+		
+		if scartype(action.actionList) == ST_TABLE then
+			ActionList_Init(action.actionList)
+		end
+		
+	end
+	
+end
+
+function ActionList_GetDebugName(listInfo)
+	local prefabDataPath = listInfo.actionList.prefabDataPath
+	local nextAction = listInfo.nextActionIndex
+	if prefabDataPath == nil then
+		return "Processing action ["..tostring(nextAction).."] of Anonymous Actionlist"
+	else
+		local len = #prefabDataPath
+		local pathstr = ""
+		for i=1, len do
+			local key = prefabDataPath[i]
+			pathstr = pathstr..tostring(key).."."
+		end
+		return "Processing action ["..tostring(nextAction).."] of Actionlist: ["..pathstr.."]"
+	end
+end
+
+function ActionList_PlayActions(list, context)
+	
+	context = context or {}
+	_ActionLists_Running = _ActionLists_Running or {}
+	
+	local new_id = ActionList_GetNewID()
+	
+	if next(list) ~= nil and list[1] == nil then
+		list = {list}
+	end
+	
+	-- "actionListInfo" details information about a list of actions, while "actionListInfo.actionList" is a full list of the actions in this sequence.
+	local actionListInfo = {
+		id = new_id,
+		runningAction = false,
+		nextActionIndex = 1,
+		done = false,
+		actionList = list,
+		context = context,
+	}
+	
+	if Misc_IsDevMode() and _ActionList_Starting ~= nil and _ActionList_Starting.actionList == list then
+		error("Immediate Loop detected when "..ActionList_GetDebugName(_ActionList_Starting))
+	end
+	
+	_ActionList_Starting = actionListInfo
+	
+	local done = ActionList_ProcessList(actionListInfo)
+	
+	_ActionList_Starting = nil
+	
+	if not done then
+		-- We didn't finish the list immediately so we need to let the actionlist
+		-- manager take over this list.
+		-- While an actionlist is ongoing we don't allow saving to allow timed scripted sequences
+		-- to be constructed through actionlists that don't need to be restored mid-sequence.
+		actionListInfo.saveBlockerID = World_AddScriptedSaveBlocker()
+		table.insert(_ActionLists_Running, actionListInfo)
+		
+		-- kick off the manager, if it isn't already running
+		if Rule_Exists(ActionList_Manager) == false then
+			Rule_Add(ActionList_Manager)
+		end
+	end
+	
+	return actionListInfo
+	
+end
+
+function ActionList_IsActionlistRunning(listInfo)
+	return not listInfo.done
+end
+
+function ActionList_IsAnyRunning()
+	return _ActionLists_Running ~= nil and #_ActionLists_Running > 0
+end
+
+function ActionList_GetNewID()
+	
+	if _ActionList_CurrentID == nil then
+		_ActionList_CurrentID = 1
+	else
+		_ActionList_CurrentID = _ActionList_CurrentID + 1
+	end
+	
+	return _ActionList_CurrentID
+	
+end
+
+-- Iterate a single actionlist and run it's actions until we're supposed to wait.
+function ActionList_ProcessList(listInfo)
+	
+	-- Debug Print which actionlist we're processing and at what action within the
+	-- list we're starting from. 
+	if Misc_IsDevMode() and (not listInfo.runningAction) then
+		print(ActionList_GetDebugName(listInfo))
+	end
+	
+	while listInfo and listInfo.runningAction == false and listInfo.done == false do 
+		
+		if listInfo.nextActionIndex <= #listInfo.actionList then
+
+			local action = listInfo.actionList[listInfo.nextActionIndex]
+			
+			action.context = listInfo.context
+			
+			listInfo.runningAction = true
+			listInfo.timeOfActionStart = World_GetGameTime()
+			if Action_Do(action, listInfo.context, listInfo) ~= WAIT_FOR_ACTION_TO_FINISH then
+				
+				listInfo.runningAction = false
+			end
+			
+			listInfo.nextActionIndex = listInfo.nextActionIndex + 1
+			
+		else
+			
+			listInfo.done = true
+			if listInfo.saveBlockerID ~= nil then
+				World_RemoveScriptedSaveBlocker(listInfo.saveBlockerID)
+				listInfo.saveBlockerID = nil
+			end
+		end
+		
+	end
+	
+	return listInfo.done
+end
+
+-- Does the work of firing off actions if there are lists that need processing
+function ActionList_Manager_Do()
+
+	for i =1,#_ActionLists_Running do 
+		local listInfo = _ActionLists_Running[i]
+		ActionList_ProcessList(listInfo)
+	end
+	
+	-- remove any finished lists
+	for index = #_ActionLists_Running, 1, -1 do
+		if _ActionLists_Running[index].done == true then
+			table.remove(_ActionLists_Running, index)
+		end
+	end
+
+end
+
+-- rule that runs every frame, and fires off actions as long as there are lists that need processing
+function ActionList_Manager()
+	
+	ActionList_Manager_Do()
+	
+	if #_ActionLists_Running == 0 then
+		MissionPrint("no actionlists running")
+		Rule_RemoveMe()
+	end
+	
+end
+
+function ActionList_CampaignBattleSitrepDone()
+	if UI_IsFullscreenVideoPlaying(campaign_battle_sitrep_context.sitrep_video) == false then
+		Action_Finish(campaign_battle_sitrep_context.listInfo)
+		-- Unpausing Simulation
+		Game_PauseSimulation(SimulationPause_None)
+		UI_SetEnablePauseMenu(true)
+		if campaign_battle_sitrep_context.audio_end_event ~= nil and campaign_battle_sitrep_context.audio_end_event ~= "" then
+			Sound_Play2D(campaign_battle_sitrep_context.audio_end_event)
+		end
+		Rule_RemoveMe()
+	end
+end
+
+__MM_ACTIONS = {
+	None = true,
+	MissionComplete = true,
+	CallScarFunction = true,
+	MoveUnit = true,
+	UseAbility = true,
+	SpawnSquads = true,
+	SpawnEntities = true,
+	DeSpawn = true,
+	PlayerSetResource = true,
+	PlayerSetPopulationCap = true,
+	SpawnMarkerFX = true,
+	StartIntel = true,
+	LaunchCustomMission = true,
+	StartObjective = true,
+	CompleteObjective = true,
+	StopObjective = true,
+	FailObjective = true,
+	ObjectiveAddHealthBar = true,
+	UpgradeCommand = true,
+	SetInvulnerable = true,
+	SetOwner = true,
+	LaunchPrefabOrPlaybill = true,
+	StopPrefabOrPlaybill = true,
+	AddSGroupToGroup = true,
+	SetLedger = true,
+	Retreat = true,
+	ClearSGroup = true,
+	AddObjHintpointTo = true,
+	SpawnRandomTarget = true,
+	RemoveObjHintpoint = true,
+	SetNarrativeInfluenceValueToUse = true,
+	SetInteractionStage = true,
+	FOWReveal = true,
+	FadeToBlack = true,
+	ReSpawn = true,
+	Wait = true,
+	UIFireEventCue = true,
+	CameraSplinePan = true,
+	CameraFocusEvent = true,
+	NISStart = true,
+	AILockSquads = true,
+	AIUnlockSquads = true,
+	FOWUnReveal = true,
+	Garrison = true,
+	AISetPlayerStrategy = true,
+	GroupKill = true,
+	SetHealth = true,
+	AIPushMilitaryTargetEGroupScore = true,
+	AIPopMilitaryTargetEGroupScore = true,
+	AIPushMilitaryTargetScoreMultiplier = true,
+	AIPopMilitaryTargetScoreMultiplier = true,
+	AIPushUnitTypeTargetScoreMultiplier = true,
+	AIPopUnitTypeTargetScoreMultiplier= true,
+	FillSGroupFromMarker = true,
+	SetNarrativeVariable = true,
+	RandomWeightedActions = true,
+	CreateDynamicObjective = true,
+	TrainingGoalSequence = true,
+	SetNarrativeActionEnabled = true,
+	Loop = true,
+	FillSGroupWithPlayerSquads = true,
+}
+
+-- Takes an action, finds the appropriate function to do the action, and calls it.
+-- That action function should either:
+--   a)  return true if it's immediate and the list manager can carry on to the next item.
+--   b)  not return anything now, but call Action_Done() when it is done and the list manager can carry on
+function Action_Do(action, context, listInfo)
+	
+	-- if the function reference is a string, try to replace the string with a function
+	if scartype(action.action) == ST_STRING then
+		action.action_name = action.action
+	
+		local func = _G["Action_"..action.action.."_Do"]
+		
+		if scartype(func) == ST_FUNCTION then
+			action.action = func
+		end
+		
+	end
+	
+	if scartype(action.action) == ST_FUNCTION then
+	
+		local str = "Running action"
+		if scartype(action.action_name) == ST_STRING then
+			str = str.." "..action.action_name
+		end
+		if scartype(action.logging) == ST_STRING then
+			str = str.." - "..action.logging
+		end
+		MissionPrint(str)
+		
+		-- TODO Placing this validation here. We should have a separate playbill
+		-- type for campaign versus mission scripts (requires a prefabdata migration)
+		if World_IsCampaignMetamapGame() then
+			assert(__MM_ACTIONS[action.action_name], "Unsupported Metamap Action: "..action.action_name)
+		end
+		
+		-- The playbill, or something with it, needs to do into here as Context
+		return action.action(action, context, listInfo)
+		
+	end
+	
+	return true
+
+end
+
+-- @shortdesc Callback to indicate to the ActionList system that the action has completed, and the next one can be triggered
+-- @args Table context
+-- @result NIL
+function Action_Finish(listInfo)
+
+	listInfo.runningAction = false
+	
+end
+
+
+-------------------------
+--PLAYBILL ACTIONS--
+-------------------------
+
+------------------------------------------------------
+--GENERAL
+
+function Action_None_Do(action, context)
+	-- Nothing to do
+end
+
+function Action_SetLedger_Do(action, context) --id, number, operator
+	
+	local id = action.id
+	local number = action.number
+	local operator = nil
+	
+	if(action.math_type_string_for_ledger ~= nil) then
+		operator = action.math_type_string_for_ledger
+	end
+	
+	MissionOMatic_SetLedger(id, number, operator)
+	
+end
+
+function Action_SetNarrativeInfluenceValueToUse_Do(action, context) -- character_name, influence_value, math_operation_for_narrative_influence
+	
+	local character_name = action.narrative_influence_character_name
+	local influence_value_param = action.narrative_influence_value
+	
+	local math_operation = action.math_operation_for_narrative_influence
+	
+	SetNarrativeInfluenceValueToUse(character_name, influence_value_param, math_operation)
+	
+end
+
+function Action_SetNarrativeActionEnabled_Do(action, context)
+	
+	local action_name = action.narrative_action_name
+	local action_enabled = action.narrative_action_enabled
+	
+	World_SetNarrativeActionEnabled(action_name, action_enabled)
+	
+end
+
+function Action_ChangePartisanHubRelationPoint_Do(action, context)
+	
+	if action.relationship_set_type == "ADD" then
+		if action.apply_to_each_entity then
+			for i = 1, EGroup_Count(action.egroup) do
+				local entity = EGroup_GetEntityAt(action.egroup, i)
+				Entity_ModifyPartisanHubRelationValue(entity, action.number)
+			end
+		else
+			Entity_ModifyPartisanHubRelationValue(EGroup_GetEntityAt(action.egroup, 1), action.number)
+		end
+	elseif action.relationship_set_type == "SET" then
+		if action.apply_to_each_entity then
+			for i = 1, EGroup_Count(action.egroup) do
+				local entity = EGroup_GetEntityAt(action.egroup, i)
+				Entity_SetPartisanHubRelationValue(entity, action.number)
+			end
+		else
+			Entity_SetPartisanHubRelationValue(EGroup_GetEntityAt(action.egroup, 1), action.number)
+		end
+	end
+	
+end
+
+function Action_SetPartisanHubActivated_Do(action, context)
+	
+	for i = 1, EGroup_Count(action.egroup) do
+		local entity = EGroup_GetEntityAt(action.egroup, i)
+		local is_partisan_hub = Entity_IsPartisanHub(entity)
+		if is_partisan_hub then
+			Entity_ActivatePartisanHub(entity, action.enable)
+		end
+	end
+	
+end
+
+function Action_Wait_Do(action, context, listInfo)
+	
+	local seconds = action.seconds
+	if action.debug_skip == true then
+		action.debug_skip = nil
+		return false -- This means it will not wait
+	end
+	
+	if action.max_seconds > 0  and action.max_seconds > seconds then
+		seconds = World_GetRand(seconds, action.max_seconds)
+	end
+	
+	action.waiting_context = listInfo
+	action.waiting_id = Rule_AddOneShot(Action_Wait_Complete, seconds, {listInfo = listInfo})
+	MissionPrint("Wait Duration: " .. seconds)
+	return WAIT_FOR_ACTION_TO_FINISH		-- magic value to indicate that this action is not done yet!
+	
+end
+
+function Action_Wait_Complete(context, data)
+	Action_Finish(data.listInfo)
+end
+
+-- Calls the function with action.work_data or context as the argument
+function Action_CallScarFunction_Do(action, context)
+	
+	local func = nil
+	if action.work_func ~= nil then
+		func = action.work_func
+	else
+		func = _G[action.function_name]
+	end
+	
+	if scartype(func) == ST_FUNCTION then 
+		return func(action.work_data or context)		
+	end
+
+end
+
+function Action_Loop_Do(action, context)
+
+	local playbillInfo = context.playbillInfo
+	if action.count ~= nil then
+		
+		if playbillInfo.numLoopsMade == nil then
+			playbillInfo.numLoopsMade = 0
+		end
+		
+		if action.count >= 1 and playbillInfo.numLoopsMade >= action.count then
+			return
+		end
+		
+		playbillInfo.numLoopsMade = playbillInfo.numLoopsMade + 1
+		
+	end
+
+	-- find the target stage
+	local stage = action.stage or 1
+	
+	-- Request that the playbill advances to this stage next stage transition (after this
+	-- actionlist is done updating)
+	Playbill_SetNextStage(playbillInfo, stage)
+end
+
+function Action_LoadScenario_Do(action, context)
+
+	Game_LoadSP(action.scenario, 1)
+
+end
+
+function Action_Print_Do(action, context)
+
+	MissionPrint(action.message)
+
+end
+
+function Action_BookmarkTime_Do(action, context) -- id
+
+	if g_timeStamps == nil then
+		g_timeStamps = {}
+	end
+	
+	-- remove any existing bookmarks with the same name
+	for index = #g_timeStamps, 1, -1 do 
+		local bookmark = g_timeStamps[index]
+		if bookmark.id == action.id then
+			table.remove(g_timeStamps, index)
+		end
+	end
+	
+	
+	local bookmark = {
+		id = action.id,
+		timeStamp = World_GetGameTime(),
+	}
+	
+	table.insert(g_timeStamps, bookmark)
+	
+end
+
+function Action_LoadAtmosphere_Do(action, context) -- stringName, duration
+	
+	Game_TransitionToState(action.atmosphere_name, action.duration)
+	
+end
+
+function Action_PlayCampaignBattleSitrep_Do(action, context, listInfo)
+	
+	local playSitrepAsEvent = function()
+		Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+		if action.fade_in then
+			Game_FadeToBlack(FADE_OUT, 1)
+			CTRL.Event_Delay(1) 
+			CTRL.WAIT()
+			Game_FadeToBlack(FADE_IN, 1)
+		end
+		PlayCampaignBattleSitrep_Play(action, context, listInfo)
+	end
+	
+	if action.play_as_event then
+		Event_Start(playSitrepAsEvent, 1)
+	else 
+		if action.fade_in then
+			Game_FadeToBlack(FADE_OUT, 1)
+			Rule_AddOneShot(PlayCampaignBattleSitrep_FadeInAndStart, 1, {action = action, context = context, listInfo = listInfo})
+		else
+			PlayCampaignBattleSitrep_Play(action, context, listInfo)
+		end
+	end
+end
+
+function PlayCampaignBattleSitrep_Play(action, context, listInfo)
+	local auto_close_sitrep = Misc_IsCommandLineOptionSet("pressanykey")
+	
+	-- Pausing Simulation and Input based on current design
+	if action.audio_start_event ~= nil and action.audio_start_event ~= "" then
+		Sound_Play2D(action.audio_start_event)
+	end
+	Game_PauseSimulation(SimulationPause_Video)
+	UI_SetEnablePauseMenu(false)
+	campaign_battle_sitrep_context = {}
+	campaign_battle_sitrep_context.listInfo = listInfo
+	campaign_battle_sitrep_context.audio_end_event = action.audio_end_event
+	campaign_battle_sitrep_context.sitrep_video = action.sitrep_video
+	UI_PlayFullscreenVideo(action.sitrep_video)
+	Rule_Add(ActionList_CampaignBattleSitrepDone)
+	return WAIT_FOR_ACTION_TO_FINISH  -- the CampaignBattleSitrep UI will trigger ActionList_CampaignBattleSitrepDone() when it's done	
+end
+
+function PlayCampaignBattleSitrep_FadeInAndStart(context, data)
+	Game_FadeToBlack(FADE_IN, 1)
+	PlayCampaignBattleSitrep_Play(data.action, data.context, data.listInfo)
+end
+-------------------------------------------------------
+-- OBJECTIVE actions (start, complete and fail)
+
+function Action_StartObjective_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	local objectiveData = objective.objectiveData
+	
+	Objective_Start(objectiveData, not action.silent)
+	
+end
+
+function Action_CompleteObjective_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	
+	if objective ~= nil then
+		
+		local objectiveData = objective.objectiveData
+		
+		Objective_Complete(objectiveData, not action.silent)
+		
+	elseif scartype(action.id) == ST_STRING then
+		MissionPrint("WARNING: No Objective with '"..action.id.. "' ID found for the CompleteObjective Action")
+	else
+		MissionPrint("WARNING: No Objective with that ID found for the CompleteObjective Action")
+	end
+	
+end
+
+function Action_FailObjective_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	
+	if objective ~= nil then
+		
+		local objectiveData = objective.objectiveData
+		
+		if Objective_IsActive(objectiveData) then
+
+			Objective_Fail(objectiveData, not action.silent)
+		end
+		
+	elseif scartype(action.id) == ST_STRING then
+		MissionPrint("WARNING: No Objective with '"..action.id.. "' ID found for the FailObjective Action")
+	else
+		MissionPrint("WARNING: No Objective with that ID found for the FailObjective Action")
+	end
+end
+
+function Action_StopObjective_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	
+	if objective ~= nil then
+		
+		local objectiveData = objective.objectiveData
+		
+		Objective_StopTimer(objectiveData)
+		Objective_StopCounter(objectiveData)
+		
+		Objective_Stop(objectiveData)
+		
+	elseif scartype(action.id) == ST_STRING then
+		MissionPrint("WARNING: No Objective with '"..action.id.. "' ID found for the StopObjective Action")
+	else
+		MissionPrint("WARNING: No Objective with that ID found for the StopObjective Action")
+	end
+	
+end
+
+function Action_CreateWarningObjective_Do(action, context) --title, description, start_intel, complete_intel, fail_intel, parent_id, id, countCondition, objective_type
+	
+	local objective =  {}
+	
+	objective.beatType = "Warning"
+	objective.objectiveID = action.id
+	objective.countCondition = action.countCondition
+	objective.timer_start_time = action.timer_start_time
+	objective.flashThreshold = action.flashThreshold
+	objective.prefabData = objective 
+	-- NOTE: The purpose of this separate prefabData field was to set the stage
+	-- for an optimization where static prefabdata would be separated from
+	-- the missionomatic objective table to avoid cloning extra data.
+	-- Missionomatic_objectives references the .prefabData field so it
+	-- expects that it is there, although it is simply pointing
+	-- to the same table it was before (the objective wrapper table here,
+	-- or created by objectiveutil_InitializeObjective in CreateDynamicObjective
+	
+	if action.parent_id == '' then
+		
+		action.parent_id = nil
+		
+	end
+	
+	local startIntel, completeIntel, failIntel
+
+	startIntel = objectiveutil_CreateNarrativeEvent(action.start_intel_event)
+	completeIntel = objectiveutil_CreateNarrativeEvent(action.complete_intel_event)
+	failIntel = objectiveutil_CreateNarrativeEvent(action.fail_intel_event)
+	
+	objective.objectiveData = 
+	{
+		Title = action.title,
+		Description = action.description,
+		
+		Intel_Start = startIntel,
+		Intel_Complete = completeIntel,
+		Intel_Fail = failIntel,
+		
+		type = OT_Information,
+	}
+	if action.objective_type == "OT_PRIMARY" then
+		objective.objectiveData.type = OT_Primary
+	elseif action.objective_type == "OT_SECONDARY" then
+		objective.objectiveData.type = OT_Secondary
+	elseif action.objective_type == "OT_BONUS" then
+		objective.objectiveData.type = OT_Bonus
+	else
+		objective.objectiveData.type = OT_Information
+	end
+	
+	local parent_objective = MissionOMatic_FindObjective(action.parent_id, false)
+	
+	MissionOMatic_InitializeObjective(objective, parent_objective)
+	
+end
+
+function Action_CreateDynamicObjective_Do(action, context)
+	
+	-- choose objective to spawn from variants
+	local index = action.forced_index or World_GetRand(1, #action.objectiveVariants)
+	
+	-- Moved clone from after ObjectiveInit to before so that
+	-- rules set up in ObjectiveInit can access the specific Objective ID
+	-- of the objective which is set in MissionOMatic_InitializeObjective
+	
+	-- NOTE: ideally we can avoid cloning here. Currently the objective variant
+	-- table is the same table as the missionomatic objective wrapper table (the table
+	-- first setup in ObjectiveInit). There is a memory optimization (and for the full save, also
+	-- a *time* optimization since less to save => quicker save) here by avoiding cloning and
+	-- keeping prefabdata const, separating out the processed/dynamic fields from the prefabdata)
+	local variant_copy = Clone(action.objectiveVariants[index])
+	local objective = objectiveutil_ObjectiveInit(variant_copy, context)
+	
+	MissionOMatic_InitializeObjective(objective, nil, context)
+	Objective_Start(objective.objectiveData)
+end
+
+function Action_ObjectiveStartTimer_Do(action, context) --text, initialTime, countType, flashThreshold, useTimerBar
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objectiveData = objective.objectiveData
+	
+	local useTimerBar = action.useTimerBar
+	if useTimerBar == nil then
+		useTimerBar = true
+	end
+	local text = action.text
+	
+	local initialTime = action.initialTime
+	local flashThreshold = action.flashThreshold
+	if flashThreshold == -1 then
+		flashThreshold = nil
+	end
+	
+	local countType = COUNT_DOWN
+	if action.countType == "COUNT_UP" then
+		countType = COUNT_UP
+	end
+	
+	Objective_StartTimer(objectiveData, countType, initialTime, flashThreshold)
+	
+	if action.useTimerBar then
+		Objective_AddTimerBar(objectiveData, 1, text)
+	end
+	
+end
+
+function Action_ObjectiveStopTimer_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objectiveData = objective.objectiveData
+	
+	Objective_StopTimer(objectiveData)
+	
+end
+
+function Action_ObjectivePauseTimer_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objectiveData = objective.objectiveData
+	
+	Objective_PauseTimer(objectiveData)
+	
+end
+
+function Action_ObjectiveUnPauseTimer_Do(action, context)
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objectiveData = objective.objectiveData
+	
+	Objective_ResumeTimer(objectiveData)
+	
+end
+
+function Action_ObjectiveAddHealthBar_Do(action, context) --id, healthbar_index, target, egroup, sgroup, title, groups_to_track
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objectiveData = objective.objectiveData
+	local index = action.healthbar_index
+	local target = nil
+	local max_health = nil
+	if action.target == "EGROUP" then
+		target = action.egroup
+	elseif action.target == "SGROUP" then
+		target = action.sgroup
+	elseif action.target == "LEDGER" then
+		target = action.ledger_id
+		max_health = action.max_health
+	elseif action.target == "CONTEXT" then
+		target = Context_ExtractTargetFromContext(context)
+		local target_type = scartype(target)
+		if target_type ~= ST_ENTITY and target_type ~= ST_SQUAD then
+			error("Prefab action ObjectiveAddHealthBar expects a squad or entity context")
+		end
+	end
+
+	if target ~= nil and #action.groups_to_track > 0 then
+		error("Prefab action ObjectiveAddHealthBar has both a target and a list of groups_to_track. Please use either a single target OR groups_to_track.")
+	end
+	if target == nil then
+		target = {}
+		for i=1,#action.groups_to_track do
+			if action.groups_to_track[i].target_type == "EGroup" then
+				if action.groups_to_track[i].target_egroup == nil then
+					error("Prefab action ObjectiveAddHealthBar received a nil egroup in groups_to_track. Please specify an egroup.")
+				else
+					table.insert(target, action.groups_to_track[i].target_egroup)
+				end
+			elseif action.groups_to_track[i].target_type == "SGroup" then
+				if action.groups_to_track[i].target_sgroup == nil then
+					error("Prefab action ObjectiveAddHealthBar received a nil sgroup in groups_to_track. Please specify an sgroup.")
+				else
+					table.insert(target, action.groups_to_track[i].target_sgroup)
+				end
+			end
+		end
+	end
+	
+	local objectiveHealthBarArgs = {
+		index,
+		target,
+		action.title,
+		false,
+		max_health,
+		action.healthbar_weight
+	}
+	
+	Objective_AddHealthBar(objectiveData, table.unpack(objectiveHealthBarArgs))
+	objectiveData.addedHealthbar = objectiveHealthBarArgs
+end
+
+function Action_ObjectiveRemoveHealthBar_Do(action, context) --id, healthbar_index
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objectiveData = objective.objectiveData
+	local index = action.healthbar_index
+	
+	Objective_RemoveHealthBar(objectiveData, index)
+	objectiveData.addedHealthbar = nil
+	
+end
+
+-- objective_id, current_count, max_count
+function Action_ObjectiveSetCounter_Do(action, context)
+	local objective = MissionOMatic_FindObjective(action.objective_id)
+	if objective == nil then
+		error("Could not find objective with id"..action.objective_id)
+	end
+	
+	local max_count = action.max_count
+	if max_count == -1 then
+		max_count = nil
+	end
+	
+	Objective_SetCounter(objective.objectiveData, action.current_count, max_count)
+end
+
+function Action_ObjectiveIncreaseCounter_Do(action, context, listInfo)
+	local objective = MissionOMatic_FindObjective(action.objective_id)
+	if objective == nil then
+		error("Could not find objective with id"..action.objective_id)
+	end
+	if Objective_IsCounterSet(objective.objectiveData) then
+		Objective_IncreaseCounter(objective.objectiveData, action.increment_amount)
+	else
+		print("ObjectiveIncreaseCounter failed due to no counter set on ["..tostring(action.objective_id).."] while "..ActionList_GetDebugName(listInfo))
+	end
+end
+
+function Action_ObjectiveStopCounter_Do(action, context)
+	local objective = MissionOMatic_FindObjective(action.objective_id)
+	if objective == nil then
+		error("Could not find objective with id"..action.objective_id)
+	end
+	
+	Objective_StopCounter(objective.objectiveData)
+end
+
+function Action_ObjectiveSetCanFail_Do(action, context) --id, enable
+	
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	
+	objective.canFail = action.enable
+	
+end
+
+function Action_ObjectiveSetEnableTitlecard_Do(action, context)
+	local objective = MissionOMatic_FindObjective(action.id)
+	if objective == nil then
+		print("Could not find objective with id "..action.id)
+		return
+	end
+
+	if action.titlecard_type == "COMPLETE" then
+		objective.objectiveData.showCompletionTitle = action.enable
+	else
+		objective.objectiveData.showFailureTitle = action.enable
+	end
+end
+
+function Action_GameTextTitleFade_Do(action, context)
+	
+	if action.text ~= nil and action.text ~= "" then
+		Game_TextTitleFade(action.text, action.title_fade_in_time, action.duration, action.title_fade_out_time)	
+	elseif action.locID ~= nil then
+		Game_TextTitleFade(action.locID, action.title_fade_in_time, action.duration, action.title_fade_out_time)	
+	end	
+	
+end
+
+--
+-- MISSION COMPLETE and FAIL actions
+--
+
+function Action_MissionComplete_Do(action, context)
+	MissionPrint("Playtime in minutes: " .. string.format("%.2f", (World_GetGameTime() / 60)))
+	AnvilMissionWin()
+end
+
+function Action_MissionFail_Do(action, context)
+	MissionPrint("Playtime in minutes: " .. string.format("%.2f", (World_GetGameTime() / 60)))
+	AnvilMissionLose()
+end
+
+function Action_MultiplayerComplete_Do(action, context)
+	local match_result = {		
+		winners = {},
+		losers = {},
+		win_reason = WR_NONE,
+		point_of_interest = nil
+	}
+	local team = Player_GetTeam(action.player)
+	for i = 1, World_GetPlayerCount() do
+		local player = World_GetPlayerAt(i)
+		if Player_GetTeam(player) == team then
+			table.insert(match_result.winners, i)
+		else
+			table.insert(match_result.losers, i)
+		end
+	end
+	Core_CallDelegateFunctions("OnWinConditionTriggered", match_result)
+end
+
+--
+-- MUSIC ACTIONS
+--
+
+function Action_SetMusic_Do(action, context)
+	
+
+	local events = {action.music_state, action.music_combat_state, action.custom_music_event}
+
+	if action.unlock_intensity then 
+		Music_UnlockIntensity()
+	elseif action.music_intensity ~= "NONE" then
+	
+		local intensity = action.music_intensity
+		
+		print("Setting music to intensity "..intensity)
+		
+		if intensity == "COMBAT" then
+			intensity = MUSIC_COMBAT
+		elseif intensity == "EXPLORE" then
+			intensity = MUSIC_EXPLORE
+		end
+		
+		Music_LockIntensity(intensity)	
+	end
+	
+	for k, event in pairs(events) do
+		if event ~= nil and event ~= "" and event ~= "NONE" then
+			Sound_Play2D (event)
+		end
+	end
+	
+end
+
+function Action_PlayMusicStinger_Do(action, context)
+
+	if action.stinger ~= nil then 
+		Music_PlayStinger(action.stinger)
+	end
+		
+end
+
+
+--
+-- ZONE actions
+--
+
+
+
+--
+-- SET INTERACTION STAGE
+--
+
+function Action_SetInteractionStage_Do(action, context)
+	
+	if action.interaction_stage ~= nil then
+		World_SetInteractionStage(action.interaction_stage)	
+	end
+	
+end
+
+
+--
+-- E-CAM SEQUENCE
+--
+
+-- Initialization before play E-Cam
+local function Action_ExpositionCameraBegin()
+	Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+end
+
+-- Cleaning up after E-Cam finishes
+local function Action_ExpositionCameraEnd()
+	Util_ExitCinematicMode()
+end
+
+-- Callback function triggered by FE after use clicked the skip NIS hot key
+function Action_SkipNIS()
+	if not Event_IsBeingSkipped() then
+		Event_Skip()
+		Action_ExpositionCameraEnd()
+	end
+end
+--
+-- OTHER CAMERA
+--
+
+function Action_CameraFocusEvent_Do(action, context, listInfo)
+	
+	local target = nil
+	if action.position_type_string == "POSITION" then
+		target = action.dest_position
+	elseif action.position_type_string == "SGROUP" then
+		if SGroup_CountSpawned(action.target_sgroup) > 0 then
+			target = action.target_sgroup
+		end
+	elseif action.position_type_string == "EGROUP" then
+		if EGroup_CountSpawned(action.target_egroup) > 0 then
+			target = action.target_egroup
+		end
+	elseif action.position_type_string == "CONTEXT" then
+		target, _, _ = Context_ExtractInfoFromContext(context)
+	end
+	
+	--Fail out early and silently if the target is not valid
+	if target == nil then
+		return nil
+	end
+	
+	target = Util_GetPosition(target)
+	
+	local onNarrativeStarted = function()
+		
+		local delay = math.max(action.duration - 0.2, 0.2)
+		local DEFAULT_GAME_HIDDEN_HUD_COMPONENT_FLAGS = {VF_ComponentHintPoint}
+	
+		--letterbox allowing selection for interactive dialogue
+		if World_IsCampaignMetamapGame() then
+			MetaMapInput_AddUILimits(
+				{IEF_Camera, IEF_Command},
+				DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS,
+				true,
+				"CameraFocusEvent")
+		end
+		
+		--camera
+		Camera_PanOverTimeTo(target, action.duration)
+		
+		Rule_AddOneShot(Action_CameraFocusEvent_Delay, delay)
+		
+	end
+	
+	-- Insert an empty narrative node to defer starting the focus event
+	ExecuteDynamicNarrativeNode("", onNarrativeStarted)
+	
+	-- Insert the requested narrative immediately after and zoom out when it's complete
+	return Action_StartIntel_Do(action, context, listInfo, Action_CameraFocusEvent_End)
+	
+end
+
+function Action_CameraFocusEvent_Delay(context, data)
+	Camera_StartZoomDistTo(40, 0.2)
+end
+function Action_CameraFocusEvent_End(context, data)
+	if World_IsCampaignMetamapGame() then
+		MetaMapInput_RemoveUILimits("CameraFocusEvent")
+	end
+	Camera_StartZoomDistTo(60, 0.2)
+end
+
+function Action_UIFireEventCue_Do(action)
+	
+	--Callback Function
+	local callback_function = nil
+	if action.callback_function ~= "" and scartype(_G[action.callback_function]) == ST_FUNCTION then
+		callback_function = _G[action.callback_function]
+	else
+		callback_function = __DoNothing
+	end
+	local id
+	if action.cue_category == "Call To Action" then
+		EventCues_CallToAction(action.cue_text, action.cue_type_cta, callback_function, action.position, action.duration)
+	elseif action.cue_category == "Influence" then
+		if action.cue_type_influence == "influence_gained" then
+			EventCues_InfluenceGained(action.cue_text, action.cue_description)
+		elseif action.cue_type_influence == "influence_reward_unlocked" then
+			EventCues_InfluenceRewardUnlocked(action.cue_text, action.cue_description)
+		end
+	else
+		local visibility = ECV_Queue
+		if action.cue_visibility == "None" then
+			visibility = ECV_None
+		elseif action.cue_visibility == "Title" then
+			visibility = ECV_Title
+		end
+		local fn = callback_function
+		if action.cue_move_camera then
+			fn = __UIFireEventCue_MoveCamera
+		end
+		id = UI_CreateEventCueClickable(
+			-1, -- -1 means use event_type for uniqueness
+			2, -- priority
+			action.duration,
+			5.0, -- seen lifetime
+			0, -- repeat count
+			0, -- repeat time
+			action.cue_text,
+			action.cue_description,
+			action.cue_type,
+			action.icon_name,
+			action.sound_name,
+			action.cue_red, action.cue_green, action.cue_blue, action.cue_alpha,
+			visibility,
+			fn)
+		
+		if action.show_blip then
+			local blip = {
+				position_type_string = action.position_type_string,
+				position = action.position,
+				blip_type = action.blip_type,
+				target_sgroup = action.target_sgroup,
+				target_egroup = action.target_egroup,
+				duration = math.min(action.duration, 7),		
+			}
+			Action_UIFireMinimapBlip_Do(blip, context)
+		end
+	end
+	
+	--Store data for move if necessary
+	if action.cue_move_camera then
+		_UIFireEventCue_data = _UIFireEventCue_data or {}
+		local target = nil
+		local target_name = ""
+		if action.position_type_string == "POSITION" then
+			target = action.position
+		elseif action.position_type_string == "SGROUP" then
+			target = action.target_sgroup
+			target_name = SGroup_GetName(target)
+		elseif action.position_type_string == "EGROUP" then
+			target = action.target_egroup
+			target_name = EGroup_GetName(target)
+		elseif action.position_type_string == "CONTEXT" then
+			target, _, _ = Context_ExtractInfoFromContext(context)
+		end
+		_UIFireEventCue_data[id] = {
+			target = target,
+			target_name = target_name,
+			callback_function = callback_function,
+			reset = action.cue_reset_camera,
+		}
+	end
+end
+
+function __UIFireEventCue_MoveCamera(id)
+	local data = _UIFireEventCue_data[id]
+	
+	if (scartype(data.target) == ST_SGROUP and (SGroup_Exists(data.target_name) == false or SGroup_CountSpawned(data.target) == 0)) or
+		(scartype(data.target) == ST_EGROUP and (EGroup_Exists(data.target_name) == false or EGroup_CountSpawned(data.target) == 0)) then
+		return
+	end
+		
+	Camera_MoveTo(data.target, nil, nil, nil, data.reset)
+	data.callback_function(id)
+end
+
+function __UIFireEventCue_MoveCamera_CycleGroup(id)
+	local data = _UIFireEventCue_data[id]
+	local target = nil
+	data.target_index = data.target_index or 0
+	if scartype(data.target) == ST_SGROUP and SGroup_Exists(data.target_name) and SGroup_Count(data.target) > 0 then
+		data.target_index = data.target_index % SGroup_Count(data.target)
+		target = SGroup_GetSquadAt(data.target, data.target_index + 1)
+	elseif scartype(data.target) == ST_EGROUP and EGroup_Exists(data.target_name) and EGroup_Count(data.target) > 0 then
+		data.target_index = data.target_index % EGroup_Count(data.target)
+		target = EGroup_GetEntityAt(data.target, data.target_index + 1)
+	else
+		return __UIFireEventCue_MoveCamera(id)
+	end
+	Camera_MoveTo(target, nil, nil, nil, data.reset)
+	data.target_index = data.target_index + 1
+	data.callback_function(id)
+end
+
+function Action_UIFireMinimapBlip_Do(action, context)
+	local target = action.position
+	if action.position_type_string == "SGROUP" then
+		target = action.target_sgroup
+	elseif action.position_type_string == "EGROUP" then
+		target = action.target_egroup
+	elseif action.position_type_string == "CONTEXT" then
+		target, _, _ = Context_ExtractInfoFromContext(context)
+	end
+	local id = UI_CreateMinimapBlip(target, action.duration, action.blip_type)
+	if scartype(action.blip_id) ==  ST_STRING and action.blip_id ~= "" then
+		_minimap_blip_tracker = _minimap_blip_tracker or {}
+		if _minimap_blip_tracker[action.blip_id] ~= nil then
+			error("Blip already tracked with id "..action.blip_id)
+		else
+			_minimap_blip_tracker[action.blip_id] = id
+		end
+	end
+end
+
+function Action_UIRemoveMinimapBlip_Do(action)
+	UI_DeleteMinimapBlip(_minimap_blip_tracker[action.blip_id])
+	_minimap_blip_tracker[action.blip_id] = nil
+end
+
+function Action_UIShowInfoPanel_Do(action, context)
+	local title = action.panel_title
+	local description = action.panel_description
+	if action.use_custom_title then
+		local title_fn = _G[action.panel_title_fn]
+		if scartype(title_fn) == ST_FUNCTION then
+			title = title_fn
+		else
+			error("No function with the name ["..action.panel_title_fn.."]")
+		end
+	end
+	if action.use_custom_description then
+		local description_fn = _G[action.panel_description_fn]
+		if scartype(description_fn) == ST_FUNCTION then
+			description = description_fn
+		else
+			error("No function with the name ["..action.panel_description_fn.."]")
+		end
+	end
+	ScriptablePanel_SetTitle(title)
+	ScriptablePanel_SetDescription(description)
+	ScriptablePanel_SetVerticalAlignment(action.vertical_alignment)
+	ScriptablePanel_SetIcon(action.icon_name)
+	ScriptablePanel_SetFlashing(action.flashing)
+	ScriptablePanel_Show()
+	
+	if action.duration > 0 then
+		Rule_AddOneShot(ScriptablePanel_Hide, action.duration)
+	end
+end
+
+
+function Action_UIFlashAbilityButton_Do(action, context)
+	
+	-- flashes an ability button.  boolean is to ensure the flash goes away after use
+	UI_FlashAbilityButton(action.abilityPBG, action.enable)
+	
+	
+end
+
+function Action_CameraSplinePan_Do(action, context) --spline.marker, duration, keepQueue, controlRotation, use_current_camera_position
+	
+	local spline = {}
+	
+	if action.duration <= 0 then
+		error("Camera spline duration should be a strictly positive number")
+	end
+	
+	if scartype(action.spline) == ST_TABLE then
+		
+		--changes format of spline so the camera function can read it
+		for i=1, #action.spline do
+			local marker = action.spline[i].marker
+			table.insert(spline, marker)
+		end
+		
+		if action.use_current_camera_position then
+			table.insert(spline, 1, Camera_GetPivot())
+		end
+		
+		if action.use_context_as_destination then
+			local context_location, _, _ = Context_ExtractInfoFromContext(context)
+			if context_location ~= nil then
+				table.insert(spline, context_location)
+			end
+		end
+		
+		if #spline >= 4 then
+			Camera_CatromSplinePanOverTime(spline, action.duration, action.keepQueue, action.controlRotation)
+		elseif #spline >= 2 then
+			Camera_LinearSplinePanOverTime(spline, action.duration, action.keepQueue, action.controlRotation)
+		else
+			assert(false, "Camera spline needs more than 1 control point.")
+		end
+		
+	else
+		print("WARNING: No spline found")
+	end
+	
+end
+
+function Action_PlayCaptureCamera_Do(action, context)
+	action.capture_camera_splines = action.capture_camera_splines or {}
+	local splines_to_use = {}
+	
+	-- Supporting backwards compatability START
+	local spline = action.spline_name
+	if spline == "" then
+		spline = nil
+	end
+	local spline2 = action.spline2_name
+	if spline2 == "" then
+		spline2 = nil
+	end
+	if spline == nil and next(action.capture_camera_splines) == nil then
+		error("No capture_camera_splines specified for PlayCaptureCamera")
+	end
+	if (spline ~= nil and action.capture_camera_splines[1] ~= nil) or
+		(spline2 ~= nil and action.capture_camera_splines[2] ~= nil) then
+		
+		error("Splines are specified in both deprecated string and the splines table")
+	end
+	-- If there is a spline mentioned through the deprecated way, add it to the tables of splines as index 1, 2
+	if spline ~= nil and action.capture_camera_splines[1] == nil then
+		table.insert(splines_to_use, 1, spline)
+		if spline2 ~= nil and action.capture_camera_splines[2] == nil then
+			table.insert(splines_to_use, 2, spline2)
+		end
+	end
+	-- Supporting backwards compatability END
+	
+	table.sort(action.capture_camera_splines, function(spline_data_1, spline_data_2)
+		return spline_data_1.spline_index < spline_data_2.spline_index end)
+	for i = 1, #action.capture_camera_splines - 1 do
+		if action.capture_camera_splines[i].spline_index == action.capture_camera_splines[i + 1].spline_index then
+			error("There are multiple capture camera spline names with spline_index "..action.capture_camera_splines[i].spline_index)
+		end
+	end
+	for i = 1, #action.capture_camera_splines do
+		local spline_data = action.capture_camera_splines[i]
+		table.insert(splines_to_use, spline_data.spline_name)
+	end
+	local camType = action.camType
+	local quickEnd = action.quickEnd or false
+	local cutOffset = action.cutOffset
+	local preSpeechDelay = action.preSpeechDelay or 2
+	local launchCam = nil
+	local speechEvent = action.narrative_event
+	local speechEventFinal = nil
+	
+	if speechEvent == "" then
+		speechEvent = nil
+	end
+	
+	if speechEvent ~= nil then
+		speechEventFinal = objectiveutil_StringToNarrativeEvent(speechEvent)
+	end
+	
+	local ExecuteSubsequentCaptureCameraSplines = function()
+		for i = 2, #splines_to_use do
+			Camera_Pop()
+			Camera_Push("camera_spline")
+			local subsequent_spline = _G[splines_to_use[i]]
+			if subsequent_spline == nil then
+				error("No spline exists with the name "..splines_to_use[i])
+			end
+			local time = Camera_ExecuteCaptureCameraPan(subsequent_spline)
+			CTRL.Event_Delay(time + 1)
+			CTRL.WAIT()
+		end
+	end
+	
+	local HideHUD = function(hide)
+		local player = Core_GetPlayersTableEntry(Game_GetLocalPlayer())
+		player.scarModel.hideMiniMap = hide
+		player.scarModel.hideCommandCard = hide
+		player.scarModel.hideGUC = hide
+		player.scarModel.hidePlayerAbilityPanel = hide
+		player.scarModel.hideBattleGroup = hide
+		UI_SetPlayerDataContext(player.id, player.scarModel)
+	end
+	
+	local IntroFunction = function()
+		-- First capture camera spline to execute
+		local first_spline = _G[splines_to_use[1]]
+		if first_spline == nil then
+			error("No spline exists with the name "..splines_to_use[1])
+		end
+		
+		local time = Camera_ExecuteCaptureCameraPan(first_spline)
+		if preSpeechDelay > 0 then
+			CTRL.Event_Delay(preSpeechDelay)
+			CTRL.WAIT()
+		end
+		if speechEventFinal ~= nil then
+			Subtitle_PlayNarrativeEvent(speechEventFinal)
+		end
+		CTRL.Event_Delay(time + cutOffset - preSpeechDelay)
+		CTRL.WAIT()
+		
+		-- Subsequent capture camera splines to execute
+		ExecuteSubsequentCaptureCameraSplines()
+		
+		if action.do_transition_to_end_position then
+			-- Transition from capture camera to game camera here
+			local last_spline_to_use = _G[splines_to_use[#splines_to_use]]
+			if #last_spline_to_use.positions < 3 then
+				error("All components of the ending spline position needs to be specified for spline "..splines_to_use[#splines_to_use])
+			end
+			if #last_spline_to_use.rotations < 2 then
+				error("All components of the ending spline rotation needs to be specified for spline "..splines_to_use[#splines_to_use])
+			end
+			
+			-- Setting up the transition spline
+			local transition_spline =
+			{
+				degree = 1,
+				duration = action.transition_to_end_duration,
+				easingMode = 2, --EaseInOut
+				easingType = 1397310790,--Sine
+				fov = last_spline_to_use.fov,
+				num_cvs = 2,
+				positions = {},
+				rotations = {}
+			}
+			
+			local last_spline_position_count = #last_spline_to_use.positions
+			local last_spline_rotation_count = #last_spline_to_use.rotations
+			
+			-- Positions is a flat list of x,y,z,x,y,z,x,y,z, ... x,y,z
+			-- Rotations is similarly a flat list of pitch,yaw,pitch,yaw,pitch,yaw, ... , pitch,yaw
+			-- However the new format is pitch,yaw,roll,pitch,yaw,roll ... (3 components
+			-- to each rotation CV, rather than 2).
+			-- So if the counts match in the rotations & positions lists, then we know
+			-- the spline is following the new format.
+			-- The new format has inverted rotation vectors. Camera_ExecuteCaptureCameraPan
+			-- handles both formats, but we need to know which format to adhere to
+			-- when constructing the transition spline table dynamically, which is what
+			-- this is for:
+			local newFormat = last_spline_position_count == last_spline_rotation_count
+			
+			-- Starting Position
+			table.insert(transition_spline.positions, last_spline_to_use.positions[last_spline_position_count - 2]) -- X
+			table.insert(transition_spline.positions, last_spline_to_use.positions[last_spline_position_count - 1]) -- Y
+			table.insert(transition_spline.positions, last_spline_to_use.positions[last_spline_position_count]) -- Z
+			
+			-- Starting Rotation
+			if newFormat then
+				table.insert(transition_spline.rotations, last_spline_to_use.rotations[last_spline_rotation_count - 2]) -- pitch
+				table.insert(transition_spline.rotations, last_spline_to_use.rotations[last_spline_rotation_count - 1]) -- yaw
+				table.insert(transition_spline.rotations, last_spline_to_use.rotations[last_spline_rotation_count]) -- roll
+			else
+				
+				table.insert(transition_spline.rotations, last_spline_to_use.rotations[last_spline_rotation_count - 1]) -- pitch
+				table.insert(transition_spline.rotations, last_spline_to_use.rotations[last_spline_rotation_count]) -- yaw
+			end
+			
+			-- Ending Position
+			table.insert(transition_spline.positions, g_target_eye.x)
+			table.insert(transition_spline.positions, g_target_eye.y)
+			table.insert(transition_spline.positions, g_target_eye.z)
+			
+			-- Ending Rotation 
+			local current_yaw = nil -- This gives us the yaw value of the last spline rotation
+			if newFormat then
+				-- Not only is the yaw in a different spot in the new format since there
+				-- are three components to each rotation CV, we need to invert the last
+				-- rotation if we want to compare to the camera's world euler rotation
+				-- rather than the camera transform (inversed) rotation.
+				local last_rotation_x = last_spline_to_use.rotations[last_spline_rotation_count - 2]
+				local last_rotation_y = last_spline_to_use.rotations[last_spline_rotation_count - 1] 
+				local last_rotation_z = last_spline_to_use.rotations[last_spline_rotation_count]
+				local last_rotation_inversed = Camera_InverseEuler(last_rotation_x, last_rotation_y, last_rotation_z)
+				current_yaw = last_rotation_inversed.y
+			else
+				current_yaw = last_spline_to_use.rotations[last_spline_rotation_count]
+			end
+			
+			local delta_yaw = math.abs(current_yaw - g_target_yaw)
+			if delta_yaw >= 180.0 then
+				--unwinding to get minimum angle
+				if g_target_yaw > current_yaw then
+					g_target_yaw = g_target_yaw - 360.0
+				else
+					g_target_yaw = g_target_yaw + 360.0
+				end
+			end
+
+			if newFormat then
+				-- The new format expects inverted rotations, so inverse the target rotation
+				-- that is based on the gameplay camera default values:
+				local inversed_target_rotation = Camera_InverseEuler(g_target_pitch, g_target_yaw, 0)
+				table.insert(transition_spline.rotations, inversed_target_rotation.x) --pitch
+				table.insert(transition_spline.rotations, inversed_target_rotation.y) --yaw
+				table.insert(transition_spline.rotations, inversed_target_rotation.z) -- roll
+				
+			else
+				table.insert(transition_spline.rotations, g_target_pitch) --pitch
+				table.insert(transition_spline.rotations, g_target_yaw) --yaw
+			end
+
+			-- Execute transition spline when all other intro splines have been executed
+			Camera_Pop()
+			Camera_Push("camera_spline")
+			local time = Camera_ExecuteCaptureCameraPan(transition_spline)
+			CTRL.Event_Delay(time + 1)
+			CTRL.WAIT()
+		end
+		
+		if quickEnd == false then
+			Game_FadeToBlack(FADE_OUT, 1)
+			CTRL.Event_Delay(1) 
+			CTRL.WAIT()
+			Camera_Pop()
+			Camera_ResetToDefault()
+			Camera_FocusOnPosition(Marker_GetPosition(action.end_position))
+			local zoom_dist_to_use = 30
+			if default_camera_zoom ~= nil then
+				zoom_dist_to_use = default_camera_zoom
+			end
+			Camera_StartZoomDist(20, zoom_dist_to_use, 4)
+			CTRL.Event_Delay(0.2)
+			CTRL.WAIT()
+			Game_FadeToBlack(FADE_IN, 2)
+		else
+			Camera_Pop()
+		end
+		FOW_UIUnRevealAll()
+		HideHUD(false)
+		if action.enable_gameplay_speech == false then
+			Sound_Play2D("mix_mute_speech_off")
+		end
+	end
+	
+	if camType == "INTRO" then
+		launchCam = function ()
+			HideHUD(true)
+			FOW_UIRevealAll()
+			if action.do_transition_to_end_position then
+				Rule_AddOneShot(_SetupTransitionSpineDataAndExecute, nil,
+					{
+						end_position = action.end_position,
+						IntroFunction = IntroFunction,
+					})
+			else
+				Camera_Push("camera_spline")
+				IntroFunction()
+			end
+		end
+	elseif camType == "OUTRO" then
+		launchCam = function()
+			Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+			Game_FadeToBlack(FADE_OUT, 1)
+			CTRL.Event_Delay(1.2) 
+			CTRL.WAIT()
+			FOW_UIRevealAll()
+			Camera_Push("camera_spline")
+			-- First capture camera spline to execute
+			local time = Camera_ExecuteCaptureCameraPan(_G[splines_to_use[1]])
+			Game_FadeToBlack(FADE_IN, 1)
+			if preSpeechDelay > 0 then
+				CTRL.Event_Delay(preSpeechDelay)
+				CTRL.WAIT()
+			end
+			if speechEventFinal ~= nil then
+				Subtitle_PlayNarrativeEvent(speechEventFinal)
+			end
+			CTRL.Event_Delay(time - preSpeechDelay)
+			CTRL.WAIT()
+			-- Subsequent capture camera splines to execute
+			ExecuteSubsequentCaptureCameraSplines()
+			Game_FadeToBlack(FADE_OUT, 1)
+			CTRL.Event_Delay(1)
+			CTRL.WAIT()
+			Action_MissionComplete_Do()
+			if action.enable_gameplay_speech == false then
+				Sound_Play2D("mix_mute_speech_off")
+			end
+		end
+	else
+		launchCam = function()
+			Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+			Game_FadeToBlack(FADE_OUT, 1)
+			CTRL.Event_Delay(1.2)
+			CTRL.WAIT()
+			Camera_ResetToDefault()
+			local end_position = Marker_GetPosition(action.end_position)
+			Camera_FocusOnPosition(end_position)
+			FOW_UIRevealAll()
+			_SetupTargetCameraRotation(end_position)
+			Camera_Push("camera_spline")
+			Game_FadeToBlack(FADE_IN, 1)
+			IntroFunction()
+			Util_ExitCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+			if action.enable_gameplay_speech == false then
+				Sound_Play2D("mix_mute_speech_off")
+			end
+		end
+	end
+	
+	local CaptureCameraExecute = function()
+		if action.enable_gameplay_speech == false then
+			Sound_Play2D("mix_mute_speech_on")
+		end
+		launchCam()
+	end
+	
+	-- Note: We cache the default_camera_zoom here instead of doing it in IntroFunction() as at that time, camera will be "camera_spline" instead of
+	-- whatever camera we would be using normally and Camera_Pop in IntroFunction is enqueued command meaning its delayed so we cannot
+	-- get the default zoom level of current camera from IntroFunction()
+	default_camera_zoom = Camera_GetDefaultDistance()
+	
+	Event_Start(CaptureCameraExecute, 1)
+end
+
+function _SetupTargetCameraRotation(end_position)
+	g_target_eye = Camera_GetEyePositionFromTarget(end_position)
+	g_target_yaw = Camera_GetDefaultYaw()
+	g_target_pitch = Camera_GetDefaultPitch()
+end
+
+function _SetupTransitionSpineDataAndExecute(context, data)
+	_SetupTargetCameraRotation(Marker_GetPosition(data.end_position))
+	Camera_Push("camera_spline")
+	Event_Start(data.IntroFunction, 1)
+end
+
+function Action_NISStart_Do(action, context)
+	
+	if World_IsCampaignMetamapGame() then
+		MetaMapInput_AddUILimits({IEF_Camera, IEF_Selection, IEF_Command}, DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS, true, "NISStart")
+	else
+		Util_EnterCinematicMode(DEFAULT_CINEMATIC_HIDDEN_GAME_COMPONENT_FLAGS)
+	end
+	
+end
+
+function Action_NISEnd_Do(action, context)
+	
+	if World_IsCampaignMetamapGame() then
+		MetaMapInput_RemoveUILimits("NISStart")
+	else
+		Util_ExitCinematicMode()
+	end
+	
+end
+
+function Action_UIAllTerritoryHide_Do(action, context)
+	
+	UI_AllTerritoryHide()
+	
+end
+
+function Action_UIAllTerritoryShow_Do(action, context)
+	
+	UI_AllTerritoryShow()
+	
+end
+
+function Action_SetSelectable_Do(action, context)
+	
+	if action.grouptype == "EGROUP" then
+		EGroup_SetSelectable(action.target_egroup, action.selectable)
+	elseif action.grouptype == "SGROUP" then
+		SGroup_SetSelectable(action.target_sgroup, action.selectable)
+	else
+		error("grouptype: "..action.grouptype.." is invalid")
+	end
+	
+end
+
+function Action_SetTargetingType_Do(action, context)
+	
+	local targeting_type_enum = nil
+	if action.targeting_type == "Automatic" then
+		targeting_type_enum = Targeting_Automatic
+	elseif action.targeting_type == "Manual" then
+		targeting_type_enum = Targeting_Manual
+	elseif action.targeting_type == "None" then
+		targeting_type_enum = Targeting_None
+	else
+		error("targeting_type: "..action.targeting_type.." is invalid")
+	end
+	
+	if action.grouptype == "EGROUP" then
+		EGroup_SetTargetingType(action.target_egroup, targeting_type_enum)
+	elseif action.grouptype == "SGROUP" then
+		Anvil_SGroupSetTargetingType(action.target_sgroup, targeting_type_enum)
+	else
+		error("grouptype: "..action.grouptype.." is invalid")
+	end
+	
+end
+
+--
+-- PAUSE EVENT
+--
+
+function Action_EventDelay_Do(action, context, listInfo) --duration --wait_for_action
+	
+	CTRL.Event_Delay(action.duration)
+	CTRL.WAIT()
+	
+	if action.wait_for_action == true then
+		Rule_AddOneShot(Action_Wait_Complete, action.duration, {listInfo = listInfo})
+		return WAIT_FOR_ACTION_TO_FINISH
+	end
+	
+end
+
+--
+-- CONVERT PLAYER
+--
+
+function Action_ConvertToPlayer_Do(action, context) 
+
+	local convertFrom = action.convertFromPlayer
+	local convertTo = action.convertToPlayer
+	local location = action.location
+	local range = action.range
+	
+	--buildings switch ownership
+	if action.convertBuildings == true then
+		
+		local group = EGroup_CreateUnique()
+		
+		--only switch if in this area
+		if location ~= nil and range ~= nil then
+			Player_GetAllEntitiesNearMarker(convertFromPlayer, group, location, range)
+		else
+			Player_GetAll(convertFromPlayer, group)
+		end
+		EGroup_SetPlayerOwner(group, convertToPlayer)
+		EGroup_Destroy(group)
+	
+	end
+	
+	--squads switch ownership
+	if action.convertSquads == true then
+		
+		local group = SGroup_CreateUnique()
+		
+		--only switch if in this area
+		if location ~= nil and range ~= nil then
+			Player_GetAllSquadsNearMarker(convertFromPlayer, group, location, range)
+		else
+			Player_GetAll(convertFromPlayer, group)
+		end
+		SGroup_SetPlayerOwner(group, convertToPlayer)
+		EGroup_Destroy(group)
+	end
+
+end
+
+
+--
+--ADD GROUP
+--
+function Action_AddEGroupToGroup_Do(action, context)
+	
+	local egroupA = action.egroupA
+	local egroupB = action.egroupB
+	
+	if scartype(egroupA) == ST_EGROUP and scartype(egroupB) == ST_EGROUP then
+		
+		EGroup_AddEGroup(egroupB, egroupA)
+		
+	end
+	
+end
+
+function Action_AddSGroupToGroup_Do(action, context)
+	
+	local sgroupA = action.sgroupA
+	local sgroupB = action.sgroupB
+	
+	if scartype(sgroupA) == ST_SGROUP and scartype(sgroupB) == ST_SGROUP then
+		
+		SGroup_AddGroup(sgroupA, sgroupB)
+		
+	end
+	
+end
+
+function Action_ClearSGroup_Do(action, context)
+	
+	local sgroupClear = action.sgroup
+	
+	
+	if scartype(sgroupClear) == ST_SGROUP then
+		
+		SGroup_Clear(sgroupClear)
+		
+	end
+	
+end
+
+function Action_FOWReveal_Do(action, context) --target_type, egroup, sgroup, position, duration
+	
+	local duration = action.duration
+	local target = action.target_type
+	
+	if target == "EGROUP" and action.egroup ~= nil then
+		
+		FOW_RevealEGroupOnly(action.egroup, duration)
+		
+	elseif target == "SGROUP" and action.sgroup ~= nil then
+		
+		FOW_RevealSGroupOnly(action.sgroup, duration)
+		
+	elseif target == "POSITION" then
+		
+		FOW_RevealArea(Marker_GetPosition(action.position), Marker_GetProximityRadiusOrDefault(action.position, 0), duration)
+		
+	elseif target == "PLAYER" then
+		
+		FOW_UIRevealAll()
+		
+	elseif target == "CONTEXT" then
+		local context_pos, _, context_radius = Context_ExtractInfoFromContext(context)
+		if context_pos == nil then
+			error("Failed to extract position to reveal from context, yet context was selected as the target type")
+		end
+		FOW_RevealArea(context_pos, context_radius or 0, duration)
+	end
+	
+end
+
+function Action_FOWUnReveal_Do(action, context) --target_type, egroup, sgroup, position
+	
+	local target = action.target_type
+	
+	if target == "EGROUP" and action.egroup ~= nil then
+		
+		--No function to do this, TODO add function that unreveals FOW_RevealEGroupOnly
+		MissionPrint("WARNING: Missing Functionality for EGroup Unreveal")
+		
+	elseif target == "SGROUP" and action.sgroup ~= nil then
+		
+		--No function to do this, TODO add function that unreveals FOW_RevealSGroupOnly
+		MissionPrint("WARNING: Missing Functionality for SGroup Unreveal")
+		
+	elseif target == "POSITION" then
+		
+		FOW_UnRevealArea(Marker_GetPosition(action.position))
+		
+	elseif target == "PLAYER" then
+		
+		FOW_UIUnRevealAll()
+		
+	elseif target == "CONTEXT" then
+		local context_pos, _, _ = Context_ExtractInfoFromContext(context)
+		if context_pos == nil then
+			error("Failed to extract position to unreveal from context, yet context was selected as the target type")
+		end
+		FOW_UnRevealArea(context_pos)
+	end
+	
+end
+
+
+
+--
+-- RESOURCES
+--
+
+function Action_Bonus_AddResources_Do(action, context)
+
+	local player = nil
+	
+	if action.targetPlayer ~= nil then
+		player = World_GetPlayerAt(action.targetPlayer)
+	else 
+		player = World_GetPlayerAt(1)
+	end
+	
+	if scartype(action.resources) == ST_TABLE then	
+	
+		for index, this in pairs(action.resources) do
+			
+			local resource_type
+			if this.type == "Manpower" then resource_type = RT_Manpower end
+			if this.type == "Munitions" then resource_type = RT_Munition end
+			if this.type == "Fuel" then resource_type = RT_Fuel end
+			
+			if resource_type ~= nil then Player_AddResource(player, resource_type, this.num) end
+			
+	    end
+	end
+end
+
+---
+--- UNIT MOVEMENT
+---
+
+function Action_MoveUnit_Do(action, context)
+	
+	local local_position = nil
+	
+	if action.position_type_string == "EGROUP" and scartype(action.target_egroup) == ST_EGROUP then	 
+		
+		if EGroup_CountSpawned(action.target_egroup) >= 1 then  			
+			local_position = EGroup_GetPosition(action.target_egroup)						
+		end
+		
+	elseif action.position_type_string == "SGROUP" and scartype(action.target_sgroup) == ST_SGROUP then	 
+		
+		if SGroup_CountSpawned(action.target_sgroup) >= 1 then			
+			local_position = SGroup_GetPosition(action.target_sgroup)
+		end
+		
+	elseif action.position_type_string == "POSITION" and scartype(action.dest_position) == ST_MARKER then	
+		
+		local_position = action.dest_position		
+		
+	elseif action.position_type_string == "CONTEXT" then
+		local_position, _, _ = Context_ExtractInfoFromContext(context)
+	end
+	
+	if local_position ~= nil then
+		
+			
+		local_position = Action_AddConcreteOffsetDistance(action, local_position)
+		
+		if scartype(action.sgroup) == ST_SGROUP and SGroup_Count(action.sgroup) >= 1 then
+			local offset, offsetDistance
+			if action.enable_random_move then
+				offset, offsetDistance = Action_GetRandomOffsetAndDistance(action.random_movement_min_radius, action.random_movement_max_radius)
+			end
+			
+			if action.ignore_destination_standable ~= nil and action.ignore_destination_standable == true then
+
+				local setMovementOverride = function(_, _, squad)
+					Squad_SetStateModelBool(squad, "move_ignore_destination_standable", true)
+					return false
+				end
+				SGroup_ForEach(action.sgroup, setMovementOverride)
+
+			end
+			
+			Cmd_Move(action.sgroup, local_position, action.delete_near_marker, nil, nil, offset, offsetDistance, nil) -- other options TBD
+		end
+	end
+	
+	
+end
+
+function Action_GetRandomOffsetAndDistance(min_radius, max_radius)
+	local randomProportion = World_GetRand(0, 1000) / 1000
+	local offsetDistance = min_radius + (randomProportion * (max_radius - min_radius))
+	local offset = World_GetRand(0, 6)
+	return offset, offsetDistance
+end
+
+function Action_AddConcreteOffsetDistance(action, target)
+	if action.add_concrete_offset then
+		local position = Util_GetPosition(target)
+		return World_Pos(position.x + action.offset_x, position.y, position.z + action.offset_z)
+	else
+		return target
+	end
+end
+
+
+
+function Action_Retreat_Do(action, context)
+	
+	if scartype(action.sgroup) == ST_SGROUP and SGroup_Count(action.sgroup) >= 1 then		
+		
+		if scartype(action.dest_position) == ST_MARKER then	
+			
+			Cmd_Retreat(action.sgroup, action.dest_position, action.delete_near_marker, nil, nil, action.vulnerable, action.allow_non_interactive_stages)
+		end
+	end	
+	
+end
+
+
+function Action_MaxSpeed_Do(action, context)
+	
+	Modify_UnitSpeed(action.sgroup, action.scale_factor)
+	
+end
+
+function Action_SGroupWarpTo_Do(action, context)
+
+	if SGroup_CountSpawned(action.sgroup) >= 1 then
+		SGroup_WarpToMarker(action.sgroup, action.dest_position)
+	end
+	
+end
+---
+--- TIMER
+---
+
+function Action_StartTimer_Do(action, context)
+	
+	Timer_Start(action.timerID, action.period)
+	
+	if action.display == true then
+		Timer_DisplayOnScreen(action.timerID)
+		local flashTargetTime = action.flashTime 
+		local flashState = false
+		
+		Rule_AddInterval(Action_ShowTimer, 1, {outTimerID = action.timerID, outDisplay = action.display, outFlash = action.flash, outFlashState = flashState, outPeriod = action.period, outFlashTargetTime = flashTargetTime})
+	end
+	
+end
+
+function Action_ShowTimer(context, input)
+	local currentTime = math.floor(Timer_GetRemaining(input.outTimerID))
+	
+	if input.outFlash ~= true then
+	
+		if currentTime > 0 then
+			Timer_DisplayOnScreen(input.outTimerID)
+		elseif currentTime <= 0 then
+			Timer_End(input.outTimerID)
+			Rule_RemoveMe()
+		end
+	elseif input.outFlash == true then
+		if currentTime > 0 and currentTime > input.outFlashTargetTime then
+			
+			Timer_DisplayOnScreen(input.outTimerID)
+			
+		elseif currentTime > 0 and currentTime <= input.outFlashTargetTime then
+			
+			if input.outFlashState == false then
+				Timer_DisplayOnScreen(input.outTimerID)		
+				input.outFlashState = true
+					
+			elseif input.outFlashState == true then
+				
+					input.outFlashState = false
+			end
+		elseif currentTime <= 0 then
+			Timer_End(input.outTimerID)
+			Rule_RemoveMe()
+		end
+	end  
+	
+end
+-------------
+--- CONSTRUCT
+-------------
+
+function Action_Construct_Do(action)
+	local target = action.position
+	if action.use_random_position then
+		target = SelectRandomWeightedEntry(action.random_positions).position
+	end
+	if action.construct_type == "Existing Construction" then
+		target = action.egroup
+	end
+	Cmd_Construct(action.sgroup, action.entityPBG, target, nil --[[facing (marker instead)--]], action.queued)
+end
+
+---------------
+--- USE ABILITY
+---------------
+
+function Action_UseAbility_Do(action, context) -- group, ability blueprint, target group, position, skip cost, queued, target_selection
+	local target = nil
+	local caster = nil
+	local casterOwner = nil
+	local _sg_tempAbilityTarget = nil
+	
+	if action.caster_type_string == "SGROUP" then
+		if SGroup_Exists(SGroup_GetName(action.sgroup)) and SGroup_CountSpawned(action.sgroup) >= 1 then
+			caster = action.sgroup
+			casterOwner = Util_GetPlayerOwner(caster)
+		end
+	elseif action.caster_type_string == "EGROUP" then
+		if EGroup_Exists(EGroup_GetName(action.egroup)) and EGroup_CountSpawned(action.egroup) >= 1 then
+			caster = action.egroup
+			casterOwner = Util_GetPlayerOwner(caster)
+		end
+	elseif action.caster_type_string == "PLAYER" then
+		caster = action.player	
+		casterOwner = caster
+		if Player_HasAbility(caster, action.abilityPBG) == false then -- If player does not own ability, add it.
+			Player_AddAbility(caster, action.abilityPBG)
+		end
+	end
+	
+	if caster == nil then
+		return
+	end
+	
+	if action.ignore_ability_cooldown then
+		Modify_AbilityRechargeTime(caster, action.abilityPBG, 0, MUT_Multiplication, 0.5)		
+	end
+	
+	if action.ability_target_type == "SGROUP" then
+		if SGroup_Exists(SGroup_GetName(action.target_sgroup)) and SGroup_CountSpawned(action.target_sgroup) >= 1 then
+			target = action.target_sgroup
+			if action.target_selection == "NEAREST" then
+				if action.caster_type_string == "PLAYER" then
+					target = World_GetClosest(Player_GetStartingPosition(caster), target)
+				else
+					target = World_GetClosest(caster, target)
+				end
+			elseif action.target_selection == "RANDOM" then
+				target = SGroup_GetRandomSpawnedSquad(action.target_sgroup)
+			end
+		end
+	elseif action.ability_target_type == "EGROUP" then
+		if EGroup_Exists(EGroup_GetName(action.target_egroup)) and EGroup_CountSpawned(action.target_egroup) >= 1 then
+			target = action.target_egroup
+			if action.target_selection == "NEAREST" then
+				if action.caster_type_string == "PLAYER" then
+					target = World_GetClosest(Player_GetStartingPosition(caster), target)
+				else
+					target = World_GetClosest(caster, target)
+				end
+			elseif action.target_selection == "RANDOM" then
+				target = EGroup_GetRandomSpawnedEntity(action.target_egroup)
+			end
+		end
+	elseif action.ability_target_type == "PLAYER" then
+		-- Abilities cannot target a player, so we get a player squad to target
+		-- "SELF" abilities can run actions on the casting player
+		target = action.target_player
+		_sg_tempAbilityTarget = SGroup_CreateIfNotFound("_sg_tempAbilityTarget")
+		Player_GetAll(action.target_player, _sg_tempAbilityTarget)
+
+		if action.squad_types_to_exclude ~= nil then
+			for i = 1, #action.squad_types_to_exclude do
+				SGroup_Filter(_sg_tempAbilityTarget, action.squad_types_to_exclude[i].target_sbp, FILTER_REMOVE)
+			end
+		end
+		if SGroup_IsEmpty(_sg_tempAbilityTarget) then
+			return
+		elseif caster ~= action.player and action.target_selection == "NEAREST" then
+			target = World_GetClosest(caster, _sg_tempAbilityTarget)
+		else
+			-- Remove squads that are too close to the player's starting position
+			local filterBySafeZone = function (gid, idx, squad)
+				local pos = Squad_GetPosition(squad)
+				local basePos = Player_GetStartingPosition(target)
+				if Util_GetDistanceSquared(pos, basePos) < action.safe_radius * action.safe_radius then			
+					SGroup_Remove(_sg_tempAbilityTarget, squad)
+				end
+			end
+			
+			if action.safe_radius ~= nil and action.safe_radius > 0 then
+				SGroup_ForEach(_sg_tempAbilityTarget, filterBySafeZone)
+				if SGroup_IsEmpty(_sg_tempAbilityTarget) then
+					return
+				end
+			end
+			
+			-- When targeting player, always pick a random squad
+			target = SGroup_GetRandomSpawnedSquad(_sg_tempAbilityTarget)
+
+			if scartype(target) ~= ST_SQUAD then
+				target = nil
+			end
+		end
+	elseif action.ability_target_type == "POSITION" then	
+		if action.dest_position ~= nil then
+			target = Marker_GetPosition(action.dest_position)
+		elseif action.use_random_position then
+			target = SelectRandomWeightedEntry(action.random_positions).position
+		end
+	elseif action.ability_target_type == "CONTEXT" then
+		target, _, _ = Context_ExtractInfoFromContext(context)
+	elseif action.ability_target_type == "SELF" then	
+		target = nil
+	end
+	
+	local direction = nil
+	if action.has_direction then
+		local target_pos = Util_GetPosition(target)
+		local dir_pos = Util_GetPosition(action.direction)
+		direction = World_Pos(
+			dir_pos.x - target_pos.x,
+			dir_pos.y - target_pos.y,
+			dir_pos.z - target_pos.z
+			)
+	end
+	
+	if target ~= nil or (target == nil and action.ability_target_type == "SELF") then
+		local modifier = nil
+		if action.ignore_fow then
+			modifier = Modifier_Create(MAT_Ability, "ability_target_in_fow_modifier", MUT_Enable, false, 1, action.abilityPBG)
+			Modifier_ApplyToPlayer(modifier, casterOwner, .5)
+		end
+		Cmd_Ability(caster, action.abilityPBG, target, direction, action.skip_cost, action.queued, action.stop)
+		if not action.queued then
+			Modifier_Remove(modifier)
+		end
+		if SGroup_Exists("_sg_tempAbilityTarget") then
+			SGroup_Destroy(SGroup_FromName("_sg_tempAbilityTarget"))
+		end
+	end
+	
+end
+
+------------
+---ATTACKING
+------------
+function Action_Attack_Do(action, context) -- (  sgroup, target group, queued, stationary, plan, check FOW ) 
+	
+	local attacker = nil
+	local target = nil
+	-- no locations/positions, or player 
+	
+	if action.attacker_sgroup ~= nil then
+		if SGroup_CountSpawned(action.attacker_sgroup) >= 1 then
+			attacker = action.attacker_sgroup
+		end
+	elseif action.attacker_egroup ~= nil then
+		if EGroup_CountSpawned(action.attacker_egroup) >= 1 then
+			attacker = action.attacker_egroup
+		end
+	end
+	
+	if action.target_sgroup ~= nil then
+		if SGroup_CountSpawned(action.target_sgroup) >= 1 then
+			target = action.target_sgroup
+		end
+	elseif action.target_egroup ~= nil then
+		if EGroup_CountSpawned(action.target_egroup) >= 1 then
+			target = action.target_egroup
+		end
+	end
+	
+	if attacker ~= nil and target ~= nil then		
+		Cmd_Attack(attacker, target, action.queued, action.stationary, nil, action.check_FOW)
+	end
+	
+end
+
+
+function Action_AttackMove_Do(action, context) --SGroupID sgroup, Position targetposition, Boolean OPT_queued, String OPT_plan, Real OPT_coverSearchRadius, MarkerID OPT_deleteWhenNearMarker, Boolean OPT_splitCmd 
+	local attacker = nil
+	local target_pos = nil
+	
+	if action.attacker_sgroup ~= nil then
+		if SGroup_CountSpawned(action.attacker_sgroup) >= 1 then
+			attacker = action.attacker_sgroup
+		end
+	end
+	
+	if action.position_type_string == "EGROUP" and scartype(action.target_egroup) == ST_EGROUP then	 
+		
+		if EGroup_CountSpawned(action.target_egroup) >= 1 then
+			target_pos = EGroup_GetPosition(action.target_egroup)
+		end
+		
+	elseif action.position_type_string == "SGROUP" and scartype(action.target_sgroup) == ST_SGROUP then	 
+		
+		if SGroup_CountSpawned(action.target_sgroup) >= 1 then
+			target_pos = SGroup_GetPosition(action.target_sgroup)
+		end
+	elseif action.position_type_string == "CONTEXT" then
+		target_pos, _, _ = Context_ExtractInfoFromContext(context)
+	elseif action.attack_position ~= nil and scartype(action.attack_position) == ST_MARKER then
+		target_pos = Marker_GetPosition(action.attack_position)
+	end
+	
+	if attacker ~= nil and target_pos ~= nil then	
+		Cmd_AttackMove(attacker, target_pos, action.queued, nil, action.radius, action.delete_near_marker, nil)	
+	end
+
+	
+
+end	
+
+-----------
+---SPAWNING
+-----------
+function Action_SpawnSquads_Do(action, context, listInfo) -- no SpawnType yet (as in how to deploy, so set to nil atm) 
+	local spawn_player = action.player
+	local human_player = Game_GetLocalPlayer()
+	
+	local target_spawn_where = nil -- will spawn in hold if designated - can be sgroup or ebroup
+	
+	local sgroup = action.sgroup
+	local difficulty = action.difficulty
+	local destination = nil
+	local spawnPos = nil
+	local tempgroup = nil
+	local ignoreFormationAndPathfinding = false
+	
+	if Player_GetCurrentPopulation(human_player, CT_Personnel) < action.pop_cap_required then
+		return
+	end
+	
+	local difficulty = string.sub(action.difficulty, 1,1)
+	local setting = Game_GetSPDifficulty()
+	local comparison = action.comparison or IS_GREATER_THAN_OR_EQUAL 
+
+	if NumberComparison(setting, comparison, tonumber(difficulty)) == false then
+		return
+	end
+	
+	if action.spawn_where ~= nil and scartype(action.spawn_where) == ST_STRING then
+		
+		if action.spawn_where == "SGROUP" then
+			if action.hold_sgroup ~= nil then
+				if SGroup_Exists(SGroup_GetName(action.hold_sgroup)) and SGroup_CountSpawned(action.hold_sgroup) >= 1 then
+					target_spawn_where = action.hold_sgroup
+					ignoreFormationAndPathfinding = true
+				else
+					print("SpawnSquads failed due to empty sgroup ["..SGroup_GetName(action.hold_sgroup).."] while "..ActionList_GetDebugName(listInfo))
+					return
+				end
+			end
+		elseif action.spawn_where == "EGROUP" then
+			if action.hold_egroup ~= nil then
+				if EGroup_Exists(EGroup_GetName(action.hold_egroup)) and EGroup_CountSpawned(action.hold_egroup) >= 1 then
+					target_spawn_where = action.hold_egroup
+					ignoreFormationAndPathfinding = true
+				else
+					print("SpawnSquads failed due to empty egroup ["..EGroup_GetName(action.hold_egroup).."] while "..ActionList_GetDebugName(listInfo))
+					return
+				end
+			end
+		end
+
+		local position_type_is_context = action.spawn_where == "CONTEXT"
+		if target_spawn_where == nil and (action.start_position ~= nil or action.use_random_position or position_type_is_context) then
+			if position_type_is_context then
+				print("finding position form context in action")
+				local target = Context_ExtractTargetFromContext(context)
+				local target_type = scartype(target)
+				destination = target
+				
+				-- convert direct entity/squad references into squad/entity groups for Util_CreateSquads()
+				if target_type == ST_ENTITY then
+					EGroup_Clear(eg_temp)
+					EGroup_Add(eg_temp, target)
+					target_spawn_where = eg_temp
+				elseif target_type == ST_SQUAD then
+					SGroup_Clear(sg_temp)
+					SGroup_Add(sg_temp, target)
+					target_spawn_where = sg_temp
+				else
+					-- position
+					target_spawn_where = target
+				end
+				
+				if target_spawn_where == nil then
+					error("Cannot find a position from context, yet CONTEXT was specified for location type!")
+				end
+			else
+				-- spawn_where is POSITION
+				target_spawn_where = action.start_position
+				destination = action.dest_position
+			end
+			if action.use_random_position then
+				local positions = SelectRandomWeightedEntry(action.random_position_pairs)
+				target_spawn_where = positions.start_position
+				destination = positions.dest_position
+			end	
+			if Util_GetDistanceSquared(target_spawn_where, destination) > 1 then
+				destination = action.dest_position
+			else
+				destination = nil
+			end
+			if action.spawnNearDest then
+				local dist = HS_CLOSEST
+				if action.spawnDistance == "Farthest" then
+					dist = HS_FURTHEST
+				end
+				spawnPos = Anvil_FindHiddenSpawn(action.start_position, action.dest_position, dist)
+				if spawnPos == World_Pos(0,0,0) then
+					spawnPos = action.start_position
+				end
+				target_spawn_where = spawnPos
+			end
+		end
+		
+	end
+	
+	target_spawn_where = Action_AddConcreteOffsetDistance(action, target_spawn_where)
+	
+	if action.enable_random_radius_spawn then
+		local random_spawn_max_range = action.random_spawn_max_range
+		local random_spawn_min_range = action.random_spawn_min_range
+		local offset, offsetDistance = Action_GetRandomOffsetAndDistance(random_spawn_min_range, random_spawn_max_range)
+		target_spawn_where = Util_GetOffsetPosition(Util_GetPosition(target_spawn_where), offset, offsetDistance)
+	end
+
+	local useMarkerTransform = false
+	local groups_to_add = {}
+	local sgroup_temp = SGroup_CreateIfNotFound("sgroup_spawn_squads_temp")
+	SGroup_Clear(sgroup_temp)
+	table.insert(groups_to_add, sgroup_temp)
+	if sgroup ~= nil then
+		local sgroup_names = SGroup_GetName(sgroup)
+		for sg in string.gmatch(sgroup_names, "([^;]+)") do
+			table.insert(groups_to_add, sg)
+		end
+	end
+	
+	local trying_to_spawn_in_company = scartype(target_spawn_where) == ST_SGROUP and Squad_IsOfType(SGroup_GetSquadAt(target_spawn_where, 1), "company")
+	if action.spawnLocked or action.soloSquad or action.spawnRank > 0 or trying_to_spawn_in_company then
+		tempgroup = SGroup_CreateUnique("_spawnSquadsActionTempGroup")
+		table.insert(groups_to_add, tempgroup)
+	end
+	
+	local squad_pbg = nil
+	if action.use_squad_type == true then
+		local affectors = Affectors_GetTable()
+		local company_bp = nil
+		if affectors ~= nil then
+			if spawn_player.PlayerID == TEAM_ALLIES[1].PlayerID and affectors.player_company_bp_name ~= nil and affectors.player_company_bp_name ~= "" then
+				company_bp = BP_GetSquadBlueprint(affectors.player_company_bp_name)
+			elseif spawn_player.PlayerID == TEAM_ENEMIES[1].PlayerID and affectors.enemy_company_bp_name ~= nil and affectors.enemy_company_bp_name ~= "" then
+				company_bp = BP_GetSquadBlueprint(affectors.enemy_company_bp_name)
+			elseif TEAM_ALLIES[2] ~= nil and spawn_player.PlayerID == TEAM_ALLIES[2].PlayerID and affectors.reinforcing_company_bp_name ~= nil and affectors.reinforcing_company_bp_name ~= "" then
+				company_bp = BP_GetSquadBlueprint(affectors.reinforcing_company_bp_name)
+			else
+				-- Default if spawning on a player with no discernable company type passed in
+				company_bp = BP_GetSquadBlueprint("company_armoured_us")
+			end
+			local squads_available = BP_GetCompanyStartingSquadsTable(company_bp)
+			squad_pbg = squads_available[action.squad_type]
+		else
+			MissionPrint("Affectors not populated / no player company specified!!!")
+			if tempgroup ~= nil and scartype(tempgroup) == ST_SGROUP then
+				SGroup_Destroy(tempgroup)
+			end
+			return
+		end
+	else
+		squad_pbg = action.squadPBG
+	end
+
+	Util_CreateSquads(
+		spawn_player,
+		groups_to_add,
+		squad_pbg,
+		target_spawn_where,
+		destination,
+		action.numsquads, 
+		action.loadout,
+		action.attack_move,
+		nil,
+		action.upgradePBG,
+		destination,
+		nil,
+		nil,
+		nil,
+		ignoreFormationAndPathfinding,
+		useMarkerTransform)
+	
+	if action.snap_to_standable_node ~= nil and action.snap_to_standable_node == true then 
+		local count_new_squads = SGroup_Count(sgroup_temp)
+		for j = 1, count_new_squads do
+			local newSquad = SGroup_GetSquadAt(sgroup_temp, j)
+			Squad_TeleportToNearbyStandableNode(newSquad)
+		end
+	end
+
+	if action.spawnLocked and scartype(tempgroup) == ST_SGROUP then
+		AI_LockSquads(spawn_player, tempgroup)
+		
+		if action.zero_popcap_while_locked then
+			SGroup_ForEach(tempgroup, function(sgID, index, squad) ActionList_CreateMod_ZeroSquadPopcap(squad) end)
+		end
+	end
+	
+	if action.soloSquad and scartype(tempgroup) == ST_SGROUP then
+		local prefabID = AI_AddPrefab(spawn_player, "Solo Squad", "Defend", --[[fixed radius of 4--]] 4, --[[one squad minimum--]] 1, --[[one squad maximum--]] 1, --[[canReassign--]] false, --[[active--]] true)
+		local pos = Util_GetPosition(target_spawn_where)
+		if action.goToDest and destination ~= nil then
+			pos = Util_GetPosition(destination)
+		end
+		local group = SGroup_CreateUnique("_soloSquad") -- For AI to work properly, this group cannot be destroyed
+		SGroup_Add(group, SGroup_GetSpawnedSquadAt(tempgroup, 1))
+		AI_SetPrefabTarget_Position(prefabID, spawn_player, pos)
+		AI_SetPrefabSelection_SGroup(prefabID, spawn_player, group)
+		if _aiSoloSquadPrefabs == nil then
+			_aiSoloSquadPrefabs = {}
+		end
+		table.insert(_aiSoloSquadPrefabs, {pid = prefabID, sgroup = group})
+		
+	end
+	
+	if action.spawnRank > 0 and scartype(tempgroup) == ST_SGROUP then
+		SGroup_IncreaseVeterancyRank(tempgroup, action.spawnRank, true)
+	end
+	
+	if trying_to_spawn_in_company then
+		local target = SGroup_GetSquadAt(target_spawn_where, 1)
+		local checkGarrison = function(_, _, squad)
+			if Squad_IsOfType(squad, "platoon") then
+				MetaMap_LinkAttachmentToCompany(squad, target)
+			end
+			if not Squad_CanLoadSquad(target, squad, --[[assumeEmpty--]] false, --[[assumeVisible--]] false) then
+				SGroup_Remove(tempgroup, squad)
+			end
+		end
+		SGroup_ForEachEx(tempgroup, checkGarrison, true, true)
+		Cmd_Garrison(tempgroup, target_spawn_where, true, true, true)
+	end
+	
+	if tempgroup ~= nil and scartype(tempgroup) == ST_SGROUP then
+		SGroup_Destroy(tempgroup)
+	end
+end
+
+function Action_SpawnEntities_Do(action, context) -- no SpawnType yet (as in how to deploy, so set to nil atm) 
+	local spawn_player = action.player
+	
+	if spawn_player == "World" then -- for when World is defined
+		spawn_player = nil
+	end
+	
+	local target_spawn_where = nil
+	local target_spawn_dest = nil
+	-- Whether we should shift the facing position when shifting the spawn position
+	local shift_dest = true
+
+	if action.spawn_entities_where == "POSITION" then
+		if action.use_random_position then
+			local positions = SelectRandomWeightedEntry(action.random_position_pairs)
+			target_spawn_where = positions.start_position
+			target_spawn_dest = positions.dest_position
+		else
+			target_spawn_where = action.start_position
+			target_spawn_dest = action.dest_position
+		end
+		shift_dest = false
+	elseif action.spawn_entities_where == "CONTEXT" then
+		local target_spawn_facing = nil
+		target_spawn_where, target_spawn_facing, _ = Context_ExtractInfoFromContext(context)
+		if target_spawn_where == nil then
+			error("Couldn't find spawn location from context when context was selected as entity spawn location")
+		end
+		target_spawn_facing = target_spawn_facing or World_Pos(0,0,0)
+		target_spawn_dest = World_Pos(
+			target_spawn_where.x + target_spawn_facing.x,
+			target_spawn_where.y + target_spawn_facing.y,
+			target_spawn_where.z + target_spawn_facing.z
+			)
+	end
+	
+	if action.spawn_entities_facing == "Manual" or action.spawn_entities_facing == "Random" then
+		local angle = math.rad(action.spawn_entities_angle or 0)
+		if action.spawn_entities_facing == "Random" then
+			angle = math.rad(World_GetRand(0, 359))
+		end
+		if scartype(target_spawn_where) == ST_MARKER then
+			target_spawn_where = Marker_GetPosition(target_spawn_where)
+		end
+		target_spawn_dest = World_Pos(
+			target_spawn_where.x + math.sin(angle),
+			target_spawn_where.y,
+			target_spawn_where.z + math.cos(angle)
+			)
+	elseif action.spawn_entities_facing == "SGroup" then
+		target_spawn_dest = SGroup_GetPosition(action.target_sgroup)
+		shift_dest = false
+	elseif action.spawn_entities_facing == "EGroup" then
+		target_spawn_dest = EGroup_GetPosition(action.target_egroup)
+		shift_dest = false
+	end
+	
+	target_spawn_where = Action_AddConcreteOffsetDistance(action, target_spawn_where)
+	
+	if shift_dest and target_spawn_dest then
+		target_spawn_dest = Action_AddConcreteOffsetDistance(action, target_spawn_dest)
+	end
+	
+	if action.enable_random_radius_spawn then
+		local random_spawn_max_range = action.random_spawn_max_range
+		local random_spawn_min_range = action.random_spawn_min_range
+		local offset, offsetDistance = Action_GetRandomOffsetAndDistance(random_spawn_min_range, random_spawn_max_range)
+		target_spawn_where = Util_GetOffsetPosition(Util_GetPosition(target_spawn_where), offset, offsetDistance)
+	end
+	
+	local loc_egroup = nil
+	
+	 --PlayerID player, EGroupID egroup, Integer blueprintID, MarkerID/Pos location, Integer numentities, MarkerID/Pos OPT_toward, Boolean OPT_snapToGround, Boolean OPT_skipForceConstruct )
+	
+	if action.existing_egroup ~= nil then
+		loc_egroup = action.existing_egroup
+	elseif action.new_egroup_name ~= nil then
+		loc_egroup = EGroup_CreateIfNotFound(action.new_egroup_name)
+	end
+	
+	local groups_to_add = {}
+	if loc_egroup ~= nil then
+		local egroup_names = EGroup_GetName(loc_egroup)
+		for eg in string.gmatch(egroup_names, "([^;]+)") do
+			table.insert(groups_to_add, eg)
+		end
+	end
+	Util_CreateEntities(spawn_player, groups_to_add, action.entityPBG, target_spawn_where, action.numentities, target_spawn_dest, action.snap_to_ground, action.skipForceConstruct)
+	if action.upgradePBG ~= nil then
+		Cmd_InstantUpgrade(loc_egroup, action.upgradePBG)
+	end
+end
+
+function Action_SpawnLiveMunition_Do(action, context) -- table of targets: each entry is weapon and position
+	local playerID = 0 -- spawn as neutral
+	local targets = action.munition_targets
+	for key,value in pairs(targets) do
+		local target = value.target_egroup or value.target_sgroup or value.position
+		local targetPos = Util_GetPosition(target)
+		local weapon = value.weapon
+		
+		if weapon ~= nil then
+			local origin = targetPos
+			origin.y = origin.y + value.origin_offset
+			Entity_SpawnLiveMunition(weapon, playerID, origin, targetPos)
+		end
+	end
+end
+
+--
+-- ENTITY
+--
+
+function Action_SpawnEntity_Do(action, context) -- ebp, pos, egroup, player, num
+	
+	local player = World_GetPlayerAt(1)
+	local num = 1
+	
+	if action.player ~= nil then
+		player = World_GetPlayerAt(action.player)
+	end
+	
+	if action.num ~= nil then
+		num = action.num
+	end
+	
+	local useMarkerTransform = true
+	Util_CreateEntities(player, action.egroup, action.ebp, action.pos, num, nil, nil, nil, useMarkerTransform)
+	
+	MissionPrint("CALLED Spawn Entity")
+	
+end
+
+function Action_DeSpawn_Do(action, context)
+	
+	_sg_tempDespawnHeldSquads = SGroup_CreateIfNotFound("_sg_tempDespawnHeldSquads")
+	SGroup_Clear(_sg_tempDespawnHeldSquads)
+	
+	if action.despawn_egroup ~= nil then
+		if (not EGroup_IsValid(action.despawn_egroup.EGroupID)) then
+			return
+		end
+		if EGroup_CountSpawned(action.despawn_egroup) >= 1 then
+			if EGroup_IsHoldingAny(action.despawn_egroup) then
+				EGroup_GetSquadsHeld(action.despawn_egroup, _sg_tempDespawnHeldSquads)
+			end
+			if action.destroy then
+				SGroup_DestroyAllSquads(_sg_tempDespawnHeldSquads)
+				EGroup_DestroyAllEntities(action.despawn_egroup)
+			else
+				SGroup_DeSpawn(_sg_tempDespawnHeldSquads)
+				EGroup_DeSpawn(action.despawn_egroup)
+			end
+		end
+	elseif action.despawn_sgroup ~= nil then
+		if (not SGroup_IsValid(action.despawn_sgroup.SGroupID)) then
+			return
+		end
+		if SGroup_CountSpawned(action.despawn_sgroup) >= 1 then
+			
+			if SGroup_IsHoldingAny(action.despawn_sgroup) then
+				SGroup_GetSquadsHeld(action.despawn_sgroup, _sg_tempDespawnHeldSquads)
+			end
+			if action.destroy then
+				SGroup_DestroyAllSquads(_sg_tempDespawnHeldSquads)
+				SGroup_DestroyAllSquads(action.despawn_sgroup)
+			else
+				SGroup_DeSpawn(_sg_tempDespawnHeldSquads)
+				SGroup_DeSpawn(action.despawn_sgroup)
+			end
+				
+		end
+	end
+	
+end
+
+function Action_ReSpawn_Do(action, context)
+	
+	if action.respawn_egroup ~= nil then
+		if EGroup_CountDeSpawned(action.respawn_egroup) >= 1 then
+			EGroup_ReSpawn(action.respawn_egroup)
+		end
+	elseif action.respawn_sgroup ~= nil then
+		if SGroup_CountDeSpawned(action.respawn_sgroup) >= 1 then
+			SGroup_ReSpawn(action.respawn_sgroup)
+		end
+	end
+	
+end
+
+function Action_GroupKill_Do(action, context) --groupkill_grouptype, groupkill_egroup, groupkill_sgroup
+	
+	local sgroup = action.groupkill_sgroup
+	local egroup = action.groupkill_egroup
+	
+	if action.groupkill_grouptype == "SGroup" and scartype(sgroup) == ST_SGROUP then
+		SGroup_Kill(sgroup)
+	elseif action.groupkill_grouptype == "EGroup" and scartype(egroup) == ST_EGROUP then
+		EGroup_Kill(egroup)
+	end
+	
+end
+
+function Action_KillNeutralEntitiesNearPosition_Do(action, context)
+	
+	local position = nil
+	if action.position_option == "Marker" then
+		position = action.position
+	elseif action.position_option == "Sector ID" then
+		position = action.sector_id
+	end
+	
+	local entity_type = nil
+	if action.unit_matching_option == "Blueprint" then
+		entity_type = action.entity_blueprint
+	elseif action.unit_matching_option == "unit_type" then
+		entity_type = action.entity_unit_type
+	end
+	
+	if entity_type == "" then
+		entity_type = nil
+	end
+	if action.range == 0 then
+		action.range = nil
+	end
+	
+	Anvil_KillNeutralEntitiesNearPosition(position, entity_type, action.range, action.num_to_kill)
+	
+end
+
+function Action_SpawnRandomTarget_Do(action, context) -- target_locations is list of potential locations to choose spawn from
+
+	local targetLocations = action.target_locations
+	
+	local numberToSpawn = action.number_to_spawn or 1
+	local chance = action.chance or 100
+		
+	if numberToSpawn > #targetLocations then
+		numberToSpawn = #targetLocations
+	end
+	
+	if World_GetRand(1, 100) > chance then
+		return
+	end
+	
+	for i=1,numberToSpawn do
+		
+		local index = World_GetRand(1, #targetLocations)
+		local target = targetLocations[index]
+		table.remove(targetLocations, index)
+		
+		if target.target_type == "ebp" then
+			
+			-- spawn the entity at the random location
+			local group = target.target_egroup
+			if group == nil then
+				group = EGroup_CreateUnique("Target")
+			end
+			
+			local useMarkerTransform = true
+			Util_CreateEntities(target.target_owner, group, target.target_ebp, target.location, 1, nil, nil, nil, useMarkerTransform)
+			
+		elseif target.target_type == "sbp" then
+			
+			-- spawn the squad at the random location
+			local group = target.target_sgroup
+			if group == nil then
+				group = SGroup_CreateUnique("Target")
+			end
+			Util_CreateSquads(target.target_owner, group, target.target_sbp, target.location, nil, 1)
+			
+		end
+	end
+	
+end
+
+function Action_RandomWeightedActions_Do(action, context) 
+
+	if #action.random_weighted_actions == 0 then 
+		return
+	end
+	
+	local max_weight = 0
+	for i=1,#action.random_weighted_actions do
+		max_weight = max_weight + action.random_weighted_actions[i].weight
+	end
+	
+	local rand_weight = World_GetRand(0, max_weight - 1)
+
+	local current_weight = 0
+	for i=1, #action.random_weighted_actions do
+		
+		local target = action.random_weighted_actions[i]
+		current_weight = current_weight + target.weight
+		
+		if rand_weight < current_weight then
+			ActionList_PlayActions(target.actions, context)
+			break
+		end
+		
+	end
+	
+end
+
+
+-------------
+---RESOURCES
+-------------
+
+function Action_PlayerSetResource_Do(action, context)
+	
+	local player = action.player
+	
+	local _changeResource = function(player, resource, value)
+		if action.math_type_string == "MUT_Multiplication" then
+			
+			local old = Player_GetResource(player, resource)
+			Player_SetResource(player, resource, old * value)
+			
+		elseif action.math_type_string == "MUT_Addition" then
+			
+			local old = Player_GetResource(player, resource)
+			Player_SetResource(player, resource, old + value)
+			
+		elseif action.math_type_string == "MUT_Set" then
+			
+			Player_SetResource(player, resource, value)
+			
+		end
+	end
+	
+	if action.resource_type_string == "RT_Manpower" then
+		_changeResource(player, RT_Manpower, action.count)
+	elseif action.resource_type_string == "RT_Fuel" then
+		_changeResource(player, RT_Fuel, action.count)
+	elseif action.resource_type_string == "RT_Munition" then
+		_changeResource(player, RT_Munition, action.count)
+	elseif action.resource_type_string == "RT_Requisition" then
+		_changeResource(player, RT_Requisition, action.count)
+	end
+	
+end
+
+function Action_PlayerSetResourceCap_Do(action, context)
+
+	t_playerResourceCapTable = {}
+	
+	local player = World_GetPlayerAt(1)
+	
+	if action.player ~= nil then 
+		player = action.player
+	end
+	
+	
+	local selectedPlayerIndex = World_GetPlayerIndex(player) 
+	local playerCount = World_GetPlayerCount()
+	local resource_type = action.resource_type_string
+	local math_type = MUT_Set
+	
+	if action.resource_type_string ~= nil then
+		if action.resource_type_string == "RT_Munition" then
+			resource_type = RT_Munition
+		elseif action.resource_type_string == "RT_Fuel" then
+			resource_type = RT_Fuel
+		elseif action.resource_type_string == "RT_Manpower" then
+			resource_type = RT_Manpower
+		end		
+	end
+	
+	if action.math_type_string ~= nil then
+		if action.math_type_string == "MUT_Multiplication" then
+			math_type = MUT_Multiplication		
+		elseif action.math_type_string == "MUT_Addition" then
+			math_type = MUT_Addition		
+		elseif action.math_type_string == "MUT_Set" then
+			math_type = MUT_Set
+		end
+	end
+		
+	for i = 1, playerCount do
+		
+		table.insert(t_playerResourceCapTable, {capID = nil})	
+		
+	end		
+		
+	if t_playerResourceCapTable[selectedPlayerIndex].capID == nil then		
+		-- Note Modify_PlayerResourceCap not outputting anything?
+		t_playerResourceCapTable[selectedPlayerIndex].capID = Modify_PlayerResourceCap(player, resource_type, action.scale_factor, math_type)		
+	else
+		
+		-- remove previous modifier first to reset, then apply the new one otherwise effects pile on each other, snowballing
+		Modifier_Remove(t_playerResourceCapTable[selectedPlayerIndex].capID) 
+		t_playerResourceCapTable[selectedPlayerIndex].capID = Modify_PlayerResourceCap(player, resource_type, action.scale_factor, math_type)
+	end	
+end
+
+
+function Action_ResourcesDisable_Do(action, context)
+	local player = nil
+	if not action.use_local_player then
+		player = action.player
+	end
+	Resources_Disable(player)
+end
+
+function Action_ResourcesEnable_Do(action, context)
+	local player = nil
+	if not action.use_local_player then
+		player = action.player
+	end
+	Resources_Enable(player)
+end
+
+function Action_PlayerSetPopulationCap_Do(action, context)
+	
+	local player = World_GetPlayerAt(1)
+	 
+	if action.player ~= nil then 
+		player = action.player
+	end
+	
+	local currentPopCap = Player_GetMaxPopulation(player, CT_Personnel)
+	local newPopCap = currentPopCap
+	
+	if action.math_type_string ~= nil then
+		if action.math_type_string == "MUT_Multiplication" then
+			newPopCap = currentPopCap * action.pop_cap_delta
+		elseif action.math_type_string == "MUT_Addition" then
+			newPopCap = currentPopCap + action.pop_cap_delta
+		elseif action.math_type_string == "MUT_Set" then
+			newPopCap = action.pop_cap_delta
+		end
+	end
+	
+	if newPopCap >= 0 then
+		Player_SetPopCapOverride(player,newPopCap)
+		if newPopCap > currentPopCap and player == Game_GetLocalPlayer() and action.show_cue then
+			UI_CreateEventCue(11215001 --[[Population Cap Increased]], Loc_Empty(), "low_priority", "icons/common/resources/resource_population.png", "", ECV_Queue, 20.0)
+		end
+	end
+
+end	
+---------------------------
+---ANIMATION/FX/SPEECH
+---------------------------
+function Action_PlayAnimation_Do(action, context)
+	
+	if action.sgroup ~= nil then
+		if SGroup_CountSpawned(action.sgroup) >= 1 then
+			SGroup_SetAnimatorAction(action.sgroup, action.actionStringName)
+		end
+	elseif action.egroup ~= nil then
+		if EGroup_CountSpawned(action.egroup) >= 1 then
+			EGroup_SetAnimatorAction(action.egroup, action.actionStringName)
+		end
+	end
+	
+end
+
+
+function Action_PlaySpeech_Do(action, context) --actor_name, locID, display_actor, audioCtrlEvent
+	
+	local namedActor = _G[action.actor_name]
+	
+	if namedActor ~= nil and scartype(namedActor) == ST_TABLE then 
+		
+		if action.display_actor == true then
+			if action.audioCtrlEvent ~= nil and scartype(action.audioCtrlEvent) == ST_STRING then
+				Actor_PlaySpeech(namedActor, action.locID, action.sgroup, action.audioCtrlEvent)
+			end
+		elseif action.display_actor == false then
+			if action.audioCtrlEvent ~= nil and scartype(action.audioCtrlEvent) == ST_STRING then
+				Actor_PlaySpeechWithoutPortrait(namedActor, action.locID, action.sgroup, action.audioCtrlEvent)
+			end
+		end
+	end
+		
+end
+
+function Action_LaunchCustomMission_Do(action, context)
+		
+	local function DoGet_Squad(selectionType, squadGroup, squadPbg, player)
+		
+		if selectionType == "UseExistingSquad" then
+		
+			return SGroup_GetSquadAt(squadGroup, 1)
+		
+		elseif selectionType == "SpawnNewSquad" then
+			
+			local createdSquadGroup = Util_CreateSquads
+			(
+				player,
+				squadGroup,
+				squadPbg,
+				World_Pos(0, World_GetHeightAt(0, 0), 0),
+				nil,
+				1
+			)
+			
+			local createdSquad = SGroup_GetSquadAt(createdSquadGroup, 1)
+			return createdSquad
+		end
+		
+	end
+	
+	local attackingSquadSelectionType = action.attacking_squad_selection_type
+	local attackingSquadPbg = action.attacking_squad_pbg
+	local existing_attackingSquadGroup = action.existing_attacking_squad_group	
+	local spawned_attackingSquadGroup = action.spawned_attacking_squad_group
+	local attackingSquadFallbackGroup = SGroup_CreateUnique("attackingSquadFallbackGroup")
+	
+	local attackingSquad = DoGet_Squad
+	(
+		attackingSquadSelectionType,
+		existing_attackingSquadGroup or spawned_attackingSquadGroup or attackingSquadFallbackGroup,
+		attackingSquadPbg,
+		World_GetPlayerAt(1)
+	)
+	
+	local defendingSquadSelectionType = action.defending_squad_selection_type
+	local defendingSquadPbg = action.defending_squad_pbg
+	local existing_defendingSquadGroup = action.existing_defending_squad_group
+	local spawned_defendingSquadGroup = action.spawned_defending_squad_group
+	local defendingSquadFallbackGroup = SGroup_CreateUnique("defendingSquadFallbackGroup")
+	
+	local defendingSquad = DoGet_Squad
+	(
+		defendingSquadSelectionType,
+		existing_defendingSquadGroup or spawned_defendingSquadGroup or defendingSquadFallbackGroup,
+		defendingSquadPbg,
+		World_GetPlayerAt(2)
+	)
+	
+	local customMissionMapPoolPbg = action.custom_mission_map_pool
+	
+	MetaMap_LaunchCustomMissionNoEntryPoint(attackingSquad, defendingSquad, customMissionMapPoolPbg)
+end
+
+function Action_StartIntel_Do(action, context, listInfo, dynamicNarrativeCallback)
+	
+	if Misc_IsCommandLineOptionSet("skip_intel") then
+		return
+	end
+	
+	local intel_complete_callback = function()
+		if action.wait_for_intel_completion then
+			Action_Finish(listInfo)
+		end
+		
+		if dynamicNarrativeCallback then
+			dynamicNarrativeCallback()
+		end
+	end
+	
+	local intel_playing = true	
+	if action.intel_type == "NarrativeEvent" then
+		
+		if action.narrative_event == "" then
+			action.narrative_event = nil
+		end
+		
+		if action.narrative_event ~= nil then
+			local finalEventName = objectiveutil_StringToNarrativeEvent(action.narrative_event)
+			Util_StartIntel(
+				function()
+					CTRL.Subtitle_PlayNarrativeEvent(finalEventName)
+					CTRL.WAIT()
+				end,
+				intel_complete_callback)
+		end
+		
+	elseif action.intel_type == "NarrativeLine" then
+		
+		if action.narrative_line ~= nil then
+			-- This is just to sanitize the format
+			local finalLineName = objectiveutil_StringToNarrativeEvent(action.narrative_line)
+			
+			Util_StartIntel(
+				function()
+					CTRL.Subtitle_PlayNarrativeLine(finalLineName)
+					CTRL.WAIT()
+				end,
+				intel_complete_callback)
+		end
+		
+	elseif action.intel_type == "DynamicNarrative" or dynamicNarrativeCallback ~= nil then	
+		
+		if action.start_node ~= nil then
+			ExecuteDynamicNarrativeNode(action.start_node, intel_complete_callback)
+			intel_playing = IsDynamicNarrativePlaying()
+		end
+
+	else
+		
+		local intel = _G[action.intel_event]
+		
+		if scartype(intel) == ST_FUNCTION then
+			Util_StartIntel(intel, intel_complete_callback)
+		end
+	end
+	
+	if action.wait_for_intel_completion then
+		if intel_playing then
+			return WAIT_FOR_ACTION_TO_FINISH
+		else
+			return nil -- This can happen if dynamic narrative completes early (e.g. it had no lines associated)
+		end
+	end
+end
+
+function Action_SoldierStoriesClear_Do(action, context)
+
+	ClearNextSoldierStory()	
+	
+end
+
+
+function Action_SoldierStoriesSetNextSkirmishStory_Do(action, context)
+
+	SetNextSkirmishStory(action.skirmish_story_name)
+	
+end
+
+function Action_SoldierStoriesSetNextMissionStory_Do(action, context)
+
+	SetNextMissionStory(action.mission_story_name)
+	
+end
+
+function Action_SetNarrativeVariable_Do(action, context)
+
+	local variableName = action.narrative_variableset .. "." .. action["narrative_variable_" .. action.narrative_variableset]
+	
+	local value = string.lower(action.narrative_value)
+	
+	if (value == "true") then
+		value = true
+	else
+		if (value == "false") then
+			value = false
+		else
+			value = tonumber(value)
+		end
+	end
+	
+	SetNarrativeVariable(variableName, value)
+	
+end	
+
+function Action_ObjectiveShowTitle_Do(action, context)
+	local objective = MissionOMatic_FindObjective(action.objective_id)
+	if objective == nil then
+		print("Could not find Mission with id "..action.id)
+		return
+	end
+	local objData = objective.objectiveData
+	local update = {
+		type = action.title_type,
+		obj = objData,
+		showTitle = true,
+		playIntel = false,
+	}
+	print("ACTIONTITLE - "..action.opt_title)
+	if scartype(action.opt_title) == ST_STRING and
+		action.opt_title:sub(1, 1) == "$" and
+		action.opt_title ~= "$0" then
+		Obj_CreatePopup(objData.ID, action.opt_title)
+	else
+		Obj_CreatePopup(objData.ID, __Objective_GetTitleCardText(update))
+	end
+end
+
+function Action_PlayerInstantUpgrade_Do(action, context)
+	
+	Cmd_InstantUpgrade(action.player, action.upgradePBG, 1)
+	
+end
+
+function Action_UpgradeCommand_Do(action, context)
+	local user = nil
+	if action.caster_type_string == "SGROUP" then
+		user = action.sgroup
+	elseif action.caster_type_string == "EGROUP" then
+		user = action.egroup
+	elseif action.caster_type_string == "PLAYER" then
+		user = action.player
+	else
+		error("Unsupported upgrade user: "..action.caster_type_string)
+	end
+	local upgrades = {}
+	for i = 1, #action.upgrades do
+		table.insert(upgrades, action.upgrades[i].upgrade_bp)
+	end
+	if action.command_type == "ADD" then
+		local count = nil
+		if action.count > 1 then
+			count = action.count
+		end
+		Cmd_Upgrade(user, upgrades, count, action.opt_instant)
+	elseif action.command_type == "REMOVE" then
+		Cmd_UpgradeRemove(user, upgrades)
+	end
+end
+
+function Action_SetInvulnerable_Do(action, context)
+	CAPTURE_POINT_INVULNERABILITY_THRESHOLD = CAPTURE_POINT_INVULNERABILITY_THRESHOLD or 0
+	local capture_points = EGroup_CreateIfNotFound("invulnerable_capture_points")
+	EGroup_Clear(capture_points)
+	if World_IsCampaignMetamapGame() and action.invulnerable_egroup ~= nil then
+		EGroup_ForEach(action.invulnerable_egroup, function(egroup, i, entity)
+				if Entity_IsOfType(entity, "capture") then
+					EGroup_Add(capture_points, entity)
+				end
+		end)
+	end
+		
+	-- invulnerability set
+	if action.invulnerable == true then
+		
+		if action.invulnerable_sgroup ~= nil then
+			if SGroup_CountSpawned(action.invulnerable_sgroup) >= 1 then
+				if SGroup_GetInvulnerable(action.invulnerable_sgroup, ALL) == false then
+					SGroup_SetInvulnerable(action.invulnerable_sgroup, action.invulnerable_threshold)
+				end
+			end
+		elseif action.invulnerable_egroup ~= nil then
+			if EGroup_CountSpawned(action.invulnerable_egroup) >= 1 then
+				if EGroup_GetInvulnerable(action.invulnerable_egroup, ALL) == false then
+					EGroup_SetInvulnerable(action.invulnerable_egroup, action.invulnerable_threshold)
+					EGroup_SetInvulnerable(capture_points, math.max(action.invulnerable_threshold, CAPTURE_POINT_INVULNERABILITY_THRESHOLD))
+				end
+			end
+		end
+	else
+		if action.invulnerable_sgroup ~= nil then
+			SGroup_SetInvulnerable(action.invulnerable_sgroup, false)
+		elseif action.invulnerable_egroup ~= nil then
+			EGroup_SetInvulnerable(action.invulnerable_egroup, false)
+			EGroup_SetInvulnerable(capture_points, CAPTURE_POINT_INVULNERABILITY_THRESHOLD)
+		end
+	end
+	
+end
+
+function Action_SetHealth_Do(action, context)
+	
+	local set = function (gid, idx, target)
+		
+		local is_squad = scartype(target) == ST_SQUAD
+		
+		local new_health = nil
+		if action.math_type_string_for_ledger == "SET" and action.set_health_randomly then
+			new_health = World_GetRand(action.minHealth * 100, action.maxHealth * 100) / 100
+		else
+
+			local original_health = nil
+			if is_squad then
+				original_health = Squad_GetHealthPercentage(target, true)
+			else
+				original_health = Entity_GetHealthPercentage(target)
+			end
+			
+			new_health = MathOperation(original_health, action.math_type_string_for_ledger, action.number)
+		end
+			
+		if (new_health < 0) then new_health = 0 end -- Clamping health between 0 and 1
+		if (new_health > 1) then new_health = 1 end	
+		
+		if is_squad then
+			Squad_SetHealth(target, new_health)
+		else
+			Entity_SetHealth(target, new_health)
+		end
+	end
+	
+	if action.use_context_as_target then
+		local target = Context_ExtractTargetFromContext(context)
+		local target_type = scartype(target)
+		if target_type ~= ST_ENTITY and target_type ~= ST_SQUAD then
+			error("Expected a squad or entity type within the context, found type: "..tostring(target_type))
+		end
+		set(nil, nil, target)
+	elseif action.grouptype == "SGROUP" then
+		SGroup_ForEach(action.target_sgroup, set)
+	elseif action.grouptype == "EGROUP" then
+		EGroup_ForEach(action.target_egroup, set)
+	end
+	
+end
+
+function Action_SetDamageReceivedModifier_Do(action, context)
+	
+	--local group = action.group
+	local damage_received_modifier = action.damage_received_modifier
+	
+	local group = nil
+	if action.damage_received_egroup ~= nil then
+		if EGroup_CountSpawned(action.damage_received_egroup) >= 1 then
+			group = action.damage_received_egroup
+		end
+	end
+	
+	if group ~= nil then
+		if damage_received_modifier ~= nil and damage_received_modifier ~= 0.0 and damage_received_modifier ~= 0  then
+
+			action.appliedDmgModifier = Modify_ReceivedDamage(group, damage_received_modifier)
+
+		end
+	end
+end
+
+function Action_ModifyRange_Do(action, context)
+	
+	--Modify_WeaponRange()
+	
+end
+
+
+function Action_ModifyAccuracy_Do(action, context)
+	
+	Modify_WeaponAccuracy(action.sgroup, "hardpoint_01", action.modifier)
+	
+end
+
+function Action_ModifyScatter_Do(action, context)
+	
+	if action.sgroup ~= nil and SGroup_IsEmpty(action.sgroup) == false then
+		
+		local squad = SGroup_GetSquadAt(action.sgroup, 1)
+		local entity = Squad_EntityAt(squad, 0)
+		
+		Modify_WeaponScatter(entity, "hardpoint_01", 0.1)
+		
+	end
+	
+end	
+
+function Action_ApplyModifier_Do(action)
+	--Create Modifier
+	local application_type
+	local modifier_name
+	local stackvar
+	if action.modifier_target_type == "Player" then
+		application_type = action.player_application_type
+	elseif action.modifier_target_type == "EGroup" or
+		action.modifier_target_type == "Entities in SGroup" then
+		application_type = action.entity_application_type
+	elseif action.modifier_target_type == "Squads in SGroup" then
+		application_type = action.squad_application_type
+	end
+	if application_type == "Player" then
+		application_type = MAT_Player
+		modifier_name = action.player_modifier
+		stackvar = ""
+	elseif application_type == "Entity Blueprint" then
+		application_type = MAT_EntityType
+		modifier_name = action.entity_type_modifier
+		stackvar = action.modifier_ebp
+	elseif application_type == "Squad Blueprint" then
+		application_type = MAT_SquadType
+		modifier_name = action.squad_type_modifier
+		stackvar = action.modifier_sbp
+	elseif application_type == "Ability" then
+		application_type = MAT_Ability
+		modifier_name = action.ability_modifier
+		stackvar = action.modifier_ability
+	elseif application_type == "Upgrade" then
+		application_type = MAT_Upgrade
+		modifier_name = action.upgrade_modifier
+		stackvar = action.modifier_upgrade
+	elseif application_type == "Weapon Blueprint" then
+		application_type = MAT_WeaponType
+		modifier_name = action.weapon_type_modifier
+		stackvar = action.modifier_weapon_pbg
+	elseif application_type == "Entity" then
+		application_type = MAT_Entity
+		modifier_name = action.entity_modifier
+		stackvar = ""
+	elseif application_type == "Squad" then
+		application_type = MAT_Squad
+		modifier_name = action.squad_modifier
+		stackvar = ""
+	elseif application_type == "Weapon" then
+		application_type = MAT_Weapon
+		modifier_name = action.weapon_modifier
+		stackvar = action.modifier_hardpoint
+	end
+	local modifier_usage_type
+	local value = action.modifier_value
+	if action.modifier_usage_type == "Addition" then
+		modifier_usage_type = MUT_Addition
+	elseif action.modifier_usage_type == "Multiplication" then
+		modifier_usage_type = MUT_Multiplication
+	elseif action.modifier_usage_type == "Multiply Add" then
+		modifier_usage_type = MUT_MultiplyAdd
+	elseif action.modifier_usage_type == "Enable" then
+		modifier_usage_type = MUT_Enable
+		if action.modifier_enabled then
+			value = 1
+		else
+			value = 0
+		end
+	elseif action.modifier_usage_type == "Set" then
+		modifier_usage_type = MUT_Set
+	end
+	
+	local modifier = Modifier_Create(application_type,
+		modifier_name,
+		modifier_usage_type,
+		action.modifier_exclusive,
+		value,
+		stackvar)
+	local AddModIDs = function(modids)
+		if action.modifier_id ~= nil and action.modifier_id ~= "" then
+			g_ApplyModifier_modifiers = g_ApplyModifier_modifiers or {}
+			g_ApplyModifier_modifiers[action.modifier_id] = g_ApplyModifier_modifiers[action.modifier_id] or {}
+			for i = 1, #modids do
+				table.insert(g_ApplyModifier_modifiers[action.modifier_id], modids[i])
+			end
+		end
+	end
+	if action.modifier_target_type == "Player" then
+		local modids = Modifier_ApplyToPlayer(modifier, action.modifier_player, action.modifier_duration)
+		Modifier_AddToMiscTable(modids)
+		AddModIDs(modids)
+	elseif action.modifier_target_type == "EGroup" then
+		local foreach_entity = function(group, index, entity)
+			if Entity_IsActive(entity) then
+				local modids = Modifier_ApplyToEntity(modifier, entity, action.modifier_duration)
+				Modifier_AddToEntityTable(entity, modids)
+				AddModIDs(modids)
+			end
+		end
+		EGroup_ForEach(action.modifier_egroup, foreach_entity)
+	elseif action.modifier_target_type == "Entities in SGroup" then
+		local foreach_squad = function(group, index, squad)
+			local count = Squad_Count(squad)
+			for i = 0, count - 1 do
+				local entity = Squad_EntityAt(squad, i)
+				if Entity_IsActive(entity) then
+					local modids = Modifier_ApplyToEntity(modifier, entity, action.modifier_duration)
+					Modifier_AddToEntityTable(entity, modids)
+					AddModIDs(modids)
+				end
+			end
+		end
+		SGroup_ForEach(action.modifier_sgroup, foreach_squad)
+	elseif action.modifier_target_type == "Squads in SGroup" then
+		local foreach_squad = function(group, index, squad)
+			local modids = Modifier_ApplyToSquad(modifier, squad, action.modifier_duration)
+			Modifier_AddToSquadTable(squad, modids)
+			AddModIDs(modids)
+		end
+		SGroup_ForEach(action.modifier_sgroup, foreach_squad)
+	end
+end
+
+function Action_RemoveModifier_Do(action)
+	if g_ApplyModifier_modifiers == nil then
+		MissionPrint("Warning: tried to RemoveModifier when no modifiers can be found")
+		return
+	end
+	local modifiers = g_ApplyModifier_modifiers[action.modifier_id]
+	if modifiers == nil then
+		MissionPrint("Warning: Modifier with ID "..action.modifier_id.." has not been registered yet!!!")
+		return
+	end
+	for i = 1, #modifiers do
+		Modifier_Remove(modifiers[i])
+	end
+end
+
+
+
+--NOTE: This doesn't work in some situations so we should stop using it. Fixing it would require updating the prefabs in every instance it's used. 
+function Action_SetOwner_Do(action, context)
+	
+	local playerOwner = action.target_player
+	
+	if action.set_owner_sgroup ~= nil then
+		if SGroup_CountSpawned(action.set_owner_sgroup) >= 1 then
+			if action.set_neutral then
+				SGroup_SetWorldOwned(action.set_owner_sgroup)
+			else
+				SGroup_SetPlayerOwner(action.set_owner_sgroup, playerOwner)
+			end
+		end
+	elseif action.set_owner_egroup ~= nil then
+		if EGroup_CountSpawned(action.set_owner_egroup) >= 1 then
+			if action.set_neutral then
+				EGroup_SetWorldOwned(action.set_owner_egroup)
+			else
+				EGroup_SetPlayerOwner(action.set_owner_egroup, playerOwner)
+			end
+		end
+	end
+	
+end
+
+function Action_InstantCaptureStrategicPoint_Do(action, context)
+	MissionPrint("capture call")
+	if EGroup_CountSpawned(action.target_egroup) >= 1 then
+		MissionPrint("instant capture")
+		EGroup_InstantCaptureStrategicPoint(action.target_egroup, action.target_player)
+	end
+	
+end
+
+function Action_ConvertToFieldSupport_Do(action, context)
+	if EGroup_CountSpawned(action.target_egroup) >= 1 then
+		MissionPrint("Converting " .. EGroup_GetName(action.target_egroup) .. " to field support")
+		local f = function(gid, idx, eid)
+			Entity_InstantConvertBuildingToFieldSupport(eid, action.target_player)
+		end
+		EGroup_ForEach(action.target_egroup, f)
+		if action.show_cue then
+			local cue_info = {
+				duration = 20,
+				cue_text = 11215419, -- "Forward Deployment
+				cue_description = Loc_Empty(),
+				cue_type = "medium_priority",
+				cue_move_camera = true,
+				position_type_string = "EGROUP",
+				target_egroup = action.target_egroup,
+				icon_name = "icons/common/buildings/symbols/building_forward_barracks",
+				sound_name = "",
+				cue_red = 255, cue_green = 255, cue_blue = 255, cue_alpha = 255,	
+			}
+			Action_UIFireEventCue_Do(cue_info)
+		end
+	end
+end
+
+function Action_FadeSequence_Do(action, context) -- seconds, function_name or work_func
+	
+	local blackout_seconds = action.seconds or 0
+	local fadeTime = action.duration or 1.0
+
+	-- If the action is created in Scar, then you can pass a closure work_func
+	-- instead of specifying a name of a function.
+	local doWork = nil
+	local workData = action.work_data
+	if scartype(action.work_func) == ST_FUNCTION then
+		doWork = action.work_func
+	else
+		doWork = _G[action.function_name or ""]
+	end
+
+	-- Called immediately when the fade out is completed to do work deterministically
+	-- and start the fade in:
+	local fadeOutCallback = function()
+		
+		if scartype(doWork) == ST_FUNCTION then
+			doWork(workData)
+		end
+		
+		-- start a fade in event we queue with top priority
+		Event_Start(
+			function()
+				if blackout_seconds > 0 then
+					-- wait for specified seconds first
+					CTRL.Event_Delay(blackout_seconds) 
+					CTRL.WAIT()
+				end
+				CTRL.Game_FadeToBlack(FADE_IN, fadeTime)
+				CTRL.WAIT()
+			end,
+			0 -- insert at highest priority
+		)
+		
+	end
+	
+	-- start the fade out and connect the callback
+	Event_StartEx(
+		function()
+			CTRL.Game_FadeToBlack(FADE_OUT, fadeTime)
+			CTRL.WAIT()
+		end,
+		1,
+		fadeOutCallback
+	)
+	
+end
+
+function Action_LaunchPrefabOrPlaybill_Do(action,context, listInfo)
+		
+	local prefab_playbill = action.prefab_playbill
+	
+	-- play any prefabs
+	if prefab_playbill ~= nil then
+		if scartype(prefab_playbill) == ST_STRING or scartype(prefab_playbill) == ST_PREFAB then
+			if action.wait_to_complete then
+				local callback = function(parentActionListInfo)
+					Action_Finish(parentActionListInfo)
+				end
+				Prefab_DoAction(prefab_playbill, "Trigger", {callback = callback, callback_data = listInfo}, context)
+				return true
+			else
+				Prefab_DoAction(prefab_playbill, "Trigger", nil, context)
+			end
+		end
+	end
+	
+end
+
+function Action_StopPrefabOrPlaybill_Do(action,context)
+	
+	-- stop prefab
+	StopPrefabPlaybillCommon(action.prefab_playbill)
+	
+end
+
+
+------------------
+--Add/Remove Hintpoints--
+------------------
+
+function __GetOrCreateNullObjData()
+	if g_nullObjectiveData ~= nil then
+		return g_nullObjectiveData
+	else
+		local objectiveData = {
+			ID = 0, -- Invalid Objective ID
+			owner = Game_GetLocalPlayer(),
+			Type = OT_Information,
+			UIElements = {},
+			Pings = {},
+		}
+		g_nullObjectiveData = objectiveData
+		return objectiveData
+	end
+end
+
+function Action_AddObjHintpointTo_Do(action, context)
+
+	--The following types of hintpoint actions are available.
+	--HPAT_Objective
+	--HPAT_Hint
+	--HPAT_Critical
+	--HPAT_Movement
+	--HPAT_Attack
+	--HPAT_FormationSetup
+	--HPAT_RallyPoint
+	--HPAT_DeepSnow
+	--HPAT_CoverGreen
+	--HPAT_CoverYellow
+	--HPAT_CoverRed
+	--HPAT_Detonation
+	--HPAT_Vaulting
+	
+	local objectiveData = nil
+	if action.use_null_objective then
+		objectiveData = __GetOrCreateNullObjData()
+	else
+		local objective = MissionOMatic_FindObjective(action.objective_id)
+		if objective == nil then
+			print("Could not find Mission with id "..action.objective_id)
+			return
+		end
+		objectiveData = objective.objectiveData
+	end
+	--local elem_squad = action.target_squad -- not supported yet
+	local pos = nil
+
+	if action.position_type_string == "CONTEXT" then
+		-- Grab position from context:
+		pos, _, _ = Context_ExtractInfoFromContext(context)
+		if pos == nil then
+			error("Couldn't find a location from context, yet context was requested for ObjHintpoint")
+		end
+	elseif action.target_sgroup ~= nil then
+		pos = action.target_sgroup
+	elseif action.target_egroup ~= nil then
+		pos = action.target_egroup
+	elseif action.dest_position ~= nil then
+		pos = Marker_GetPosition(action.dest_position)
+	end
+	
+	-- Default icon set
+	if action.icon_name == '' then
+		-- set the icon according to the objective type
+		if action.ui_template == DT_PRIMARY_DEFAULT then
+			action.icon_name = IT_P_Default
+		elseif action.ui_template == DT_SECONDARY_DEFAULT then
+			action.icon_name = IT_S_Default
+		elseif action.ui_template == DT_BONUS_DEFAULT then
+			action.icon_name = IT_B_Default
+		elseif action.ui_template == DT_THREAT_GROUP_DEFAULT then
+			action.icon_name = IT_TG_Default
+		elseif action.ui_template == DT_OBJECTIVE_MARKER then
+			action.icon_name = IT_S_Default
+		else
+			action.icon_name = nil
+		end
+	end
+	
+	if action.element_id == "" then
+		
+		action.element_id = nil
+		
+	end
+	
+	if objectiveData ~= nil and pos ~= nil then
+		
+		local ping_radius = nil
+		if action.add_blip_area then
+			if action.blip_radius > 0 then
+				ping_radius = action.blip_radius
+			elseif action.position_type_string == "POSITION" and action.dest_position ~= nil then
+				ping_radius = Marker_GetProximityRadiusOrDefault(action.dest_position, 10.0)
+			end
+		end
+		local reticule_radius = nil
+		if action.add_reticule then
+			if action.reticule_radius > 0 then
+				reticule_radius = action.reticule_radius
+			elseif action.position_type_string == "POSITION" and action.dest_position ~= nil then
+				reticule_radius = Marker_GetProximityRadiusOrDefault(action.dest_position, 10.0)
+			end
+		end
+		
+		local uiElementArgs = {
+			pos,
+			action.ping,
+			action.text or "", 
+			action.world_arrow,
+			action.offset,
+			action.face_position,
+			GetHPATEnumValFromString(action.action_type),
+			action.icon_name,
+			action.ui_template or "",
+			action.element_id,
+			ping_radius,
+			reticule_radius,
+		}
+
+		objectiveData.elem_id = Objective_AddUIElements(objectiveData, table.unpack(uiElementArgs))
+		
+		-- Track the added hintpoints on this objective table separately from the ui element table.
+		-- This is for metamap save/load which differentiates between hintpoints re-applied as ui_callouts
+		-- when an objective's prefabdata is rebooted, and hintpoints added as a separate action which
+		-- could be in a completely disconnected playbill from the objective's prefab data.
+		-- By tracking them in this table it is easy to re-apply them on load.
+		objectiveData.addedHintpoints = objectiveData.addedHintpoints or {}
+		local addedHintpoints = objectiveData.addedHintpoints
+		addedHintpoints[objectiveData.elem_id] = uiElementArgs
+	end
+	
+end
+
+function Action_RemoveObjHintpoint_Do(action, context)
+	local objectiveData = nil
+	if action.use_null_objective then
+		objectiveData = __GetOrCreateNullObjData()
+	else
+		local objective = MissionOMatic_FindObjective(action.objective_id)
+		if objective == nil then
+			print("Could not find Mission with id "..action.objective_id)
+			return
+		end
+		objectiveData = objective.objectiveData
+	end
+	
+	Objective_RemoveUIElements(objectiveData, action.element_id)
+	
+	-- Clear the dynamically tracked hintpoint from the objectiveData:
+	local addedHintpoints = objectiveData.addedHintpoints
+	if addedHintpoints ~= nil then
+		addedHintpoints[action.element_id] = nil
+	end
+
+end
+
+
+function Action_FadeToBlack_Do(action, context)
+		Game_FadeToBlack(FADE_OUT, action.duration )
+end
+
+function Action_FadeFromBlack_Do(action, context)	
+		Game_FadeToBlack(FADE_IN, action.duration )	
+end
+
+
+
+function Action_PlayerAddAbility_Do(action, context)
+	
+	Player_AddAbility(action.player, action.abilityPBG)
+	
+end
+
+function Action_SetAbilityAvailability_Do(action, context)
+	
+	if action.item_availability == "ITEM_LOCKED" then		
+		Player_SetAbilityAvailability(action.player, action.abilityPBG, ITEM_LOCKED)
+	elseif action.item_availability == "ITEM_UNLOCKED" then		
+		Player_SetAbilityAvailability(action.player, action.abilityPBG, ITEM_UNLOCKED)			
+	elseif action.item_availability == "ITEM_REMOVED" then
+		Player_SetAbilityAvailability(action.player, action.abilityPBG, ITEM_REMOVED)
+	elseif action.item_availability == "ITEM_DEFAULT" then
+		Player_SetAbilityAvailability(action.player, action.abilityPBG, ITEM_DEFAULT)
+	end
+end
+
+function Action_WorldEnableSharedLineOfSight_Do(action, context) 
+	
+	local p0 = action.playerA
+	local p1 = action.playerB
+	local trueFalse = action.boolean_true_false
+	
+	World_EnableSharedLineOfSight(p0, p1, trueFalse)
+	
+end
+
+function Action_WaitForAnyEventComplete_Do(action, context, listInfo)
+	
+	action.waiting_context = listInfo
+	action.waiting_id = Rule_Add(WaitForAnyEventComplete_Check, {delay = 0.5, listInfo = listInfo})		-- Start with a half second delay just in case there's hiccups with starting the event
+	
+	return WAIT_FOR_ACTION_TO_FINISH
+	
+end
+
+function WaitForAnyEventComplete_Check(context, data)
+	
+	if Event_IsAnyRunning() == false then
+		Rule_RemoveMe()
+		
+		Action_Finish(data.listInfo)
+	end
+	
+end
+
+function Action_SetInterruptingAction_Do(action, context) 
+	if action.enable then
+		World_SetStateModelInt("interrupting_action_in_progress", World_GetStateModelInt("interrupting_action_in_progress") + 1)
+	else
+		World_SetStateModelInt("interrupting_action_in_progress", World_GetStateModelInt("interrupting_action_in_progress") - 1)
+	end
+	
+end
+
+function Action_SGroupSetAutoTargetting_Do(action, context)
+	
+	local sgroup = action.sgroup
+	
+	if sgroup ~= nil and SGroup_CountSpawned(sgroup) >= 1 then
+	
+		SGroup_SetAutoTargetting(sgroup, action.hardpoint, action.enable)
+	end
+	
+end
+
+function Action_StartPrimaryObjectiveOrPlaybill_Do(action, context)
+	StartPrimaryObjectiveOrPlaybill(action.scenref_playbill_key, context)
+end
+
+function Action_Garrison_Do(action, context)
+	if action.target_sgroup == nil then
+		error("No Target Sgroup for hold")
+	end
+	if SGroup_CountSpawned(action.target_sgroup) == 0 then -- nothing to do
+		return;
+	end
+	if not action.garrison then
+		Cmd_UngarrisonSquad(action.target_sgroup, nil, action.opt_queued)
+		return
+	end
+	
+	local location_group = nil
+	local group_is_temporary = false
+	local location_entity_count = 0
+	local GetHoldEntity = function(index)
+		return EGroup_GetEntityAt(location_group, index)
+	end
+	
+	if action.hold_type == "SGROUP" then
+		if action.hold_sgroup == nil then
+			error("No Location SGroup provided for hold")
+		end
+		
+		if SGroup_CountSpawned(action.hold_sgroup) == 0 then
+			error("No spawned squad found in the Location SGroup: "..SGroup_GetName(action.hold_sgroup))
+		end
+		
+		location_group = action.hold_sgroup
+		
+		-- Set the sgroup as location to hold
+		local foreach_squad = function(group, index, squad)
+			location_entity_count = location_entity_count + Squad_Count(squad)
+		end
+		SGroup_ForEach(action.hold_sgroup, foreach_squad)
+		GetHoldEntity = function(index)
+			for i = 1, #SGroup_Count(action.hold_sgroup) do
+				local squad = SGroup_GetSquadAt(action.hold_sgroup, i)
+				local size = Squad_Count(squad)
+				if size < index then
+					index = index - size
+				else
+					return Squad_EntityAt(squad, index)
+				end
+			end
+		end
+	elseif action.hold_type == "EGROUP" then 
+		if action.hold_egroup == nil then
+			error("No Location EGroup provided for hold")
+		end
+		
+		if EGroup_CountSpawned(action.hold_egroup) == 0 then
+			error("No spawned entity found in the Location EGroup: "..EGroup_GetName(action.hold_egroup))
+		end
+		
+		-- Set the egroup as location to hold
+		location_group = action.hold_egroup
+		location_entity_count = EGroup_CountSpawned(location_group)
+	elseif action.hold_type == "MARKER" then
+		local position = action.position
+		if action.use_random_position then
+			position = SelectRandomWeightedEntry(action.random_positions).position
+		end
+		local hold_egroup = EGroup_CreateUnique("eg_temp_group")
+		
+		-- Gather the neutral entities near marker
+		local neutral_hold_egroup = EGroup_CreateUnique("eg_temp_neutral_hold_group")
+		World_GetNeutralEntitiesNearMarker(neutral_hold_egroup, position)
+		
+		-- Gather the player-owned entities near marker
+		local player_hold_egroup = EGroup_CreateUnique("eg_temp_player_hold_group")
+		Player_GetAllEntitiesNearMarker(action.target_player, player_hold_egroup, position)
+		
+		EGroup_AddEGroup(hold_egroup, neutral_hold_egroup)
+		EGroup_AddEGroup(hold_egroup, player_hold_egroup)
+		
+		EGroup_Destroy(neutral_hold_egroup)
+		neutral_hold_egroup = nil
+		EGroup_Destroy(player_hold_egroup)
+		player_hold_egroup = nil
+		
+		-- Keep only hold entities in the area
+		EGroup_RemoveNonHoldEntities(hold_egroup)
+		
+		local entity_count = EGroup_CountSpawned(hold_egroup)
+		if entity_count <= 0 then -- No hold found nearby
+			return
+		elseif entity_count > 1 then -- More than one holds found nearby
+			if action.garrison_priority == "Highest Health" then
+				EGroup_SortBasedOnHealth(hold_egroup, false)
+			end
+		end
+		
+		location_group = hold_egroup
+		group_is_temporary = true
+		location_entity_count = EGroup_CountSpawned(location_group)
+	end
+	
+	local target_squad_count = SGroup_CountSpawned(action.target_sgroup)
+	
+	-- Separate the squads to multiple garrisons, if the flag is specified
+	if action.split_garrison and target_squad_count > 1 then
+		local entity_index = 1
+		local squad_index = 1
+		
+		-- Go through the garrisonables nearby
+		while entity_index <= location_entity_count do
+			local hold_entity = GetHoldEntity(entity_index)
+			local hold_group = EGroup_CreateUnique()
+			EGroup_Add(hold_group, hold_entity)
+			
+			local temp_index
+			
+			local max_hold_squad_slots = Entity_GetMaxHoldSquadSlots(hold_entity)
+			local filled_hold_squad_slots = Entity_GetFilledHoldSquadSlots(hold_entity)
+			
+			--try to garrison as many squads as possible to this garrisonable
+			for i = squad_index, target_squad_count do
+				temp_index = i
+				
+				local squad = SGroup_GetSquadAt(action.target_sgroup, i)
+				local single_squad_group = SGroup_CreateUnique()
+				SGroup_Add(single_squad_group, squad)
+				
+				local remaining_hold_squad_slots = max_hold_squad_slots - filled_hold_squad_slots
+				-- if the building can load more squads, if already garrisoned
+				if Entity_CanLoadSquad(hold_entity, squad, false, true) and remaining_hold_squad_slots > 0 then
+					Cmd_Garrison(single_squad_group, hold_group, false, action.opt_queued, action.opt_instant)
+					filled_hold_squad_slots = filled_hold_squad_slots + 1
+				else
+					break
+				end
+			end
+			
+			entity_index = entity_index + 1
+			squad_index = temp_index
+			
+			EGroup_Destroy(hold_group)
+			hold_group = nil
+		end
+	else
+		
+		-- Keeping one location for one squad, if multiples exist
+		if location_entity_count > 1 then
+			local old_group = location_group
+			location_group = EGroup_CreateUnique()
+			EGroup_Add(location_group, EGroup_GetEntityAt(old_group, 1))
+			if group_is_temporary then
+				EGroup_Destroy(old_group)
+			end
+			group_is_temporary = true
+		end
+		Cmd_Garrison(action.target_sgroup, location_group, action.opt_overload, action.opt_queued, action.opt_instant)
+	end
+	
+	if group_is_temporary then
+		EGroup_Destroy(location_group)
+	end
+	location_group = nil
+end
+
+function Action_SquadPath_Do(action, context)
+	if action.path_name == "" then
+		error("path_name is empty")
+	end
+	
+	local loop = LOOP_INVALID
+	if action.path_loop_type == "NONE" then
+		loop = LOOP_NONE
+	elseif action.path_loop_type == "NORMAL" then
+		loop = LOOP_NORMAL
+	elseif action.path_loop_type == "TOGGLE_DIRECTION" then
+		loop = LOOP_TOGGLE_DIRECTION
+	end
+	
+	local marker_to_delete_sgroup = nil
+	if action.use_marker_to_delete_sgroup == true then
+		marker_to_delete_sgroup = action.position
+	end
+	
+	Cmd_SquadPath(action.target_sgroup,
+		action.path_name,
+		action.path_from_closest_waypoint,
+		loop,
+		action.attack_move,
+		action.path_pause_time,
+		marker_to_delete_sgroup,
+		action.queued,
+		action.path_move_forward,
+		action.acceptable_proximity)
+end
+
+--
+-- GET SQUADS IN MARKER
+--
+
+function Action_FillSGroupFromMarker_Do(action, context) 
+
+	local locations = action.locations
+	local targetGroup = action.sgroup
+	local player = action.player
+	local group = SGroup_CreateUnique("GetSquadsAction")
+		
+	SGroup_Clear(targetGroup)
+	
+	if locations ~= nil and #locations > 0 then
+		for k, loc in pairs(locations) do
+			Player_GetAllSquadsNearMarker(player, group, loc.position)
+			SGroup_AddGroup(targetGroup, group)
+		end
+	end
+	
+	--Filter airplane, casualty, auto-builder, emplacement, medic squads from the sgroup
+	local types_to_filter_out =
+	{
+		ignore_type_airplane = action.ignore_type_airplane,
+		ignore_bp_casualty = action.ignore_bp_casualty,
+		ignore_type_auto_builder = action.ignore_type_auto_builder,
+		ignore_type_building = action.ignore_type_building,
+		ignore_type_medic_na = action.ignore_type_medic_na
+	}
+	
+	if action.squad_types_to_include ~= nil and next(action.squad_types_to_include) ~= nil then
+		local formatted_squad_types_to_filter = {}
+		for i, squad_type in ipairs(action.squad_types_to_include) do
+			table.insert(formatted_squad_types_to_filter, squad_type.target_sbp)
+		end
+		SGroup_Filter(targetGroup, formatted_squad_types_to_filter, FILTER_KEEP)
+	end
+	
+	Anvil_FilterOutForbiddenSquadTypes(targetGroup, types_to_filter_out)
+	
+	SGroup_Destroy(group)
+end
+
+--
+-- GET PLAYER OWNED SQUADS
+--
+
+function Action_FillSGroupWithPlayerSquads_Do(action, context)
+	local player_squads_group = SGroup_CreateUnique("FillSGroupWithPlayerSquadsAction")
+	player_squads_group = Player_GetSquads(action.player)
+	
+	-- Inserting player squads in sgroup when it is not empty
+	if SGroup_CountSpawned(player_squads_group) > 0 then
+		SGroup_AddGroup(action.sgroup, player_squads_group)
+	end
+	
+	local flattened_table = {}
+	for i, squad_type in ipairs(action.squad_types_to_filter_in) do
+		table.insert(flattened_table, squad_type.squad_type)
+	end
+	for i, squad_type in ipairs(action.squad_bps_to_filter_in) do
+		table.insert(flattened_table, squad_type.sbp)
+	end
+	-- Filter in the sgroup based on squad types/sbps provided
+	if next(flattened_table) ~= nil then
+		SGroup_Filter(action.sgroup, flattened_table, FILTER_KEEP)
+	end
+	
+	--Filter airplane, casualty, auto-builder, emplacement, medic squads from the sgroup
+	local types_to_filter_out =
+	{
+		ignore_type_airplane = action.ignore_type_airplane,
+		ignore_bp_casualty = action.ignore_bp_casualty,
+		ignore_type_auto_builder = action.ignore_type_auto_builder,
+		ignore_type_building = action.ignore_type_building,
+		ignore_type_medic_na = action.ignore_type_medic_na
+	}
+	-- Filter out the sgroup based on forbidden types provided
+	Anvil_FilterOutForbiddenSquadTypes(action.sgroup, types_to_filter_out)
+	
+	SGroup_Destroy(player_squads_group)
+end
+
+---------------------------
+--METAMAP ACTIONS--
+function Action_MetamapLinkAttachmentToCompany_Do(action, context) --sgroup, target_sgroup
+	
+	local attachment = SGroup_GetSquadAt(action.sgroup, 1)
+	local company = SGroup_GetSquadAt(action.target_sgroup, 1)
+	
+	MetaMap_LinkAttachmentToCompany(attachment, company)
+	
+end
+
+-----------------
+--AI ACTIONS--
+
+function Action_AILockSquads_Do(action, context)
+	local sgroup = action.sgroup
+	local player = nil
+	
+	if action.player ~= nil then
+		player = action.player
+	else 
+		player = World_GetPlayerAt(1)
+	end
+		
+	AI_LockSquads(player, sgroup)
+	
+	if action.zero_popcap_while_locked then
+		SGroup_ForEach(sgroup, function(sgID, index, squad) ActionList_CreateMod_ZeroSquadPopcap(squad) end)
+	end
+end
+
+function Action_AIUnlockSquads_Do(action, context)
+	local sgroup = action.sgroup
+	local player = nil
+	
+	if action.player ~= nil then
+		player = action.player
+	else 
+		player = World_GetPlayerAt(1)
+	end
+		
+	AI_UnlockSquads(player, sgroup)
+	SGroup_ForEach(sgroup, function(sgID, index, squadID) ActionList_RemoveMod_ZeroSquadPopcap(squadID) end)
+end
+
+function Action_AIPushMilitaryTargetScoreMultiplier_Do(action, context)
+	local player = action.player
+	local multiplier = action.multiplier
+	local tuning_value_name = action.ai_military_target_scoring_criteria
+	local id = action.id
+	
+	if player == nil or multiplier == nil or tuning_value_name == nil or id == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local multiplier_string = multiplier or "nil"
+		local tuning_value_name_string = tuning_value_name or "nil"
+		local id_string = id or "nil"
+		error("Prefab action AIPushMilitaryTargetScoreMultiplier received an invalid parameter."
+			.. " player: " .. player_string
+			.. " multiplier: " .. multiplier_string
+			.. " ai_military_target_scoring_criteria: " .. tuning_value_name_string
+			.. " id: " .. id_string)
+		return
+	end
+	
+	local ai_player = AIPlayer_GetLocalFromPlayer(player)
+	if ai_player == nil then
+		return
+	end
+	
+	AIPlayer_PushScoreMultiplier(ai_player, tuning_value_name, multiplier, id)
+end
+
+function Action_AIPopMilitaryTargetScoreMultiplier_Do(action, context)
+	local player = action.player
+	local tuning_value_name = action.ai_military_target_scoring_criteria
+	local id = action.id
+	
+	if player == nil or tuning_value_name == nil or id == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local tuning_value_name_string = tuning_value_name or "nil"
+		local id_string = id or "nil"
+		error("Prefab action AIPopMilitaryTargetScoreMultiplier received an invalid parameter."
+			.. " player: " .. player_string
+			.. " ai_military_target_scoring_criteria: " .. tuning_value_name_string
+			.. " id: " .. id_string)
+		return
+	end
+	
+	local ai_player = AIPlayer_GetLocalFromPlayer(player)
+	if ai_player == nil then
+		return
+	end
+	
+	AIPlayer_PopScoreMultiplier(ai_player, tuning_value_name, id)
+end
+
+function Action_AIPushUnitTypeTargetScoreMultiplier_Do(action, context)
+	local player = action.player
+	local multiplier = action.multiplier
+	local unit_type = action.unit_type
+	local id = action.id
+	
+	if player == nil or multiplier == nil or unit_type == nil or id == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local multiplier_string = multiplier or "nil"
+		local unit_type_string = unit_type or "nil"
+		local id_string = id or "nil"
+		error("Prefab action AIPushUnitTypeTargetScoreMultiplier received an invalid parameter."
+			.. " player: " .. player_string
+			.. " multiplier: " .. multiplier_string
+			.. " unit_type: " .. unit_type_string
+			.. " id: " .. id)
+		return
+	end
+	
+	local ai_player = AIPlayer_GetLocalFromPlayer(player)
+	if ai_player == nil then
+		return
+	end
+	
+	AIPlayer_PushUnitTypeScoreMultiplier(ai_player, unit_type, multiplier, id)
+end
+
+function Action_AIPopUnitTypeTargetScoreMultiplier_Do(action, context)
+	local player = action.player
+	local unit_type = action.unit_type
+	local id = action.id
+	
+	if player == nil or unit_type == nil or id == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local unit_type_string = unit_type or "nil"
+		local id_string = id or "nil"
+		error("Prefab action AIPopUnitTypeTargetScoreMultiplier received an invalid parameter."
+			.. " player: " .. player_string
+			.. " unit_type: " .. unit_type_string
+			.. " id: " .. id_string)
+		return
+	end
+	
+	local ai_player = AIPlayer_GetLocalFromPlayer(player)
+	if ai_player == nil then
+		return
+	end
+	
+	AIPlayer_PopUnitTypeScoreMultiplier(ai_player, unit_type, id)
+end
+
+function Action_AIPushMilitaryTargetEGroupScore_Do(action, context)
+	local player = action.player
+	local score = action.score
+	local id = action.id
+	local egroup = action.egroup
+	
+	if player == nil or score == nil or egroup == nil or id == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local score_string = score or "nil"
+		local egroup_string =  EGroup_GetName(egroup) or "nil"
+		local id_string = id or "nil"
+		error("Prefab action AIPushMilitaryTargetEGroupScore received an invalid parameter."
+			.. " player: " .. player_string
+			.. " score: " .. score
+			.. " egroup: " .. egroup
+			.. " id: " .. id_string)
+		return
+	end
+	
+	local ai_player = AIPlayer_GetLocalFromPlayer(player)
+	if ai_player == nil then
+		return
+	end
+	
+	AIPlayer_PushEGroupScoreContribution(ai_player, egroup, score, id)
+end
+
+function Action_AIPopMilitaryTargetEGroupScore_Do(action, context)
+	local player = action.player
+	local id = action.id
+	local egroup = action.egroup
+	
+	if player == nil or egroup == nil or id == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local egroup_string = EGroup_GetName(egroup) or "nil"
+		local id_string = id or "nil"
+		error("Prefab action AIPopMilitaryTargetEGroupScore received an invalid parameter."
+			.. " player: " .. player_string
+			.. " egroup: " .. egroup_string
+			.. " id: " .. id_string)
+		return
+	end
+	
+	local ai_player = AIPlayer_GetLocalFromPlayer(player)
+	if ai_player == nil then
+		return
+	end
+	
+	AIPlayer_PopEGroupScoreContribution(ai_player, egroup, id)
+end
+
+function Action_AISetPlayerStrategy_Do(action, context)
+	local player = action.player
+	local strategy = action.strategy
+	
+	if player == nil or strategy == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local strategy_string = strategy or "nil"
+		error("Prefab action AISetPlayerStrategy received an invalid parameter."
+			.. " player: " .. player_string
+			.. " strategy: " .. strategy_string)
+		return
+	end
+	MetaMap_SetCampaignAIPlayerPersonality(Player_GetID(player), strategy) 
+end
+
+function Action_AIPrefabSetCanReassign_Do(action,context)
+	local prefab_playbill = action.prefab_playbill
+	local state = action.enable;
+	
+	-- reassign state
+	if prefab_playbill ~= nil then
+		if scartype(prefab_playbill) == ST_STRING or scartype(prefab_playbill) == ST_PREFAB then
+			MissionPrint("prefab can reassign")
+			aiprefab_CanReassign(prefab_playbill, state)
+		end
+	end
+end
+
+function Action_AIPrefabChangeIntents_Do(action,context)
+	local prefab_playbill = action.prefab_playbill
+	local intents = action.intents;
+	
+	if prefab_playbill ~= nil then
+		if scartype(prefab_playbill) == ST_STRING or scartype(prefab_playbill) == ST_PREFAB then
+			MissionPrint("prefab change intent")
+			aiprefab_ChangeIntents(prefab_playbill, intents or {})
+		end
+	end
+end
+
+function Action_AISetMarkerActive_Do(action,context)
+	local marker_name = action.marker_name
+	local is_active = action.enable
+	local player = action.player
+	
+	if player == nil or marker_name == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local marker_string = marker_name or "nil"
+		error("Prefab action AISetMarkerActive received an invalid parameter."
+			.. " player: " .. player_string
+			.. " marker: " .. marker_string)
+		return
+	end
+		
+	MissionPrint("setting AI Marker active state for : " .. marker_name)
+	AI_SetAIMarkerActive(marker_name, is_active, player)
+end
+
+function Action_AISetPersonality_Do(action,context)
+	local personality_name = action.personality_name
+	local player = action.player
+	
+	if player == nil or personality_name == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local personality_string = personality_name or "nil"
+		error("Prefab action AISetPersonality received an invalid parameter."
+			.. " player: " .. player_string
+			.. " personality: " .. personality_string)
+		return
+	end
+		
+	MissionPrint("setting AI personality to : " .. personality_name)
+	AI_SetPersonality(player, personality_name)
+end
+
+function Action_AISetLuaPersonalityFile_Do(action,context)
+	local lua_personality_file = action.personality_name
+	local player = action.player
+	
+	if player == nil or lua_personality_file == nil then
+		local player_string = player ~= nil and Player_GetID(player) or "nil"
+		local lua_personality_file_string = lua_personality_file or "nil"
+		error("Prefab action AISetPersonalityFile received an invalid parameter."
+			.. " player: " .. player_string
+			.. " Lua Personality File: " .. lua_personality_file_string)
+		return
+	end
+		
+	MissionPrint("setting AI personality lua (tuning) file to : " .. lua_personality_file)
+	AI_SetPersonalityLuaFileName(player, lua_personality_file)
+end
+
+function Action_AIClearSoloSquads_Do(action,context)
+	local sgroup = action.sgroup
+	local player = action.player
+	
+	for k,v in pairs(_aiSoloSquadPrefabs) do
+		if action.clear_all then
+			AI_SetPrefabActive(v.pid, action.player, false)
+		elseif v.sgroup ~= nil and SGroup_ContainsSGroup(v.sgroup, sgroup, ALL) then
+			AI_SetPrefabActive(v.pid, action.player, false)
+			return
+		end
+	end
+end
+
+function Action_TrainingGoalSequence_Do(action, context, listInfo)
+
+	-- Store the prefabdata path of this action on the goal sequence so it can
+	-- be re-read if this sequence is restored
+	local actionPath = nil
+	local prefabDataPath = listInfo.actionList.prefabDataPath
+	local nextAction = listInfo.nextActionIndex
+	if prefabDataPath ~= nil then
+		actionPath = Table_Concatenate(prefabDataPath, {nextAction})
+	end
+
+	local goalSequence = TrainingPrefab_GoalSequenceSetup(action.goal_sequence, actionPath)
+	
+	if goalSequence ~= nil then
+		-- Start checking the goal sequence:
+		Training_AddGoalSequence(goalSequence)
+	end
+end
+
+--------------------
+--Threat Arrow Add--
+--------------------
+function Action_ThreatArrowAdd_Do(action, context)
+	local icon = action.threatarrow_icon_override
+	local datatemplate = action.threatarrow_datatemplate
+	if action.threatarrow_target_type == "EGROUP" then	 
+		ThreatArrow_CreateGroup(datatemplate, icon, action.threatarrow_target_egroup)
+	elseif action.position_type_string == "SGROUP" then	 
+		ThreatArrow_CreateGroup(datatemplate, icon, action.threatarrow_target_sgroup)
+	end
+end
+
+function Action_EnableEntityExtension_Do(action, context)
+	local extension_name = action.extension_name
+	local enable = action.enable
+
+	if action.grouptype == "EGROUP" then
+		local enableExtensionOnEntity = function (gid, idx, entity)
+			Entity_SetExtEnabled(entity, extension_name, enable)
+		end
+		EGroup_ForEach(action.target_egroup, enableExtensionOnEntity)
+	elseif action.grouptype == "SGROUP" then
+		local enableExtensionOnSquadEntity = function (gid, idx, squad)
+			local count = Squad_Count(squad)
+			for i = 0, count - 1 do
+				local entity = Squad_EntityAt(squad, i)
+				Entity_SetExtEnabled(entity, extension_name, enable)
+			end
+		end
+		SGroup_ForEach(action.target_sgroup, enableExtensionOnSquadEntity)
+	else
+		error("grouptype: "..action.grouptype.." is invalid")
+	end
+end
+------------------
+-- STATE MODELS --
+------------------
+
+function Action_SetStateModelProperty_Do(action, context)
+	
+	local s_type = action.statemodel_type
+	local s_target = action.statemodel_target
+	
+	if s_target == "Player" then
+		local player = action.player 
+		if action.use_local_player then
+			player = Game_GetLocalPlayer()
+		end
+		if s_type == "Bool" then
+			Player_SetStateModelBool(player, action.statemodel_key, action.statemodel_value_bool)
+		end
+	end
+	
+end
+
+------------
+--UTILITY--
+------------
+
+-- Takes in a list of tables, and returns a random entry based on weight. Defaults to table.weight unless opt_weight_name is specified. WEIGHTS MUST BE WHOLE NUMBERS
+function SelectRandomWeightedEntry(list, opt_weight_name)
+	local weight_name = opt_weight_name or "weight"
+	local total_weight = 0
+	local equal_case = true
+	for i = 1, #list do
+		local weight = list[i][weight_name]
+		total_weight = total_weight + weight
+		if equal_case and weight ~= 1 then
+			equal_case = false
+		end
+	end
+	if equal_case then
+		return list[World_GetRand(1, #list)]
+	end
+	local result = World_GetRand(1, total_weight)
+	for i = 1, #list do
+		local weight = list[i][weight_name]
+		if weight >= result then
+			return list[i]
+		else
+			result = result - weight
+		end
+	end
+	return list[#list]
+end
+
+function MathOperation(value, operator, number)
+	
+	local result = value
+	
+	if operator == "ADD" then
+		result = value + number
+	elseif operator == "SUBTRACT" then
+		result = value - number
+	elseif operator == "MULTIPLY" then
+		result = value * number
+	elseif operator == "DIVIDE" then
+		result = value / number
+	elseif operator == "SET" then
+		result = number
+	end
+	
+	return result
+	
+end
+
+function StopPrefabPlaybillCommon(prefab_playbill)
+	if prefab_playbill ~= nil then
+		if (scartype(prefab_playbill) == ST_STRING or scartype(prefab_playbill) == ST_PREFAB) then
+			MissionPrint("prefab stop")
+
+			local instance = Prefab_GetInstance(prefab_playbill)
+			if instance == nil then
+				return
+			end
+			
+			local playbill_data = instance.playbills
+			if playbill_data ~= nil then
+				local playbill_to_stop_id = nil
+				-- If the prefab is of a playbill, then go through all the playbills currently being run and if the data
+				-- of the playbill matches one here, we can extract the id from playbillInfo of that running playbill
+				-- and use that ID to stop the playbill from running
+				for i = 1, #t_allRunningPlaybills do
+					if t_allRunningPlaybills[i].playbill == playbill_data then
+						playbill_to_stop_id = t_allRunningPlaybills[i].id
+						break
+					end
+				end
+				if playbill_to_stop_id ~= nil then
+					Prefab_DoAction(prefab_playbill, "Stop", playbill_to_stop_id)
+				else
+					MissionPrint("Cannot find the id of the playbill to stop")
+				end
+			else
+				Prefab_Stop(prefab_playbill)
+			end
+		end
+	end
+end
+
+function Action_SetCrushMode_Do(action, context)
+	if scartype(action.sgroup) == ST_SGROUP and SGroup_CountSpawned(action.sgroup) >= 1 then
+
+		local foreach_squad = function(group, index, squad)
+			
+			local count = Squad_Count(squad)
+			for i = 0, count - 1 do
+				local entity = Squad_EntityAt(squad, i)
+				
+				if action.crush_type_modifier == "Heavy" then
+					Entity_SetCrushMode(entity, Heavy)
+				elseif action.crush_type_modifier == "Medium" then
+					Entity_SetCrushMode(entity, Medium)
+				elseif action.crush_type_modifier == "Light" then
+					Entity_SetCrushMode(entity, Light)
+				elseif action.crush_type_modifier == "Off" then
+					Entity_SetCrushMode(entity, Off)
+				end
+			end
+		end
+		SGroup_ForEach(action.sgroup, foreach_squad)
+		
+	end
+end

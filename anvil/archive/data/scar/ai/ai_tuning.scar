@@ -1,0 +1,14 @@
+-- Tuning values specific to the AI's lua context
+
+t_campaign_production = 
+{
+	-- Utility per PBG
+	perUnitScale = 0.1, -- Utility reduced for every currently spawned unit
+	perUnitScaleProduced = -1, -- Utility reduced every time a unit has ever been produced
+	squadTypeScale = 0.1, -- Utility increased for every type matching the current personality's preferred types
+	
+	-- Unit caps per PBG
+	enemyCapturePointScale = 1, -- Unit cap increase per enemy capture point
+	enemySquadScale = 1, -- Unit cap increase per enemy squad
+	maxProduced = -1 -- Number of units that can be produced ever
+}
