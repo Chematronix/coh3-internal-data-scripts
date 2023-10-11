@@ -13,12 +13,12 @@ Of particular interest are the files described in the Win Condition template scr
 
 (These are already included in [coh3-bootstrap-mod](https://github.com/Chematronix/coh3-bootstrap-mod), BTW).
 
-You can download the repo on the green `<> Code` button or with `https://github.com/Chematronix/coh3-internal-data-scripts`. Add the directory to your VSCode project if you want to be able to look up a function definition by just pressing F12 or such.
+You can download the repo on the green `<> Code` button or with `git clone https://github.com/Chematronix/coh3-internal-data-scripts`. Add the directory to your VSCode project if you want to be able to look up a function definition by just pressing F12 or such.
 
 Extracted after the Umber Patch, v1.3.0.18567.  To extract a newer version, open the respective Data.sga file in the `EssenceEditor.exe` by doing `File > Open...` or dragging it to the tab bar.  Select and right click the Data directory to Extract.
 
 To remove non-.lua|.scar files and empty directories to greatly reduce the resulting size, run in a Linux/WSL shell on the containing directory:
 ```
 find ./data -type f -not -regex '.*\.\(scar\|lua\)$' -print -delete
-find . /data -type d -empty -print -delete
+find ./data -type d -empty -print -delete
 ```
